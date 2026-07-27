@@ -2,23 +2,8 @@
  * KAMISUITE — AKIRA Console (Wix Custom Element)
  * Archivo:  public/custom-elements/akiraConsole.js
  * Tag name: akira-console
- * VERSION:  1.0.5
- * FECHA:    25 Julio 2026
- *
- * CAMBIOS v1.0.4 → v1.0.5 — FIX: 404 EN /_functions EN SITES SERVIDOS BAJO
- *   SUBPATH (sin dominio propio conectado). Los dos fetch del custom element
- *   —_fetchAkiraAsk y _fetchTts— apuntaban a raíz ('/_functions/…'). En un
- *   site publicado bajo carpeta (p.ej. heycliente.wixstudio.com/kalonice) el
- *   navegador resuelve la ruta absoluta contra el ORIGEN y se come el prefijo
- *   '/kalonice' → la petición sale a heycliente.wixstudio.com/_functions/…,
- *   donde no hay backend del salón → Wix responde 404 ANTES de tocar el
- *   código (Site Monitoring no registra nada). En dominio raíz (Hair-Times)
- *   no ocurría porque no hay prefijo que perder.
- *   FIX: el page code envía la base real del site (wixLocation.baseUrl) en
- *   config.functionsBase; el CE la antepone a cada llamada vía _functionsUrl().
- *   Si no llega base (page code viejo o dominio raíz) el comportamiento es el
- *   de siempre: ruta relativa a raíz. Independiente del orden de despliegue.
- *   Cero cambios en estética, skin, polling, TTS ni micrófono.
+ * VERSION:  1.0.4
+ * FECHA:    17 Julio 2026
  *
  * CAMBIOS v1.0.3 → v1.0.4 — TTS CLONADO LITERAL DE CATHOVIA.
  *   El botón quedaba inerte porque yo había inventado una ruta propia:
@@ -147,11 +132,11 @@
   'use strict';
 
   if (customElements.get('akira-console')) {
-    console.log('[AKIRA v1.0.5] Ya registrado.');
+    console.log('[AKIRA v1.0.4] Ya registrado.');
     return;
   }
 
-  const VERSION = '1.0.5';
+  const VERSION = '1.0.4';
   const TAG = `[AKIRA v${VERSION}]`;
 
   const LS_SIDEBAR = 'akira-sidebar-open';
@@ -445,12 +430,6 @@
       this._theme  = resolverSkin(SKIN_FALLBACK);
       this._ttsEnabled = false;   // el backend TTS de KAMISUITE no existe aún
 
-      // Base del site para construir las URLs de /_functions. La envía el page
-      // code (config.functionsBase = wixLocation.baseUrl). Vacío = ruta
-      // relativa a raíz (comportamiento previo, válido en dominio raíz).
-      // Ver _functionsUrl(). (v1.0.5)
-      this._functionsBase = '';
-
       // Polling de recuperación del 504
       this._lastQuery      = '';
       this._polling        = false;
@@ -519,13 +498,6 @@
       if (cfg.modo)       this._modo      = cfg.modo;
       if (cfg.sessionId)  this._sessionId = cfg.sessionId;
       if (cfg.ttsEnabled === true) this._ttsEnabled = true;
-
-      // Base del site para /_functions (v1.0.5). Se normaliza quitando la
-      // barra final para que _functionsUrl no genere doble barra. Si no llega,
-      // queda '' → ruta relativa a raíz (comportamiento previo).
-      if (typeof cfg.functionsBase === 'string') {
-        this._functionsBase = cfg.functionsBase.replace(/\/+$/, '');
-      }
 
       // Skin desde SalonConfig.widgetSkin. Fallback 'niebla', coherente con
       // widget público, bonos, PRIME y Área de Cliente (bitácora 1-Jul §14.4).
@@ -695,25 +667,6 @@
     }
 
     /**
-     * Construye la URL de un endpoint /_functions anteponiendo la base real
-     * del site (this._functionsBase, recibida del page code vía config). (v1.0.5)
-     *
-     * POR QUÉ: en sites servidos bajo carpeta (p.ej.
-     * heycliente.wixstudio.com/kalonice) una ruta que empieza por '/' se
-     * resuelve contra el ORIGEN y pierde el prefijo '/kalonice' → 404 antes de
-     * llegar al backend. Con la base delante, la URL queda completa y correcta.
-     *
-     * Si _functionsBase está vacío (page code viejo, o dominio raíz donde no
-     * hay prefijo) devuelve la ruta tal cual → mismo comportamiento de siempre.
-     *
-     * @param {string} path Ruta que empieza por '/_functions/…'.
-     */
-    _functionsUrl(path) {
-      const base = String(this._functionsBase || '').replace(/\/+$/, '');
-      return base + path;
-    }
-
-    /**
      * Petición HTTP directa a /_functions/akiraAsk.
      * NO se emite ningún evento al Page Code para preguntar: en CATHOVIA
      * v1.6.1 hacerlo a la vez que el fetch provocó DOBLE llamada a Anthropic
@@ -721,7 +674,7 @@
      */
     async _fetchAkiraAsk(query, messageId) {
       try {
-        const res = await fetch(this._functionsUrl('/_functions/akiraAsk'), {
+        const res = await fetch('/_functions/akiraAsk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1121,7 +1074,7 @@
 
     async _fetchTts(messageId, texto, btn) {
       try {
-        const res = await fetch(this._functionsUrl('/_functions/akiraTts'), {
+        const res = await fetch('/_functions/akiraTts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ texto: texto })

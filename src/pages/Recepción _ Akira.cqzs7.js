@@ -1,19 +1,8 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA · Page Code
  * Página:   AKIRA (Consultor)
- * VERSION:  1.7.0
- * FECHA:    25 Julio 2026
- *
- * CAMBIOS v1.6.0 → v1.7.0 — FIX: 404 EN /_functions EN SITES BAJO SUBPATH.
- *   En salones sin dominio propio conectado (p.ej.
- *   heycliente.wixstudio.com/kalonice) el custom element llamaba a
- *   '/_functions/akiraAsk' y '/_functions/akiraTts' con ruta relativa a raíz.
- *   El navegador se comía el prefijo '/kalonice' → 404 antes de tocar el
- *   backend. Este page code ahora resuelve la base real del site con
- *   wixLocation.baseUrl y la envía en config.functionsBase; el CE (v1.0.5) la
- *   antepone a cada fetch. En dominio raíz baseUrl es el dominio pelado, así
- *   que Hair-Times no cambia. Objetivo: probar AKIRA en cualquier salón nuevo
- *   ANTES de conectarle un dominio.
+ * VERSION:  1.6.0
+ * FECHA:    18 Julio 2026
  *
  * CAMBIOS v1.5.0 → v1.6.0: se oculta la bola flotante del chat IA de Wix en
  * la página de AKIRA (ocultarBolaChatIA). ⚠️ El ID es por página: verificar
@@ -75,7 +64,6 @@
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
-import wixLocation from 'wix-location';
 import { currentMember } from 'wix-members-frontend';
 import {
   akiraAbrir,
@@ -97,7 +85,7 @@ const MODO = 'consultor';
 // hardcoding). Este flag solo enciende o apaga la funcionalidad.
 const TTS_ENABLED = true;
 
-const V = 'AKIRA Page v1.7.0';
+const V = 'AKIRA Page v1.6.0';
 
 // Bola flotante del chat IA nativo de Wix. Se oculta en la página de AKIRA:
 // no queremos dos asistentes compitiendo en pantalla.
@@ -259,20 +247,6 @@ $w.onReady(async function () {
     thinking: 'Analizando tus datos…'
   };
 
-  // Base real del site para que el custom element construya bien las URLs de
-  // /_functions (v1.7.0). En sites bajo carpeta (sin dominio propio) baseUrl
-  // incluye el prefijo, p.ej. 'https://heycliente.wixstudio.com/kalonice'; en
-  // dominio raíz es el dominio pelado. El CE la antepone a cada fetch. Si algo
-  // fallara al leerla, va '' y el CE cae a ruta relativa (comportamiento
-  // previo). wixLocation.baseUrl es una propiedad síncrona.
-  let functionsBase = '';
-  try {
-    functionsBase = String(wixLocation.baseUrl || '');
-  } catch (e) {
-    console.warn(`[${V}] no se pudo leer wixLocation.baseUrl:`, e.message);
-  }
-  console.log(`[${V}] functionsBase="${functionsBase}"`);
-
   const configPayload = JSON.stringify({
     userId,
     userName,
@@ -280,7 +254,6 @@ $w.onReady(async function () {
     sessionId: null,          // cada visita arranca en welcome (CATHOVIA v1.5.3)
     skin: abrir.widgetSkin || 'niebla',
     ttsEnabled: TTS_ENABLED,
-    functionsBase,            // v1.7.0 — base del site para /_functions
     brand
   });
 

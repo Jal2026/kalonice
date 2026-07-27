@@ -693,28 +693,3 @@ export async function get_dumpReservasV1(request) {
         return serverError({ body: error.message });
     }
 }
-// ═══════════════════════════════════════════════════════════════════════════
-// TEST DUMMY — borrar tras diagnóstico
-// ═══════════════════════════════════════════════════════════════════════════
-export function get_kalonicePing(request) {
-    return ok({
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ok: true, salon: 'KALONICE', ts: Date.now() })
-    });
-}
-export async function post_akiraConsulta(request) {
-    const body = await request.body.json();
-    const { sessionId, query, userId, userName, modo } = body || {};
-    if (!query) {
-        return badRequest({
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ok: false, error: 'query requerida' })
-        });
-    }
-    const { askAkiraCore } = await import('backend/akiraLogic.web');
-    const result = await askAkiraCore({ sessionId, query, userId, userName, modo });
-    return ok({
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(result)
-    });
-}

@@ -1,5 +1,5 @@
 // =====================================================
-// PAGE CODE — Estadísticas Kalonice
+// PAGE CODE — Estadísticas Hair Times
 // HTML Component ID: #htmlStats
 // Backend: obtenerEstadisticas(), obtenerMediaDiaSemanaAnio()
 // =====================================================

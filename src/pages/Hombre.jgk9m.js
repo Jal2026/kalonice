@@ -1,49 +1,10 @@
-import wixData from 'wix-data';
-
-const CAMPO_GROUP = "group";
+// API Reference: https://www.wix.com/velo/reference/api-overview/introduction
+// “Hello, World!” Example: https://learn-code.wix.com/en/article/hello-world
 
 $w.onReady(function () {
+    // Write your JavaScript here
 
-    $w("#dataset1").onReady(async () => {
+    // To select an element by ID use: $w('#elementID')
 
-        // Opciones del desplegable
-        $w("#buscador").options = [
-            { label: "Todos", value: "TODOS" },
-            { label: "Caballero", value: "CABALLERO" },
-            { label: "Niños", value: "NIÑOS" },
-            { label: "Depilación masculina", value: "DEPILACION_MASCULINA" }
-        ];
-
-        // Al cargar la página muestra las tres categorías
-        await mostrarTodasLasCategorias();
-
-        $w("#buscador").onChange(async () => {
-
-            const categoriaSeleccionada = $w("#buscador").value;
-
-            if (categoriaSeleccionada === "TODOS") {
-                await mostrarTodasLasCategorias();
-                return;
-            }
-
-            await $w("#dataset1").setFilter(
-                wixData.filter().eq(CAMPO_GROUP, categoriaSeleccionada)
-            );
-        });
-    });
+    // Click 'Preview' to run your code
 });
-
-
-async function mostrarTodasLasCategorias() {
-
-    const filtro = wixData.filter()
-        .eq(CAMPO_GROUP, "CABALLERO")
-        .or(
-            wixData.filter().eq(CAMPO_GROUP, "NIÑOS")
-        )
-        .or(
-            wixData.filter().eq(CAMPO_GROUP, "DEPILACION_MASCULINA")
-        );
-
-    await $w("#dataset1").setFilter(filtro);
-}
