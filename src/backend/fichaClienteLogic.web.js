@@ -1,8 +1,31 @@
 // =====================================================
 // KAMISUITE - Backend Ficha Cliente CRM
 // =====================================================
-// VERSION: 1.9.11
-// FECHA: 6 de julio de 2026
+// VERSION: 1.9.12
+// FECHA: 27 de julio de 2026
+//
+// v1.9.12 — HOTFIX leerExternosDeCliente para tenants sin SvExternalRecords.
+//   Contexto: SvExternalRecords es una colección legacy V1 (histórico
+//   de servicios pagados a staff externo). Solo existe en Hair-Times.
+//   En KALONICE (y en cualquier tenant nueva) la colección no está
+//   creada, por lo que wixData.query('SvExternalRecords') lanza
+//     WDE0025: The SvExternalRecords collection does not exist.
+//   Al no estar envuelta, esa excepción caía dentro del Promise.all
+//   de getFichaCliente y sincronizarClientProfile, tumbando toda la
+//   respuesta: el pagecode recibía { ok:false } y el widget se
+//   quedaba en "Cargando citas..." con todas las pestañas a 0.
+//   Fix mínimo: envolver el cuerpo de leerExternosDeCliente en un
+//   try/catch que devuelva [] cuando la colección no exista, con el
+//   mismo patrón defensivo que ya usa este archivo en
+//   leerBonosCliente, leerTarjetasCliente y leerPrimeMembershipCliente.
+//   En Hair-Times sigue leyendo SvExternalRecords como antes.
+//   En KALONICE devuelve [] silenciosamente → calcularStats no suma
+//   externos (no hay que sumar) y el widget recibe fichaExternos vacío.
+//   Sin cambios en imports, en el resto de helpers, ni en ninguno
+//   de los webMethods (getFichaCliente, getHistorialCliente,
+//   actualizarContactoCRM, guardarNotaSalon, actualizarFotoCliente,
+//   sincronizarClientProfile, enviarMensajeInbox,
+//   getProximasCitasCliente, crearContactoCRM).
 //
 // v1.9.11 — HOTFIX crearContactoCRM: nunca exponer texto Wix crudo en
 //   pantalla + renombrar DUPLICATE_EMAIL → DUPLICATE_PHONE.
@@ -135,7 +158,7 @@ import { members } from 'wix-members.v2';
 import { accounts } from 'wix-loyalty.v2';
 import { mediaManager } from 'wix-media-backend';
 
-const VERSION = '1.9.11';
+const VERSION = '1.9.12';
 const TAG = `[FichaCliente][${VERSION}]`;
 
 // Colecciones CMS
@@ -968,13 +991,29 @@ async function leerPagosDeCliente(contactId) {
   return items;
 }
 
+// v1.9.12 — Blindaje ante tenants sin colección SvExternalRecords.
+// SvExternalRecords es una colección legacy V1 que solo existe en
+// Hair-Times. En KALONICE y en cualquier tenant nueva la colección
+// no está creada; wixData.query lanza WDE0025 ("The X collection
+// does not exist") y, al ejecutarse esta función dentro de un
+// Promise.all en getFichaCliente y sincronizarClientProfile, la
+// excepción tumbaba toda la respuesta y dejaba el CRM en
+// "Cargando...". Con el try/catch aquí devolvemos [] silenciosamente
+// cuando falla la lectura, exactamente igual que ya hacen
+// leerBonosCliente / leerTarjetasCliente / leerPrimeMembershipCliente
+// para sus colecciones custom.
 async function leerExternosDeCliente(contactId) {
-  const result = await wixData.query(COLLECTION_EXTERNAL_RECORDS)
-    .eq('contactId', contactId)
-    .descending('date')
-    .limit(200)
-    .find({ suppressAuth: true });
-  return result?.items || [];
+  try {
+    const result = await wixData.query(COLLECTION_EXTERNAL_RECORDS)
+      .eq('contactId', contactId)
+      .descending('date')
+      .limit(200)
+      .find({ suppressAuth: true });
+    return result?.items || [];
+  } catch (e) {
+    console.warn(`${TAG} leerExternosDeCliente (colección opcional): ${e.message}`);
+    return [];
+  }
 }
 
 function calcularStats(pagos, externosItems) {
