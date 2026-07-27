@@ -1,0 +1,108 @@
+import { extendedBookings } from 'wix-bookings.v2';
+import { bookings } from 'wix-bookings-backend';  // ← V1, NO V2
+import { elevate } from 'wix-auth';
+
+const queryExtendedBookingsElevated = elevate(extendedBookings.queryExtendedBookings);
+const cancelBookingElevated = elevate(bookings.cancelBooking);
+
+export async function obtenerCitasEnRango(inicioISO, finISO) {
+    try {
+        console.log(`Buscando reservas: ${inicioISO} - ${finISO}`);
+        
+        let allBookings = [];
+        let offset = 0;
+        const pageSize = 100;
+        let hasMore = true;
+        
+        while (hasMore && offset < 500) {
+            const result = await queryExtendedBookingsElevated({
+                paging: { limit: pageSize, offset: offset }
+            });
+            
+            const items = result?.extendedBookings || [];
+            allBookings = allBookings.concat(items);
+            
+            hasMore = items.length === pageSize;
+            offset += pageSize;
+        }
+        
+        console.log(`Total obtenidas: ${allBookings.length}`);
+        
+        const bookingsEnRango = allBookings.filter(item => {
+            const bk = item.booking;
+            const startDate = bk?.bookedEntity?.slot?.startDate;
+            
+            if (!startDate) return false;
+            
+            return startDate >= inicioISO && startDate <= finISO;
+        });
+        
+        const confirmadas = bookingsEnRango.filter(item => 
+            item.booking?.status === 'CONFIRMED' || item.booking?.status === 'APPROVED'
+        );
+        
+        console.log(`Confirmadas en rango: ${confirmadas.length}`);
+        
+        return {
+            success: true,
+            items: confirmadas.map(item => item.booking),
+            total: confirmadas.length
+        };
+        
+    } catch (error) {
+        console.error("Error:", error);
+        return {
+            success: false,
+            error: error.message,
+            items: []
+        };
+    }
+}
+
+export async function borrarCitasEnRango(inicioISO, finISO) {
+    try {
+        const res = await obtenerCitasEnRango(inicioISO, finISO);
+        
+        if (!res.success) {
+            return res;
+        }
+        
+        const aCancelar = res.items;
+        console.log(`A cancelar: ${aCancelar.length}`);
+        
+        if (aCancelar.length === 0) {
+            return { success: true, count: 0 };
+        }
+        
+        // CANCELAR BOOKINGS CON V1 (borra sesiones automáticamente)
+        const resultados = await Promise.allSettled(
+            aCancelar.map(booking => 
+                cancelBookingElevated(booking._id, {
+                    participantNotification: {
+                        notifyParticipants: false
+                    },
+                    flowControlSettings: {
+                        ignoreCancellationPolicy: true
+                    },
+                    suppressAuth: true
+                })
+            )
+        );
+        
+        const exitosas = resultados.filter(r => r.status === "fulfilled").length;
+        const fallidas = resultados.filter(r => r.status === "rejected");
+        
+        console.log(`Canceladas: ${exitosas}, Fallidas: ${fallidas.length}`);
+        
+        if (fallidas.length > 0) {
+            console.log("=== ERRORES ===");
+            fallidas.forEach((r, i) => console.error(`Error ${i+1}:`, r.reason));
+        }
+        
+        return { success: true, count: exitosas };
+        
+    } catch (error) {
+        console.error("Error:", error);
+        return { success: false, error: error.message };
+    }
+}

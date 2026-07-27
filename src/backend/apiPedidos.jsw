@@ -1,0 +1,63 @@
+import { bookings } from 'wix-bookings-backend';
+
+export async function leerUltimosPedidos() {
+  try {
+    // 1. Buscamos las reservas
+    // Usamos suppressAuth para saltar permisos y traemos las últimas 50 para asegurar
+    const results = await bookings.queryBookings()
+      .limit(50) 
+      .find({ suppressAuth: true });
+
+    if (results.items.length === 0) {
+      return "No se encontraron reservas en el sistema.";
+    }
+
+    // 2. Procesamos la lista usando la RUTA CORRECTA que descubrimos en tu JSON
+    const listaFormateada = results.items
+      .map(reserva => {
+        // A. RUTA DE LA FECHA (Aquí estaba el secreto)
+        // La fecha real de la cita está dentro de 'bookedEntity.singleSession.start'
+        const fechaCruda = reserva.bookedEntity?.singleSession?.start;
+        
+        let fechaTexto = "Fecha pendiente";
+        let fechaOrden = 0; // Usaremos esto para ordenar
+
+        if (fechaCruda) {
+            const fechaObj = new Date(fechaCruda);
+            fechaOrden = fechaObj.getTime();
+            fechaTexto = fechaObj.toLocaleString('es-ES', {
+                day: '2-digit', month: '2-digit', year: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+            });
+        }
+
+        // B. RUTA DEL SERVICIO
+        const servicio = reserva.bookedEntity?.title || "Servicio desconocido";
+
+        // C. RUTA DEL PRECIO (Ya que lo vimos en el JSON, lo aprovechamos)
+        const precio = reserva.bookedEntity?.rate?.labeledPriceOptions?.general?.amount || "0";
+        const moneda = reserva.bookedEntity?.rate?.labeledPriceOptions?.general?.currency || "EUR";
+
+        // D. ESTADO
+        const estado = reserva.status || "DESCONOCIDO";
+
+        return {
+            texto: `📅 ${fechaTexto}\n   ✂️ ${servicio}\n   💰 ${precio} ${moneda} [${estado}]`,
+            orden: fechaOrden
+        };
+      })
+      // 3. Ordenamos nosotros mismos (Las citas más nuevas arriba)
+      .sort((a, b) => b.orden - a.orden)
+      // 4. Nos quedamos con las 10 primeras
+      .slice(0, 10)
+      // 5. Convertimos a texto final
+      .map(item => item.texto)
+      .join("\n--------------------------\n");
+
+    return listaFormateada;
+
+  } catch (error) {
+    console.error("Error final:", error);
+    return "Error procesando datos: " + error.message;
+  }
+}

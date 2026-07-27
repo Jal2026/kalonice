@@ -1,0 +1,282 @@
+import { extendedBookings } from "wix-bookings.v2";
+import { elevate } from "wix-auth";
+
+const TIME_ZONE = "Europe/Madrid";
+const PAGE_LIMIT = 100;
+const MAX_PAGES = 200;
+const ESTADOS_INACTIVOS = ["CANCELED", "DECLINED"];
+
+const queryExtendedBookingsElevated = elevate(extendedBookings.queryExtendedBookings);
+
+export async function leerReservasBookingsDesdeHoy(meses = 3, opciones = {}) {
+  const mesesNum = normalizarMeses(meses);
+  const incluirCanceladas = opciones.incluirCanceladas === true;
+
+  const hoyMadrid = getDatePartsInTimeZone(new Date(), TIME_ZONE);
+  const hastaMadrid = addMonthsToYMD(hoyMadrid, mesesNum);
+
+  const desdeUtc = zonedDateTimeToUtc(hoyMadrid.year, hoyMadrid.month, hoyMadrid.day, 0, 0, 0, TIME_ZONE);
+  const hastaUtc = zonedDateTimeToUtc(hastaMadrid.year, hastaMadrid.month, hastaMadrid.day, 0, 0, 0, TIME_ZONE);
+
+  let cursor = null;
+  let pagina = 0;
+  let reservasRaw = [];
+  let seguirLeyendo = true;
+
+  while (seguirLeyendo && pagina < MAX_PAGES) {
+    pagina++;
+
+    const query = crearQueryReservas(desdeUtc, cursor);
+
+    const respuesta = await queryExtendedBookingsElevated(query, {
+      withBookingAllowedActions: false,
+      withBookingAttendanceInfo: true,
+      withFormSubmissions: false,
+      withEcomOrder: false,
+      withEcomTransactions: false
+    });
+
+    const lote = extraerReservas(respuesta);
+    reservasRaw = reservasRaw.concat(lote);
+
+    const normalizadasLote = lote.map(normalizarReserva);
+    const hayReservaFueraDeRango = normalizadasLote.some((reserva) => {
+      if (!reserva.startDateUtc) {
+        return false;
+      }
+
+      return new Date(reserva.startDateUtc).getTime() >= hastaUtc.getTime();
+    });
+
+    if (hayReservaFueraDeRango) {
+      seguirLeyendo = false;
+      break;
+    }
+
+    const nextCursor = extraerNextCursor(respuesta);
+    const hasNext = respuesta?.pagingMetadata?.hasNext === true;
+
+    if (!hasNext || !nextCursor) {
+      seguirLeyendo = false;
+      break;
+    }
+
+    cursor = nextCursor;
+  }
+
+  const reservas = reservasRaw
+    .map(normalizarReserva)
+    .filter((reserva) => {
+      if (!reserva.startDateUtc) {
+        return false;
+      }
+
+      const startMs = new Date(reserva.startDateUtc).getTime();
+
+      return startMs >= desdeUtc.getTime() && startMs < hastaUtc.getTime();
+    })
+    .filter((reserva) => {
+      if (incluirCanceladas) {
+        return true;
+      }
+
+      return !ESTADOS_INACTIVOS.includes(String(reserva.status || "").toUpperCase());
+    })
+    .sort((a, b) => new Date(a.startDateUtc || 0).getTime() - new Date(b.startDateUtc || 0).getTime());
+
+  return {
+    ok: true,
+    total: reservas.length,
+    totalRaw: reservasRaw.length,
+    paginasLeidas: pagina,
+    rango: {
+      zonaHoraria: TIME_ZONE,
+      meses: mesesNum,
+      desdeUtc: desdeUtc.toISOString(),
+      hastaUtc: hastaUtc.toISOString()
+    },
+    reservas
+  };
+}
+
+function crearQueryReservas(desdeUtc, cursor) {
+  if (cursor) {
+    return {
+      cursorPaging: {
+        cursor
+      }
+    };
+  }
+
+  return {
+    filter: {
+      startDate: {
+        $gte: desdeUtc.toISOString()
+      }
+    },
+    sort: [
+      {
+        fieldName: "startDate",
+        order: "ASC"
+      }
+    ],
+    cursorPaging: {
+      limit: PAGE_LIMIT
+    }
+  };
+}
+
+function extraerReservas(respuesta) {
+  return respuesta?.extendedBookings || respuesta?.items || respuesta?.bookings || [];
+}
+
+function extraerNextCursor(respuesta) {
+  return respuesta?.pagingMetadata?.cursors?.next || respuesta?.pagingMetadata?.nextCursor || null;
+}
+
+function normalizarReserva(extendedBooking) {
+  const booking = extendedBooking?.booking || extendedBooking || {};
+  const contact = booking.contactDetails || {};
+  const bookedEntity = booking.bookedEntity || {};
+
+  const item = bookedEntity.item || {};
+  const slot = bookedEntity.slot || item.slot || {};
+  const schedule = bookedEntity.schedule || item.schedule || {};
+  const service = bookedEntity.service || item.service || item || {};
+
+  const startDateUtc = booking.startDate || slot.startDate || "";
+  const endDateUtc = booking.endDate || slot.endDate || "";
+
+  return {
+    _id: booking.id || extendedBooking?.id || "",
+    bookingId: booking.id || extendedBooking?.id || "",
+
+    status: booking.status || "",
+    paymentStatus: booking.paymentStatus || "",
+
+    startDateUtc,
+    endDateUtc,
+    startDateMadrid: formatDateInTimeZone(startDateUtc, TIME_ZONE),
+    endDateMadrid: formatDateInTimeZone(endDateUtc, TIME_ZONE),
+
+    contactId: contact.contactId || contact.memberId || "",
+    clienteNombre: getContactName(contact),
+    email: contact.email || "",
+    telefono: contact.phone || contact.phoneNumber || "",
+
+    serviceId: service.id || bookedEntity.serviceId || slot.serviceId || schedule.serviceId || "",
+    servicio: service.name || service.title || bookedEntity.title || item.name || item.title || "",
+
+    staffId: slot.staffMemberId || slot.resource?.id || bookedEntity.staffMemberId || "",
+    staffNombre: slot.staffMemberName || slot.resource?.name || "",
+
+    totalParticipants: booking.totalParticipants || null,
+    doubleBooked: booking.doubleBooked === true
+  };
+}
+
+function getContactName(contact) {
+  const fullName = contact.fullName || contact.name;
+
+  if (fullName) {
+    return fullName;
+  }
+
+  const firstName = contact.firstName || "";
+  const lastName = contact.lastName || "";
+
+  return `${firstName} ${lastName}`.trim();
+}
+
+function normalizarMeses(meses) {
+  const numero = Number(meses);
+
+  if (!Number.isFinite(numero)) {
+    return 3;
+  }
+
+  return Math.max(1, Math.min(Math.floor(numero), 24));
+}
+
+function getDatePartsInTimeZone(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+
+  const map = {};
+
+  parts.forEach((part) => {
+    map[part.type] = part.value;
+  });
+
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day)
+  };
+}
+
+function addMonthsToYMD(ymd, monthsToAdd) {
+  const targetFirstDay = new Date(Date.UTC(ymd.year, ymd.month - 1 + monthsToAdd, 1));
+  const targetYear = targetFirstDay.getUTCFullYear();
+  const targetMonth = targetFirstDay.getUTCMonth() + 1;
+  const lastDayOfTargetMonth = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+
+  return {
+    year: targetYear,
+    month: targetMonth,
+    day: Math.min(ymd.day, lastDayOfTargetMonth)
+  };
+}
+
+function zonedDateTimeToUtc(year, month, day, hour, minute, second, timeZone) {
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  const offsetMs = getTimeZoneOffsetMs(utcGuess, timeZone);
+
+  return new Date(utcGuess.getTime() - offsetMs);
+}
+
+function getTimeZoneOffsetMs(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "shortOffset",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).formatToParts(date);
+
+  const timeZoneName = parts.find((part) => part.type === "timeZoneName")?.value || "GMT";
+  const match = timeZoneName.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+
+  if (!match) {
+    return 0;
+  }
+
+  const sign = match[1] === "-" ? -1 : 1;
+  const hours = Number(match[2] || 0);
+  const minutes = Number(match[3] || 0);
+
+  return sign * ((hours * 60 + minutes) * 60 * 1000);
+}
+
+function formatDateInTimeZone(dateValue, timeZone) {
+  if (!dateValue) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("es-ES", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(dateValue));
+}
