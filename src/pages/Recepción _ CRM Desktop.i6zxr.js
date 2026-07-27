@@ -1,10 +1,36 @@
 // =====================================================
 // KAMISUITE - Page Code Ficha Cliente CRM
 // =====================================================
-// VERSION: 1.9.3
-// FECHA: 6 de julio de 2026
+// VERSION: 1.9.4
+// FECHA: 27 de julio de 2026
 //
 // CHANGELOG:
+// v1.9.4 (27-Jul-2026) — HOTFIX $w.onReady crash multi-tenant
+//   Contexto: en KALONICE se eliminaron del editor Wix los elementos
+//   #clasificasexo (botón) y #procesoclasificador (caja de progreso)
+//   de la herramienta de clasificación demográfica masiva v1.8.0,
+//   pensada como utilidad puntual de mantenimiento CRM ya ejecutada
+//   en Hair-Times. Al arrancar la página en KALONICE:
+//     $w('#clasificasexo').onClick(...) → TypeError: onClick is not
+//     a function (el stub que devuelve $w para un ID inexistente
+//     no expone .onClick).
+//   El throw cortaba el $w.onReady antes de `await cargarCache()`,
+//   dejando cachedClientes vacío para siempre. Resultado visible:
+//   el widget quedaba en "Cargando clientes..." y `buscarCliente`
+//   respondía siempre con [] → el CRM no cargaba a nadie.
+//   Fix mínimo (mismo patrón que ya usan otros pagecodes del
+//   proyecto para botones opcionales, ej. RecepcionPRO con
+//   #btnMechas/#btnTinte/#btnTinteVegetal/#btnTinteHombre):
+//     · El $w('#clasificasexo').onClick(...) se envuelve en try/catch
+//       con console.warn identificable.
+//     · Ningún otro cambio en el archivo. La función
+//       lanzarClasificacionSexo() se mantiene intacta y sigue
+//       operativa en las tenants donde el botón exista (Hair-Times).
+//     · Bump TAG a [1.9.4].
+//   Sin cambios en imports, handlers postMessage, switch,
+//   cargarCache, cargarDatosCliente ni en la función
+//   lanzarClasificacionSexo.
+//
 // v1.9.3 (06-Jul-2026) — HOTFIX case 'crearContacto':
 //   - Se retira la llamada a cargarDatosCliente(r.contactId) después
 //     de 'contactoCreado'. Motivo: el widget desktop v1.7.4 / mobile
@@ -145,7 +171,7 @@ import {
   eliminarCupon
 } from 'backend/couponsLogic.web';
 
-const TAG = '[FichaCliente][PageCode][1.9.3]';
+const TAG = '[FichaCliente][PageCode][1.9.4]';
 
 let cachedClientes = [];
 let widgetReady    = false;
@@ -657,8 +683,17 @@ $w.onReady(async () => {
   console.log(`${TAG} onReady`);
   $w('#htmlFichaCliente').onMessage(handleMessage);
 
-  // v1.8.0: Botón clasificación demográfica
-  $w('#clasificasexo').onClick(() => lanzarClasificacionSexo());
+  // v1.9.4 — Botón #clasificasexo (herramienta puntual de
+  // clasificación demográfica masiva v1.8.0) puede no existir en
+  // todas las tenants. Se blinda con try/catch al mismo estilo que
+  // otros pagecodes del proyecto para botones opcionales. Sin este
+  // guard, un $w('#clasificasexo').onClick sobre un ID inexistente
+  // lanzaba TypeError y cortaba el $w.onReady antes de cargarCache().
+  try {
+    $w('#clasificasexo').onClick(() => lanzarClasificacionSexo());
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ Botón #clasificasexo no encontrado en esta tenant`);
+  }
 
   await cargarCache();
 });
