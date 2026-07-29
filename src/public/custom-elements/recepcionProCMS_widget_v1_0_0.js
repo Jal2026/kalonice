@@ -1,8 +1,22 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.66  ·  FIX catálogo "Cargando…" colgado + tooltip de bloque
+ * VERSION: 1.1.67  ·  Servicios de 1 min plegados en la cartela del principal
  * FECHA: 29 de julio de 2026
+ * ---------------------------------------------------------------------
+ * v1.1.67 (29 jul 2026) — Servicios de 1 min legibles (widget-only). Las
+ *   fases ocupantes de ≤1 min (marcadores tipo tamaño de pelo) ya NO se
+ *   pintan como bloque propio ilegible: su leyenda se pliega como una línea
+ *   nueva en la cartela de la fase PRINCIPAL, entre el cliente y el rango, y
+ *   su minuto se suma al rango mostrado (p.ej. 10:15-10:44 → 10:15-10:45).
+ *   Solo cambia lo VISUAL: la fase sigue intacta en datos, ledger y CRM
+ *   (serviciosDetail, cobro, ficha). Se pliega en `_apptHTML` (clasifica
+ *   tiny vs normal, ancla en firstIdxGlobal) y se pinta en `_apptBloqueHTML`
+ *   (nueva línea .ks-appt-fold + rango extendido `rangoEndMin`). Caso borde
+ *   cubierto: si TODAS las fases son de 1 min (servicio suelto), se pinta
+ *   normal (no hay principal donde plegar). El tooltip de v1.1.66 se
+ *   mantiene (ayuda con otros bloques cortos), pero ya no hace falta para
+ *   los marcadores de tamaño.
  * ---------------------------------------------------------------------
  * v1.1.66 (29 jul 2026) — Dos arreglos (widget-only):
  *   A) FIX "Catálogo Cargando…" colgado. Cuando Wix desconecta+reconecta el
@@ -1159,7 +1173,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.66]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.67]';
 
   // ─── helpers ───
   function esc(s) {
@@ -1544,6 +1558,7 @@ button { font-family: inherit; cursor: pointer; }
 .ks-appt-time { font-size: 9.5px; font-weight: 500; opacity: .82; font-variant-numeric: tabular-nums; flex: none; }
 .ks-appt-client { font-size: 11px; font-weight: 600; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ks-appt-svc { font-size: 10px; font-weight: 500; opacity: .92; line-height: 1.2; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.ks-appt-fold { font-size: 10px; font-weight: 500; opacity: .85; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ks-appt-rango { font-size: 10px; font-weight: 500; opacity: .75; margin-top: 1px; }
 /* v1.1.14 — resize handle (asa en el borde inferior del último bloque) */
 .ks-appt-resize { position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%);
@@ -4237,23 +4252,62 @@ button { font-family: inherit; cursor: pointer; }
       const lastIdxGlobal = fasesOcupanTodas.length ? fasesOcupanTodas[fasesOcupanTodas.length - 1].idx : -1;
       const firstIdxGlobal = fasesOcupanTodas.length ? fasesOcupanTodas[0].idx : -1;
 
-      let lastFaseEndISO = null;
-      let html = fasesOcupanCol.map(f => {
+      // v1.1.67 — Fases de 1 min (marcadores tipo tamaño de pelo) NO se pintan
+      // como bloque propio (ilegible): su leyenda se pliega en la cartela de la
+      // fase principal y su minuto se suma al rango mostrado de esa fase. Es
+      // SOLO visual: la fase sigue intacta en datos/ledger/CRM.
+      const _durFase = (f) => {
+        let d = Number(f.dur) || 0;
+        if (!d && f.end && f.start) d = Math.max(1, (new Date(f.end).getTime() - new Date(f.start).getTime()) / 60000);
+        return d || 30;
+      };
+      const _esTiny = (f) => Math.round(_durFase(f)) <= 1;
+      const tinyCol = fasesOcupanCol.filter(_esTiny);
+      const normalCol = fasesOcupanCol.filter(f => !_esTiny(f));
+      // Solo se pliega si hay al menos una fase normal donde anclar; si todas
+      // son tiny (servicio suelto de 1 min), se pinta todo normal.
+      const plegar = normalCol.length > 0 && tinyCol.length > 0;
+      const anchorIdx = plegar
+        ? (normalCol.some(f => f.idx === firstIdxGlobal) ? firstIdxGlobal : normalCol[0].idx)
+        : -999;
+      const foldLabels = plegar ? tinyCol.map(f => f.label || 'Servicio') : [];
+      let foldMaxEndMin = null;
+      if (plegar) {
+        for (const f of tinyCol) {
+          const endISO = f.end || new Date(new Date(f.start || r.fechaReserva).getTime() + _durFase(f) * 60000).toISOString();
+          const m = this._isoToMadridMin(endISO);
+          if (m != null && (foldMaxEndMin == null || m > foldMaxEndMin)) foldMaxEndMin = m;
+        }
+      }
+      const fasesAPintar = plegar ? normalCol : fasesOcupanCol;
+
+      // Fin de la última fase ocupante GLOBAL en esta columna (incl. tiny),
+      // para la extensión legacy (extensionMin). Independiente del plegado.
+      const _ultCol = fasesOcupanCol.find(f => f.idx === lastIdxGlobal);
+      let lastFaseEndISO = _ultCol
+        ? (_ultCol.end || new Date(new Date(_ultCol.start || r.fechaReserva).getTime() + _durFase(_ultCol) * 60000).toISOString())
+        : null;
+
+      let html = fasesAPintar.map(f => {
         const startISO = f.start || r.fechaReserva;
-        let dur = Number(f.dur) || 0;
-        if (!dur && f.end && f.start) dur = Math.max(1, (new Date(f.end).getTime() - new Date(f.start).getTime()) / 60000);
-        if (!dur) dur = 30;
-        const esUlt = f.idx === lastIdxGlobal;
-        if (esUlt) lastFaseEndISO = f.end || new Date(new Date(startISO).getTime() + dur * 60000).toISOString();
+        const dur = _durFase(f);
+        // Rango extendido con el minuto de las tiny SOLO en la fase ancla.
+        let rangoEndMin = null;
+        if (plegar && f.idx === anchorIdx && foldMaxEndMin != null) {
+          const propioEndMin = this._isoToMadridMin(startISO) + Math.round(dur);
+          rangoEndMin = Math.max(propioEndMin, foldMaxEndMin);
+        }
         return this._apptBloqueHTML(r, staff, ppm, {
           startISO,
           dur,
           label: f.label || 'Servicio',
           esFasePrincipal: (f.idx === firstIdxGlobal),
-          esUltimaFase: esUlt,
+          esUltimaFase: (f.idx === lastIdxGlobal),
           cascada: esCascada,
           faseIndex: f.idx,
-          laneInfo: staff.lanesMap?.[`${r._id}__${f.idx}`] || null   // v1.1.36
+          laneInfo: staff.lanesMap?.[`${r._id}__${f.idx}`] || null,   // v1.1.36
+          foldLabels: (f.idx === anchorIdx) ? foldLabels : null,       // v1.1.67
+          rangoEndMin                                                  // v1.1.67
         });
       }).join('');
       // Extensión: solo en la columna donde está la última fase
@@ -4306,7 +4360,13 @@ button { font-family: inherit; cursor: pointer; }
       const lineaAbajo = titleMode === 'servicio'
         ? `<span class="ks-appt-svc">${esc(cliente)}</span>`
         : `<span class="ks-appt-svc">${esc(labelFase)}${opts.cascada && opts.esFasePrincipal ? '<span class="ks-cascade-flag">⛓ cascada</span>' : ''}</span>`;
-      const lineaHora = height >= 60 ? `<span class="ks-appt-rango">${hhmm} - ${endHHMM}</span>` : '';
+      // v1.1.67 — rango extendido con el minuto de las fases plegadas (tiny),
+      // y línea de leyenda plegada (marcadores de 1 min, p.ej. tamaño de pelo).
+      const rangoEndTxt = (opts.rangoEndMin != null) ? minToHHMM(opts.rangoEndMin) : endHHMM;
+      const foldLine = (opts.foldLabels && opts.foldLabels.length)
+        ? `<span class="ks-appt-fold">${opts.foldLabels.map(esc).join(' · ')}</span>`
+        : '';
+      const lineaHora = height >= 60 ? `<span class="ks-appt-rango">${hhmm} - ${rangoEndTxt}</span>` : '';
       // v1.1.29 — atributos para drag&drop por fase. Cita PAGADA no es draggable.
       const draggable = (!paid && opts.faseIndex >= 0) ? 1 : 0;
       // v1.1.36 — Side-by-side overlap rendering.
@@ -4328,6 +4388,7 @@ button { font-family: inherit; cursor: pointer; }
         <span class="ks-appt-inner">
           <span class="ks-appt-topline">${lineaArriba}</span>
           ${height >= 44 ? lineaAbajo : ''}
+          ${height >= 44 ? foldLine : ''}
           ${lineaHora}
         </span>
         ${(!paid && (opts.faseIndex >= 0 || opts.esUltimaFase)) ? `<span class="ks-appt-resize" data-id="${esc(r._id)}" data-ppm="${_ppm}" data-fase-idx="${opts.faseIndex}" data-fase-dur="${Math.round(dur)}" data-start-min="${startMin}" data-end-iso="${esc(opts.startISO)}" data-end-min="${startMin + Math.round(dur)}" data-ext="${Number(r.extensionMin) || 0}" title="${opts.faseIndex >= 0 ? 'Arrastra para ajustar la duración de este servicio' : 'Arrastra para extender'}"></span>` : ''}
