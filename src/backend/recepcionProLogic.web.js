@@ -866,7 +866,7 @@ import { services } from 'wix-bookings.v2';
 import { contacts } from 'wix-crm-backend';
 import wixData from 'wix-data';
 
-const VERSION = '1.0.38';
+const VERSION = '1.0.39';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
