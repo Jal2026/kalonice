@@ -1,8 +1,25 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.64  ·  Grid 15', líneas +oscuras, popup hora, zoom+, drag en vivo, 1-min
+ * VERSION: 1.1.65  ·  Redimensionar la duración de CUALQUIER fase de la cascada
  * FECHA: 29 de julio de 2026
+ * ---------------------------------------------------------------------
+ * v1.1.65 (29 jul 2026) — Extender cualquier servicio de la cascada, no
+ *   solo el último. El asa de resize (borde inferior del bloque) ahora
+ *   aparece en TODAS las fases ocupantes (antes solo en la última). Al
+ *   arrastrarla se ajusta la DURACIÓN de esa fase; el backend nuevo
+ *   redimensionarFase (recepcionProLogic v1.0.39, calcado de moverFase)
+ *   desplaza las fases posteriores para mantener la secuencia. Envía el
+ *   mensaje nuevo 'redimensionar-fase' { reservaId, faseIndex, nuevaDur }
+ *   (page code v1.0.30, handler handleRedimensionarFase). El preview
+ *   muestra el bloque creciendo con su nueva duración y horario.
+ *   · COMPAT: el camino legacy de extensión (extensionMin, buffer rayado
+ *     tras la última fase) se conserva íntegro para reservas SIN fases
+ *     (faseIndex = -1): esas siguen usando 'extender-reserva'. La rama se
+ *     decide en _bindResizeExt por data-fase-idx. El render legacy
+ *     (_extensionHTML) y quitarExtension no se tocan.
+ *   · Nueva respuesta 'fase-redimensionada' en _handleResponse. Gates
+ *     intactos: PAGADO no muestra asa (no redimensionable).
  * ---------------------------------------------------------------------
  * v1.1.64 (29 jul 2026) — Ajustes de agenda operativa (widget-only, CERO
  *   backend / CERO page code / CERO URL / CERO IDs de colección):
@@ -2395,6 +2412,11 @@ button { font-family: inherit; cursor: pointer; }
           if (p.ok) { this._toast('Fase movida ✓'); this._sendToPage('getReservas', { fecha: this._fecha }); }
           else this._toast('Error: ' + (p.error || 'no se pudo mover la fase'));
           break;
+        case 'fase-redimensionada':
+          // v1.1.65 — redimensionar duración de fase (empuja las posteriores)
+          if (p.ok) { this._toast('Duración ajustada ✓'); this._sendToPage('getReservas', { fecha: this._fecha }); }
+          else this._toast('Error: ' + (p.error || 'no se pudo ajustar la duración'));
+          break;
         case 'extra-agregado':
           if (p.ok) { this._toast(`Extra añadido (+${p.precioTotal}€ total)`); this._closeSubModal(); this._closeModal(); this._sendToPage('getReservas', { fecha: this._fecha }); }
           else this._toast('Error: ' + (p.error || 'no se pudo añadir extra'));
@@ -3934,10 +3956,58 @@ button { font-family: inherit; cursor: pointer; }
     _bindResizeExt(wrap, handle) {
       const _ppm = parseFloat(handle.dataset.ppm) || PX_PER_MIN;
       const reservaId = handle.dataset.id;
-      const endMinBase = parseInt(handle.dataset.endMin, 10);   // min absoluto donde acaba la última fase (sin extensión)
-      const extActual = Math.max(0, parseInt(handle.dataset.ext, 10) || 0);
       const appt = handle.closest('.ks-appt');
       if (!appt) return;
+      const faseIndex = parseInt(handle.dataset.faseIdx, 10);
+
+      // ── v1.1.65 — REDIMENSIONAR la duración de la fase (cualquier fase
+      //    ocupante, faseIndex >= 0). El bloque crece/mengua al arrastrar y
+      //    el backend redimensionarFase desplaza las fases posteriores para
+      //    mantener la secuencia de la cascada. Envía 'redimensionar-fase'.
+      if (faseIndex >= 0) {
+        const durBase = parseInt(handle.dataset.faseDur, 10) || 30;
+        const startMin = parseInt(handle.dataset.startMin, 10) || 0;
+        let preview = null, startY = 0, curDur = durBase, dragging = false;
+        handle.addEventListener('mousedown', e => {
+          e.preventDefault(); e.stopPropagation();
+          dragging = true; startY = e.clientY; curDur = durBase;
+          // preview: el propio bloque creciendo desde su borde superior
+          preview = document.createElement('div');
+          preview.className = 'ks-appt-resize-preview';
+          preview.style.top = appt.offsetTop + 'px';
+          preview.style.height = Math.max(curDur * _ppm, 1) + 'px';
+          preview.textContent = `${curDur}′`;
+          appt.parentElement.appendChild(preview);
+          const onMove = ev => {
+            if (!dragging) return;
+            const dy = ev.clientY - startY;
+            let nd = durBase + Math.round((dy / _ppm) / 5) * 5;   // snap 5 min
+            if (nd < 1) nd = 1;
+            curDur = nd;
+            preview.style.height = Math.max(nd * _ppm, 1) + 'px';
+            preview.textContent = `${nd}′ · ${minToHHMM(startMin)}–${minToHHMM(startMin + nd)}`;
+          };
+          const onUp = () => {
+            dragging = false;
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            if (preview) { preview.remove(); preview = null; }
+            if (curDur !== durBase) {
+              this._toast(`Ajustando duración a ${curDur} min…`);
+              this._sendToPage('redimensionar-fase', { reservaId, faseIndex, nuevaDur: curDur });
+            }
+          };
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        });
+        return;
+      }
+
+      // ── LEGACY (faseIndex = -1, reservas SIN fases): extensión con
+      //    extensionMin (buffer rayado tras el bloque). Comportamiento previo
+      //    intacto; envía 'extender-reserva'.
+      const endMinBase = parseInt(handle.dataset.endMin, 10);   // min absoluto donde acaba la última fase (sin extensión)
+      const extActual = Math.max(0, parseInt(handle.dataset.ext, 10) || 0);
       let preview = null, startY = 0, currentExt = extActual, dragging = false;
       handle.addEventListener('mousedown', e => {
         e.preventDefault(); e.stopPropagation();
@@ -4233,7 +4303,7 @@ button { font-family: inherit; cursor: pointer; }
           ${height >= 44 ? lineaAbajo : ''}
           ${lineaHora}
         </span>
-        ${opts.esUltimaFase ? `<span class="ks-appt-resize" data-id="${esc(r._id)}" data-ppm="${_ppm}" data-end-iso="${esc(opts.startISO)}" data-end-min="${startMin + Math.round(dur)}" data-ext="${Number(r.extensionMin) || 0}" title="Arrastra para extender"></span>` : ''}
+        ${(!paid && (opts.faseIndex >= 0 || opts.esUltimaFase)) ? `<span class="ks-appt-resize" data-id="${esc(r._id)}" data-ppm="${_ppm}" data-fase-idx="${opts.faseIndex}" data-fase-dur="${Math.round(dur)}" data-start-min="${startMin}" data-end-iso="${esc(opts.startISO)}" data-end-min="${startMin + Math.round(dur)}" data-ext="${Number(r.extensionMin) || 0}" title="${opts.faseIndex >= 0 ? 'Arrastra para ajustar la duración de este servicio' : 'Arrastra para extender'}"></span>` : ''}
       </button>`;
     }
     // v1.1.40 — _blockHTML ahora recibe una RESERVA con family='BLOQUEO'
