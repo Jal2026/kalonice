@@ -1,8 +1,20 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.67  ·  Servicios de 1 min plegados en la cartela del principal
- * FECHA: 29 de julio de 2026
+ * VERSION: 1.1.68  ·  FIX: el plegado de 1 min se ancla a la fase PRINCIPAL
+ * FECHA: 30 de julio de 2026
+ * ---------------------------------------------------------------------
+ * v1.1.68 (30 jul 2026) — FIX del plegado de servicios de 1 min (widget-only).
+ *   El plegado (v1.1.67) se anclaba a la PRIMERA fase ocupante de la cascada,
+ *   no a la principal. Si la primera fase era corta (p.ej. "Lavado previo" de
+ *   15 min, por debajo de la altura mínima de la línea plegada) la leyenda no
+ *   cabía y desaparecía (ni plegada en un bloque ni pintada como fase suelta).
+ *   Se veía bien en KALONICE solo porque allí la primera fase (Bigudis) era
+ *   larga. Ahora el plegado se ancla a la fase PRINCIPAL, identificada por su
+ *   tipo — 'APLICACION' (complejo) o 'SERVICIO' (simple); los complementos son
+ *   'COMPLEMENTO'/'INCLUIDA' — que es la fase larga y visible. Fallbacks: por
+ *   label del principal (1er item de serviciosDetail) y, en último caso, la
+ *   primera fase normal. Nada más cambia.
  * ---------------------------------------------------------------------
  * v1.1.67 (29 jul 2026) — Servicios de 1 min legibles (widget-only). Las
  *   fases ocupantes de ≤1 min (marcadores tipo tamaño de pelo) ya NO se
@@ -1173,7 +1185,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.67]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.68]';
 
   // ─── helpers ───
   function esc(s) {
@@ -4267,9 +4279,21 @@ button { font-family: inherit; cursor: pointer; }
       // Solo se pliega si hay al menos una fase normal donde anclar; si todas
       // son tiny (servicio suelto de 1 min), se pinta todo normal.
       const plegar = normalCol.length > 0 && tinyCol.length > 0;
-      const anchorIdx = plegar
-        ? (normalCol.some(f => f.idx === firstIdxGlobal) ? firstIdxGlobal : normalCol[0].idx)
-        : -999;
+      // v1.1.68 — FIX: anclar el plegado a la fase PRINCIPAL, NO a la primera
+      // fase de la cascada. La principal es SIEMPRE fase 'APLICACION' (complejo)
+      // o 'SERVICIO' (simple); los complementos son 'COMPLEMENTO'/'INCLUIDA'.
+      // Antes se anclaba a firstIdxGlobal: si la primera fase era corta (p.ej.
+      // "Lavado previo" de 15 min < altura mínima de la línea plegada) la
+      // leyenda no cabía y desaparecía (ni plegada ni como bloque). La
+      // principal suele ser la fase larga → visible. Fallbacks: por label del
+      // principal (1er item de serviciosDetail) y, en último caso, 1ª normal.
+      const _principalLabel = String((String(r.serviciosDetail || '').split(';;')[0] || '').split('|')[0] || '').trim();
+      const _anchorFase = plegar
+        ? (normalCol.find(f => f && (f.fase === 'APLICACION' || f.fase === 'SERVICIO'))
+           || normalCol.find(f => _principalLabel && String(f.label || '').trim() === _principalLabel)
+           || normalCol[0])
+        : null;
+      const anchorIdx = _anchorFase ? _anchorFase.idx : -999;
       const foldLabels = plegar ? tinyCol.map(f => f.label || 'Servicio') : [];
       let foldMaxEndMin = null;
       if (plegar) {
