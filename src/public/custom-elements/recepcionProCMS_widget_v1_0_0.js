@@ -1,8 +1,22 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.65  ·  Redimensionar la duración de CUALQUIER fase de la cascada
+ * VERSION: 1.1.66  ·  FIX catálogo "Cargando…" colgado + tooltip de bloque
  * FECHA: 29 de julio de 2026
+ * ---------------------------------------------------------------------
+ * v1.1.66 (29 jul 2026) — Dos arreglos (widget-only):
+ *   A) FIX "Catálogo Cargando…" colgado. Cuando Wix desconecta+reconecta el
+ *      custom element (2º connectedCallback), _renderShell repintaba el
+ *      placeholder estático "Cargando catálogo…" pero el catálogo ya había
+ *      llegado (_loading=false) y el retry no re-disparaba → el panel se
+ *      quedaba colgado hasta tocar un filtro. Ahora, tras _renderShell, se
+ *      repintan panel y agenda con lo que ya haya en memoria (en el 1er
+ *      montaje es inocuo: muestra "Cargando…" normal / no-op sin staff).
+ *   B) Tooltip nativo en el bloque de cita (atributo title con
+ *      "servicio · hora · cliente"). Permite leer la cartela de servicios
+ *      muy cortos (p.ej. variantes de tamaño de pelo de 1 min, que ni a
+ *      máximo zoom caben en altura) sin falsear la duración ni desplazar
+ *      nada.
  * ---------------------------------------------------------------------
  * v1.1.65 (29 jul 2026) — Extender cualquier servicio de la cascada, no
  *   solo el último. El asa de resize (borde inferior del bloque) ahora
@@ -1145,7 +1159,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.65]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.66]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2096,6 +2110,19 @@ button { font-family: inherit; cursor: pointer; }
       }
       this._renderShell();
       this._updateSteps();
+      // v1.1.66 — FIX "Catálogo Cargando" colgado. Si Wix desconecta+reconecta
+      // el custom element (2º connectedCallback, habitual en Wix durante la
+      // hidratación/relayout), _renderShell repinta el placeholder estático
+      // "Cargando catálogo…", pero el catálogo YA llegó (_loading=false,
+      // _servicios poblado) y el retry de 'ready' no re-dispara porque
+      // _catalogoRecibido ya es true → el panel se queda colgado hasta tocar
+      // un filtro. La agenda se rescata sola por el polling de 30s; el panel
+      // no tiene rescate. Repintamos ambos con lo que ya haya en memoria:
+      // en el 1er montaje _loading=true → _renderPanel muestra "Cargando…"
+      // normal y _renderCalendar es no-op (aún sin staff); en la reconexión
+      // pintan los datos reales al instante.
+      this._renderPanel();
+      this._renderCalendar();
       this._sendToPage('ready', {});
       this._sendToPage('get-settings', {});
       // v1.1.63 — pedir nombres del salón (brandName/legalName) para las
@@ -4295,7 +4322,7 @@ button { font-family: inherit; cursor: pointer; }
         // 3px de gap visual entre lanes.
         lanePos = `left:calc(${left}% + 3px);width:calc(${w}% - 6px);right:auto;`;
       }
-      return `<button class="ks-appt ${paid ? 'is-paid' : 'is-pending'}${esMedida ? ' is-medida' : ''}" data-id="${esc(r._id)}" data-fase-idx="${opts.faseIndex}" data-fase-dur="${dur}" data-fase-start="${esc(opts.startISO)}" data-draggable="${draggable}" style="top:${top}px;height:${height}px;${lanePos}--staff:${staff.color};--fam:${fam}">
+      return `<button class="ks-appt ${paid ? 'is-paid' : 'is-pending'}${esMedida ? ' is-medida' : ''}" data-id="${esc(r._id)}" data-fase-idx="${opts.faseIndex}" data-fase-dur="${dur}" data-fase-start="${esc(opts.startISO)}" data-draggable="${draggable}" title="${esc(labelFase)} · ${hhmm}–${endHHMM}${cliente ? ' · ' + esc(cliente) : ''}" style="top:${top}px;height:${height}px;${lanePos}--staff:${staff.color};--fam:${fam}">
         <span class="ks-appt-statusdot">${paid ? '✓' : '€'}</span>
         ${draggable ? `<span class="ks-appt-timeadj" title="Ajustar hora de inicio">🕑</span>` : ''}
         <span class="ks-appt-inner">
