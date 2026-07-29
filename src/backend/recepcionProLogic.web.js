@@ -1,21 +1,24 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.39
+// VERSION: 1.0.40
 // FECHA: 29 de julio de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
 //
+// v1.0.40: 📏 FIX redimensionarFase — NO desplazar otras fases. Revert del
+//          desplazamiento introducido en v1.0.39: redimensionar una fase
+//          cambia ÚNICAMENTE su dur/end. Las demás fases NO se tocan; si al
+//          alargar se solapa con la siguiente, se solapa (mismo criterio que
+//          moverFase; el operador decide). Se sigue recalculando
+//          fechaReserva/duracionTotal (agregados de la propia cita).
+//
 // v1.0.39: 📏 NEW redimensionarFase({ reservaId, faseIndex, nuevaDur }).
-//          Permite ajustar la DURACIÓN de cualquier fase ocupante de una
-//          cascada (no solo la última). Calcado de moverFase: lee la
-//          reserva, rechaza PAGADO, fija dur/end de la fase indicada y
-//          DESPLAZA las fases posteriores (start >= final ORIGINAL de esa
-//          fase) por el delta, para conservar la secuencia. Recalcula
-//          fechaReserva = min(start) y duracionTotal = max(end) − min(start)
-//          de las ocupantes. NO valida solapes (responsabilidad del
-//          operador, igual que moverFase). Usado por Recepción PRO (asa de
-//          resize del bloque, ahora en todas las fases). Cero cambios en
-//          extenderReserva/quitarExtension (extensionMin sigue para legacy).
+//          Ajusta la DURACIÓN de cualquier fase ocupante de una cascada (no
+//          solo la última). Calcado de moverFase: rechaza PAGADO, fija
+//          dur/end de la fase indicada, recalcula fechaReserva/duracionTotal.
+//          Usado por Recepción PRO (asa de resize, ahora en todas las fases).
+//          [NOTA: la build desplegada de v1.0.39 desplazaba las fases
+//          posteriores; corregido en v1.0.40.]
 //
 // v1.0.38: 🏷️ PERSISTIR CATEGORÍA (group) EN CADA RESERVA.
 //          KamisuiteReservations solo grababa `family` (naturaleza técnica:
@@ -866,7 +869,7 @@ import { services } from 'wix-bookings.v2';
 import { contacts } from 'wix-crm-backend';
 import wixData from 'wix-data';
 
-const VERSION = '1.0.39';
+const VERSION = '1.0.40';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -3149,13 +3152,13 @@ export const moverFase = webMethod(
 // =====================================================
 // 8.b REDIMENSIONAR FASE — ajustar la duración de una fase
 // =====================================================
-//   Cambia la DURACIÓN de la fase `faseIndex` (nuevaDur minutos) y desplaza
-//   las fases POSTERIORES (las que empezaban en o después del final ORIGINAL
-//   de esa fase) por el delta, para conservar la secuencia de la cascada.
+//   Cambia ÚNICAMENTE la DURACIÓN (dur/end) de la fase `faseIndex`. NO
+//   desplaza ni toca ninguna otra fase: si al alargar se solapa con la
+//   siguiente, se solapa (mismo criterio que moverFase; el operador decide).
 //   - PROCESO (ocupa=false) no se redimensiona (no tiene asa en el widget).
 //   - PAGADO se rechaza (igual que moverFase).
-//   - Recalcula fechaReserva = min(start) y duracionTotal = max(end) − min(start).
-//   - NO valida solapes (responsabilidad del operador, igual que moverFase).
+//   - Recalcula fechaReserva = min(start) y duracionTotal = max(end) − min(start)
+//     de las ocupantes (agregados de la propia cita).
 
 export const redimensionarFase = webMethod(
   Permissions.SiteMember,
@@ -3193,23 +3196,14 @@ export const redimensionarFase = webMethod(
       if (!durOld) durOld = 30;
 
       const startMs = new Date(faseActual.start).getTime();
-      const oldEndMs = startMs + durOld * 60000;
       const newEndMs = startMs + nueva * 60000;
-      const deltaMs = newEndMs - oldEndMs;   // + alarga, − acorta
 
-      // Nueva fase (dur/end) + desplazar las fases posteriores en el tiempo.
+      // v1.0.40 — SOLO cambia dur/end de ESTA fase. NO se desplaza ni se toca
+      // ninguna otra fase. Si al alargar se solapa con la siguiente, se
+      // solapa: el código no reordena la cita (mismo criterio que moverFase;
+      // el operador es el responsable).
       const fasesNew = fasesArr.map((f, i) => {
-        if (i === idx) {
-          return { ...f, dur: nueva, end: new Date(newEndMs).toISOString() };
-        }
-        if (deltaMs !== 0 && f && f.start) {
-          const sMs = new Date(f.start).getTime();
-          if (sMs >= oldEndMs) {
-            const nf = { ...f, start: new Date(sMs + deltaMs).toISOString() };
-            if (f.end) nf.end = new Date(new Date(f.end).getTime() + deltaMs).toISOString();
-            return nf;
-          }
-        }
+        if (i === idx) return { ...f, dur: nueva, end: new Date(newEndMs).toISOString() };
         return { ...f };
       });
 
@@ -3229,7 +3223,7 @@ export const redimensionarFase = webMethod(
       registro.duracionTotal = Math.max(1, Math.round((maxEnd - minStart) / 60000));
 
       await wixData.update(CMS_RESERVAS, registro, { suppressAuth: true });
-      console.log(`${TAG} ✅ Fase redimensionada: idx=${idx} ${durOld}→${nueva}min delta=${deltaMs / 60000}min | duracionTotal=${registro.duracionTotal}min`);
+      console.log(`${TAG} ✅ Fase redimensionada (sin tocar otras): idx=${idx} ${durOld}→${nueva}min | duracionTotal=${registro.duracionTotal}min`);
       return {
         ok: true,
         reservaId,
