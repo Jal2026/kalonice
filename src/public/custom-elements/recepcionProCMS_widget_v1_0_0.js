@@ -1145,7 +1145,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.63]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.65]';
 
   // ─── helpers ───
   function esc(s) {
