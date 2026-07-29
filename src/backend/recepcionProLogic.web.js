@@ -1,9 +1,21 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.38
-// FECHA: 19 de julio de 2026
+// VERSION: 1.0.39
+// FECHA: 29 de julio de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.39: 📏 NEW redimensionarFase({ reservaId, faseIndex, nuevaDur }).
+//          Permite ajustar la DURACIÓN de cualquier fase ocupante de una
+//          cascada (no solo la última). Calcado de moverFase: lee la
+//          reserva, rechaza PAGADO, fija dur/end de la fase indicada y
+//          DESPLAZA las fases posteriores (start >= final ORIGINAL de esa
+//          fase) por el delta, para conservar la secuencia. Recalcula
+//          fechaReserva = min(start) y duracionTotal = max(end) − min(start)
+//          de las ocupantes. NO valida solapes (responsabilidad del
+//          operador, igual que moverFase). Usado por Recepción PRO (asa de
+//          resize del bloque, ahora en todas las fases). Cero cambios en
+//          extenderReserva/quitarExtension (extensionMin sigue para legacy).
 //
 // v1.0.38: 🏷️ PERSISTIR CATEGORÍA (group) EN CADA RESERVA.
 //          KamisuiteReservations solo grababa `family` (naturaleza técnica:
@@ -3129,6 +3141,105 @@ export const moverFase = webMethod(
       };
     } catch (e) {
       console.error(`${TAG} ❌ moverFase:`, e.message);
+      return { ok: false, error: e.message };
+    }
+  }
+);
+
+// =====================================================
+// 8.b REDIMENSIONAR FASE — ajustar la duración de una fase
+// =====================================================
+//   Cambia la DURACIÓN de la fase `faseIndex` (nuevaDur minutos) y desplaza
+//   las fases POSTERIORES (las que empezaban en o después del final ORIGINAL
+//   de esa fase) por el delta, para conservar la secuencia de la cascada.
+//   - PROCESO (ocupa=false) no se redimensiona (no tiene asa en el widget).
+//   - PAGADO se rechaza (igual que moverFase).
+//   - Recalcula fechaReserva = min(start) y duracionTotal = max(end) − min(start).
+//   - NO valida solapes (responsabilidad del operador, igual que moverFase).
+
+export const redimensionarFase = webMethod(
+  Permissions.SiteMember,
+  async ({ reservaId, faseIndex, nuevaDur }) => {
+    try {
+      console.log(`${TAG} 📏 redimensionarFase reserva=${reservaId} idx=${faseIndex} nuevaDur=${nuevaDur}`);
+      if (!reservaId) return { ok: false, error: 'Falta reservaId' };
+      if (faseIndex == null || isNaN(Number(faseIndex))) return { ok: false, error: 'faseIndex inválido' };
+      const nueva = Math.max(1, Math.round(Number(nuevaDur) || 0));
+      if (!nueva) return { ok: false, error: 'nuevaDur inválida' };
+
+      let registro;
+      try {
+        registro = await wixData.get(CMS_RESERVAS, reservaId, { suppressAuth: true });
+      } catch (e) {
+        return { ok: false, error: `Reserva no encontrada: ${reservaId}` };
+      }
+      if (!registro) return { ok: false, error: `Reserva no encontrada: ${reservaId}` };
+      if (registro.status === 'PAGADO') return { ok: false, error: 'No se puede redimensionar una cita ya cobrada' };
+
+      const fasesArr = jsonIn(registro.fases, 'items');
+      const idx = Number(faseIndex);
+      if (idx < 0 || idx >= fasesArr.length) return { ok: false, error: `faseIndex fuera de rango (0..${fasesArr.length - 1})` };
+
+      const faseActual = fasesArr[idx];
+      if (!faseActual) return { ok: false, error: 'Fase no encontrada' };
+      if (faseActual.ocupa === false) return { ok: false, error: 'Las fases de proceso no se redimensionan' };
+      if (!faseActual.start) return { ok: false, error: 'La fase no tiene inicio' };
+
+      // Duración actual de la fase
+      let durOld = Number(faseActual.dur) || 0;
+      if (!durOld && faseActual.end) {
+        durOld = Math.max(1, Math.round((new Date(faseActual.end).getTime() - new Date(faseActual.start).getTime()) / 60000));
+      }
+      if (!durOld) durOld = 30;
+
+      const startMs = new Date(faseActual.start).getTime();
+      const oldEndMs = startMs + durOld * 60000;
+      const newEndMs = startMs + nueva * 60000;
+      const deltaMs = newEndMs - oldEndMs;   // + alarga, − acorta
+
+      // Nueva fase (dur/end) + desplazar las fases posteriores en el tiempo.
+      const fasesNew = fasesArr.map((f, i) => {
+        if (i === idx) {
+          return { ...f, dur: nueva, end: new Date(newEndMs).toISOString() };
+        }
+        if (deltaMs !== 0 && f && f.start) {
+          const sMs = new Date(f.start).getTime();
+          if (sMs >= oldEndMs) {
+            const nf = { ...f, start: new Date(sMs + deltaMs).toISOString() };
+            if (f.end) nf.end = new Date(new Date(f.end).getTime() + deltaMs).toISOString();
+            return nf;
+          }
+        }
+        return { ...f };
+      });
+
+      // Recalcular fechaReserva = min(start) y duracionTotal = max(end) − min(start) de ocupantes
+      const ocupantes = fasesNew.filter(f => f && f.ocupa);
+      let minStart = Infinity, maxEnd = -Infinity;
+      for (const f of ocupantes) {
+        if (f.start) { const s = new Date(f.start).getTime(); if (s < minStart) minStart = s; }
+        if (f.end)   { const e = new Date(f.end).getTime();   if (e > maxEnd)   maxEnd = e; }
+      }
+      if (!isFinite(minStart) || !isFinite(maxEnd)) {
+        minStart = startMs; maxEnd = newEndMs;
+      }
+
+      registro.fases = { items: fasesNew };
+      registro.fechaReserva = new Date(minStart);
+      registro.duracionTotal = Math.max(1, Math.round((maxEnd - minStart) / 60000));
+
+      await wixData.update(CMS_RESERVAS, registro, { suppressAuth: true });
+      console.log(`${TAG} ✅ Fase redimensionada: idx=${idx} ${durOld}→${nueva}min delta=${deltaMs / 60000}min | duracionTotal=${registro.duracionTotal}min`);
+      return {
+        ok: true,
+        reservaId,
+        faseIndex: idx,
+        nuevaDur: nueva,
+        fechaReserva: registro.fechaReserva.toISOString(),
+        duracionTotal: registro.duracionTotal
+      };
+    } catch (e) {
+      console.error(`${TAG} ❌ redimensionarFase:`, e.message);
       return { ok: false, error: e.message };
     }
   }
