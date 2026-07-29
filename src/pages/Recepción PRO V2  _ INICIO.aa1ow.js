@@ -1,9 +1,17 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.29
-// FECHA: 6 de julio de 2026
+// VERSION: 1.0.30
+// FECHA: 29 de julio de 2026
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
+//
+// v1.0.30: + Puente redimensionar-fase. Nuevo handler handleRedimensionarFase
+//          que llama a redimensionarFase (recepcionProLogic v1.0.39) y
+//          responde al widget con 'fase-redimensionada'. Permite ajustar la
+//          duración de cualquier fase ocupante de la cascada (el backend
+//          desplaza las posteriores). + import redimensionarFase, + case
+//          'redimensionar-fase' en el switch, + entrada en LOG_EVENT_MAP.
+//          Puramente aditivo: cero cambios en el resto del page code.
 //
 // v1.0.29: + Puente salonNombres. Nuevo handler handleSalonNombres que
 //          llama al backend existente getSalonConfig (salonConfigLogic.web,
@@ -359,6 +367,7 @@ import {
   agregarServicioReserva,
   quitarItemReserva,
   moverFase,
+  redimensionarFase,
   // v1.0.17 — bloqueos persistentes
   crearBloqueo,
   eliminarBloqueo,
@@ -423,7 +432,7 @@ import {
 // existente en salonConfigLogic.web.js (Permissions.SiteMember). NO se toca.
 import { getSalonConfig } from 'backend/salonConfigLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.29]';
+const TAG = '[RecepcionProCMS v1.0.30]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -458,6 +467,7 @@ const LOG_EVENT_MAP = {
   'agregar-servicio':      'cambio_reserva',
   'quitar-item':           'cambio_reserva',
   'mover-fase':            'cambio_reserva',
+  'redimensionar-fase':    'cambio_reserva',
   // cobros
   'pagarReserva':          'cobro',
   'vender-productos-cita': 'cobro',
@@ -1087,6 +1097,18 @@ async function handleMoverFase(msg) {
   }
 }
 
+// v1.0.30 — redimensionar la duración de una fase (empuja las posteriores)
+async function handleRedimensionarFase(msg) {
+  try {
+    const { reservaId, faseIndex, nuevaDur } = msg || {};
+    const r = await redimensionarFase({ reservaId, faseIndex, nuevaDur });
+    sendResponse('fase-redimensionada', r);
+  } catch (e) {
+    console.error(`${TAG} ❌ redimensionar-fase:`, e);
+    sendResponse('fase-redimensionada', { ok: false, error: e?.message || 'Error' });
+  }
+}
+
 async function handleAgregarExtra(msg) {
   try {
     const { reservaId, importe, descripcion } = msg || {};
@@ -1383,6 +1405,7 @@ $w.onReady(function () {
         case 'get-productos':        handleGetProductos(); break;
         case 'quitar-item':          handleQuitarItem(msg); break;
         case 'mover-fase':           handleMoverFase(msg); break;
+        case 'redimensionar-fase':   handleRedimensionarFase(msg); break;
         // v1.0.17 — bloqueos persistentes
         case 'crearBloqueo':         handleCrearBloqueo(msg); break;
         case 'eliminarBloqueo':      handleEliminarBloqueo(msg); break;
