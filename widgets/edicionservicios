@@ -9,10 +9,36 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
 /* ═══════════════════════════════════════════════════
-       KAMISUITE — Edición Servicios Widget v1.14.7
+       KAMISUITE — Edición Servicios Widget v1.14.9
        Dark theme. CMS-ONLY TOTAL. Solo ServiceCatalog.
 
        CHANGELOG:
+       v1.14.9: 🎟️ BONOS · AVISO DE FORMATO EN % DESCUENTO. Se añade
+         un <p class="form-hint"> bajo el input #fBonoDescuento con el
+         texto "Decimal con punto: p.ej. 33.33 (no usar coma)." Motivo:
+         v1.14.8 admite 2 decimales, pero Wix Number persiste como JS
+         Number (separador punto). Si el operador teclea "33,33" el
+         parseFloat corta en la coma y guarda 33 (con pérdida silente
+         del decimal). El aviso reutiliza literalmente la clase
+         .form-hint ya definida en la hoja de estilos (línea 426) y
+         usada en el resto del widget (precio por peso, procesos,
+         comodines...). SIN cambios en input, parseo, backend ni CSS.
+       v1.14.8: 🎟️ BONOS · DECIMALES EN % DESCUENTO. El input
+         #fBonoDescuento pasa de step="1" a step="0.01" para admitir
+         hasta 2 decimales (ej. 33.33 %). El parseo del payload cambia
+         de parseInt(bdRaw, 10) a parseFloat(bdRaw), preservando el
+         fallback `|| 0` y el tratamiento de vacío (null). Motivo:
+         redondear el % a entero produce desviaciones de hasta ±1.20 €
+         entre el precio de bono esperado por el salón (fijado en la
+         hoja de condiciones comerciales) y el recomputado por
+         voucherPublicLogic (precioBono = precioBruto × (1 − desc/100)).
+         Con 2 decimales la desviación máxima cae a ±0.01 €. Backend
+         serviciosEdicionLogic ya persiste bonoDescuento como Number
+         (typeof === 'number'), sin cambios. voucherPublicLogic y
+         productosKamisuiteLogic tampoco tocan: sus divisiones por 100
+         aceptan decimales transparentemente. SIN cambios en el resto
+         del widget (fDescuentoPromo mantiene step="1"; no se toca por
+         no estar en el alcance de este parche).
        v1.14.7: 🎟️ BONOS: dos campos nuevos en el bloque de bono —
          "Caducidad del bono (días)" (fBonoValidezDias → bonusValidityDays)
          y "Días entre usos" (fBonoIntervaloDias → bonusUseIntervalDays).
@@ -703,7 +729,8 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
               </div>
               <div class="form-group">
                 <label class="form-label">Descuento del bono (%)</label>
-                <input type="number" class="form-input" id="fBonoDescuento" min="0" max="100" step="1" placeholder="0">
+                <input type="number" class="form-input" id="fBonoDescuento" min="0" max="100" step="0.01" placeholder="0">
+                <p class="form-hint">Decimal con punto: p.ej. 33.33 (no usar coma).</p>
               </div>
             </div>
             <!-- v1.14.7 — caducidad (días) + frecuencia mínima entre usos (días) -->
@@ -1983,7 +2010,7 @@ function buildPayloadComun() {
   const bnRaw = el.fBonoNumero ? el.fBonoNumero.value : '';
   const bonoNumero = (bnRaw === '' || bnRaw === null) ? null : (parseInt(bnRaw, 10) || 0);
   const bdRaw = el.fBonoDescuento ? el.fBonoDescuento.value : '';
-  const bonoDescuento = (bdRaw === '' || bdRaw === null) ? null : (parseInt(bdRaw, 10) || 0);
+  const bonoDescuento = (bdRaw === '' || bdRaw === null) ? null : (parseFloat(bdRaw) || 0);
   const bvdRaw = el.fBonoValidezDias ? el.fBonoValidezDias.value : '';
   const bonusValidityDays = (bvdRaw === '' || bvdRaw === null) ? null : (parseInt(bvdRaw, 10) || 0);
   const bidRaw = el.fBonoIntervaloDias ? el.fBonoIntervaloDias.value : '';
