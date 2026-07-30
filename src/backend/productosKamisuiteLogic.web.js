@@ -1,8 +1,8 @@
 // =====================================================
 // KAMISUITE - Editor de Productos Custom Backend
 // =====================================================
-// VERSION: 1.0.1
-// FECHA: 22 de junio de 2026
+// VERSION: 1.0.2
+// FECHA: 22 de junio de 2026 (v1.0.2: 30 de julio de 2026)
 //
 // MÓDULO: PRIME + Bonos + Tarjetas Promocionales.
 // PANTALLA: /gestorbonosypromociones (interna, backoffice).
@@ -51,6 +51,12 @@
 //   getProductosConfig por retrocompatibilidad.
 //
 // CHANGELOG:
+// v1.0.2 - · listarVouchersEmitidos ahora devuelve clientName (nombre
+//            del cliente) en cada bono, para que el widget muestre el
+//            nombre en la columna CLIENTE en vez del contactId (UUID).
+//            KamisuiteVouchers ganó el campo clientName (paridad con
+//            buyerName de KamisuitePrimeMemberships/KamisuitePromoCards).
+//            Sin cambios en ninguna otra función.
 // v1.0.1 - · NUEVO listarTodosServiciosActivos: devuelve todos los
 //            servicios activos del catálogo (excluyendo anclas técnicas),
 //            sin filtro por bonoActivo. Es lo que necesita el selector
@@ -737,6 +743,7 @@ export const listarVouchersEmitidos = webMethod(
         _id: c._id,
         code: c.code || '',
         contactId: c.contactId || '',
+        clientName: c.clientName || '',
         serviceSetupUid: c.serviceSetupUid || '',
         serviceLabel: c.serviceLabel || '',
         totalUses: (typeof c.totalUses === 'number') ? c.totalUses : 0,
