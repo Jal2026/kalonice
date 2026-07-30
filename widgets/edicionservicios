@@ -1,0 +1,2354 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KAMISUITE — Edición Servicios</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+/* ═══════════════════════════════════════════════════
+       KAMISUITE — Edición Servicios Widget v1.14.7
+       Dark theme. CMS-ONLY TOTAL. Solo ServiceCatalog.
+
+       CHANGELOG:
+       v1.14.7: 🎟️ BONOS: dos campos nuevos en el bloque de bono —
+         "Caducidad del bono (días)" (fBonoValidezDias → bonusValidityDays)
+         y "Días entre usos" (fBonoIntervaloDias → bonusUseIntervalDays).
+         Conectados en poblar/reset/payload (save y create) y en el update
+         de estado local post-guardado. Vacío en caducidad = usa el global
+         en meses; 0/vacío en intervalo = LIBRE. Sin cambios en el resto.
+       v1.14.6: 🔄 FIX: refresco inmediato de familias y grupos tras
+         guardar. Al crear una familia nueva (ej. "Moldeados") tecleando
+         en el input +Nueva Familia y guardar el servicio, la nueva
+         familia NO aparecía en el select al reabrir el modal — solo
+         tras refresh manual de la página. Idéntico bug latente para
+         grupos con +Nuevo grupo. Causa: allFamilies y allGroups se
+         poblaban UNA SOLA VEZ en render() y nunca se recalculaban
+         tras guardar. En el handler 'saved' se actualizaba la fila
+         local en allServicios[idx] campo a campo (línea ~2215) pero
+         no se recomputaban las listas derivadas. Solución: extracción
+         del barrido a helper recomputeTaxonomias() y llamada explícita
+         tras cada actualización de allServicios en el flujo 'saved'.
+         El flujo 'catalogCreated' ya hace sendToParent({type:'ready'})
+         que retoma render() completo, así que no necesita cambios.
+         SIN cambios de estética, copy, IDs, backends ni handlers.
+       v1.14.5: 🎯 Familia AUTOEXPANSIVA en el editor (patrón grupo).
+         El select "¿Coloración o Tratamiento?" deja de tener sus dos
+         <option> hardcoded y se puebla dinámicamente barriendo los
+         valores únicos de `family` presentes en ServiceCatalog para
+         los servicios cuya claseServicio sea complejo_fases o
+         complejo_proceso. Se añade una opción "+Nueva Familia" que
+         despliega un input de texto libre, siguiendo el mismo patrón
+         que fGroup / fGroupNew para categorías. El salón puede añadir
+         "Moldeados" u otras familias sin tocar código: teclea el nombre
+         en el input y al guardar el servicio queda con family = "Moldeados".
+         En la siguiente apertura del editor aparecerá en la lista
+         automáticamente. Cambios:
+           · Label del bloque #familyQ: "¿Coloración o Tratamiento?" →
+             "Selecciona Familia".
+           · <select id="fFamilyComplejo">: vaciado de <option>
+             hardcoded (se rellena por fillFamilySelect).
+           · NEW <input id="fFamilyNew"> clon literal de fGroupNew.
+           · NEW variable let allFamilies = [] junto a allGroups.
+           · NEW referencia fFamilyNew en el objeto `el`.
+           · Barrido paralelo a allGroups: filtro por claseServicio in
+             ('complejo_fases','complejo_proceso') + extracción de
+             `family` únicos, ordenados.
+           · NEW funciones fillFamilySelect(selected), onFamilyChange(),
+             getFamilyValue(): clones literales de las equivalentes de
+             group. Opción nueva: "+Nueva Familia".
+           · openEdit: fillFamilySelect(s.family || '') sustituye a la
+             asignación directa que solo aceptaba 'coloracion' o
+             'tratamiento'.
+           · openNew: fillFamilySelect('') sustituye a la asignación
+             directa a 'coloracion'.
+           · buildPayloadComun: getFamilyValue() sustituye a la lectura
+             directa del select (soporta valor tecleado en fFamilyNew
+             para "+Nueva Familia").
+           · addEventListener('change', onFamilyChange) sobre
+             fFamilyComplejo (patrón idéntico a fGroup).
+         NO cambia el backend serviciosEdicionLogic: sigue recibiendo
+         `family` como string opaco y escribiéndolo en ServiceCatalog.
+         NO cambia el CMS: el campo `family` sigue como Text libre.
+         Compatible retroactivamente con los 80 servicios existentes
+         (family='coloracion' o 'tratamiento' o 'simple' o 'externo':
+         los cuatro aparecerán en el select para complejos si existen).
+       v1.14.4: ⬆️ El pop-up de edición se ancla ARRIBA en lugar de
+         centrarse. Antes .modal-overlay usaba align-items:center, que
+         con el iframe de gran altura del HTML Component (Wix dimensiona
+         el iframe al alto del contenido, ~2896px) centraba el modal en
+         medio de esa altura y obligaba a scroll para alcanzarlo. Se
+         adopta el patrón ya en producción en widget_alta_edicion_
+         productos_v3_0.html (líneas 291-296): align-items:flex-start +
+         padding:30px 12px + overflow-y:auto en el propio overlay.
+         ÚNICO cambio: la regla .modal-overlay. No se toca .modal,
+         handlers, IDs, copy, colores ni ninguna otra clase o función.
+       v1.14.3: 📱 Responsive móvil del pop-up de edición. Nueva media
+         query @media (max-width: 560px) que apila a 1 columna las
+         rejillas internas del modal (.variante-row, .cols-head.var,
+         .form-row, .staff-grid, .comp-grid). Antes desbordaban en
+         móvil real forzando scroll horizontal, porque el
+         .modal-body-grid ya colapsaba a 1 columna bajo 900px pero
+         estas rejillas mantenían sus columnas fijas. Solo se tocan
+         propiedades grid-template-columns dentro de la nueva media
+         query. Cero cambios en colores, copy, handlers, IDs,
+         backends ni cualquier otra clase o funcionalidad.
+
+       v1.14.2: 🔗 Criterio UNIFICADO de bloqueo en "Complementos compatibles".
+         Antes solo se bloqueaban los servicios del chip rojo. Ahora se
+         bloquean también los servicios del chip verde de fase (cualquier
+         item tipo:'servicio' del mapeoFases). Motivo: en v1.14.1 el
+         checklist mostraba de forma inconsistente Peinado / Corte Mujer
+         (Complemento) como marcados verdes normales, mientras los del
+         chip rojo salían grises bloqueados. Ahora todos los servicios
+         presentes en la cascada aparecen en gris + auto-marcados + no
+         clicables, con la nota del motivo:
+           · chip verde (tipo:'servicio') → "ya está en la cascada"
+           · chip rojo (tipo:'exclusivo') → "en grupo exclusivo: <label>"
+         Se renombra `bloqueadosPorChipRojo` → `bloqueadosPorCascada`
+         (barrido más amplio, misma lógica).
+         Refresh del checklist ampliado: se llama tras añadir chip verde
+         (addChipServicio), tras borrar cualquier chip verde o rojo, y
+         tras guardar chip rojo (saveExclusivoModal, ya estaba).
+         Cero cambios en el resto del widget, backends ni criterios.
+
+       v1.14.1: 🔗 Conexión CHIP ROJO ↔ Complementos compatibles.
+         Backend serviciosEdicionLogic v1.11.5: SIN CAMBIOS (persiste
+         `complementos` transparente con wrapItems).
+
+         Los servicios metidos en un chip rojo (grupo exclusivo) del
+         mapeoFases se muestran ahora AUTO-MARCADOS y BLOQUEADOS en el
+         checklist "Complementos compatibles" del mismo modal:
+           · Estilo gris con borde discontinuo (.locked-in-exclusivo).
+           · Checkbox marcado y `disabled` (no clicable).
+           · Nota debajo del nombre: "en grupo exclusivo: <label>".
+         collectComplementos() los recoge al guardar → quedan también
+         en el campo `complementos` del CMS. Consecuencia deseada:
+         Recepción PRO (que solo lee `s.complementos` para pintar la
+         lista de complementos elegibles en el popover del servicio,
+         líneas 3208 de recepcionProCMS_widget v1.1.58 verificadas)
+         los VERÁ y podrá armarlos, sin necesidad de que el estilista
+         los marque a mano.
+
+         Cero riesgo de duplicación en cascada: el motor
+         (recepcionProLogic v1.0.34) protege con refsConsumidos —
+         si el uid del elegido está en refs de un chip rojo, se
+         materializa en su posición y NO se encola al final.
+
+         El bloqueo se refresca en vivo al añadir, editar o borrar
+         un chip rojo (llamadas a renderComplementos tras
+         saveExclusivoModal y tras chip-del si el borrado era rojo).
+
+         Cero cambios en: cierre modal, ancho, dos columnas, botón
+         chip rojo, submodal, badge ⏱ +Xmin, cascada, resto del
+         formulario, backends, motor, widgets externos.
+
+       v1.14.0: 🎯 MÉTODO COMPLETO — cambios agrupados en el widget
+         del editor (backends intactos: serviciosEdicionLogic v1.11.5
+         acepta cualquier item del mapeoFases sin cambios).
+           1. FIX cierre por clic fuera del modal.
+              Eliminado el listener que cerraba el modal al pulsar
+              en el overlay. El usuario ya no pierde cambios sin
+              querer. Solo cierran X, Cancelar y Guardar.
+           2. Modal MÁS ANCHO Y REORGANIZADO EN DOS COLUMNAS.
+              max-width: 520px → 1050px. Contenido dividido en
+              columnas izq (identidad + económico + staff/uso) y
+              der (variantes + fases + complementos + descripción +
+              imagen + orden/activo + info). Bajo 900px de viewport
+              colapsa a una columna (grid responsivo).
+           3. CHIP ROJO — grupo exclusivo de complementos.
+              Nuevo botón + 🎯 Grupo exclusivo en el toolbar de la
+              cascada, junto a Aplicación / Proceso / Servicio. Al
+              pulsarlo se abre un submodal con:
+                · Input label del grupo (texto libre: "Tratamiento").
+                · Multi-check de servicios candidatos (los mismos
+                  que candidatan al chip verde: group con "fase").
+              Al confirmar, se añade al mapeoFases un item
+              { tipo:'exclusivo', label, refs:[uid1,uid2,uid3] }.
+              renderChipsCascada pinta este chip en ROJO con el
+              label del grupo y el contador de opciones. Reordenar,
+              editar y borrar disponibles como el resto de chips.
+              collectFases persiste el shape tal cual.
+              Backend motor (recepcionProLogic v1.0.34) y backend
+              widget público (widgetPublicoLogic v0.7.5) ya lo saben
+              consumir. Widget bundle (v2.0.14) y Recepción PRO CMS
+              (v1.1.55) lo pintan como panel plegable con radio.
+           4. BADGE ⏱ +Xmin en chip verde de la cascada.
+              Cuando el servicio referenciado por el chip verde
+              tiene minProcesoCatalog > 0, se pinta un badge
+              inline con el tiempo de proceso que ese servicio
+              arrastra. El motor v1.0.34 desdobla ese proceso
+              automáticamente al materializar.
+         Nada más se toca: variantes, cobro por peso, bonos,
+         descuento, tour, imagen, staff, uso, orden, activo,
+         historial ni ningún otro flujo.
+       v1.13.0: 🔧 OBLIGATORIEDAD por FASE explícita. Cada chip de fase
+         tipo:'servicio' lleva un toggle switch (estilo iOS pequeño) para
+         marcarlo como OBLIGATORIO. El flag se persiste como
+         {tipo:'servicio', ref, obligatorio: bool} en mapeoFases.items.
+         Default false: todas las fases existentes pasan a OPCIONALES tras
+         el deploy (Botox + Planchado deja de ser obligatorio hasta que se
+         marque a mano). Las fases tipo:'aplicacion' y tipo:'proceso' NO
+         llevan toggle (no aplica obligatoriedad: la cascada las ejecuta
+         siempre). Backends pareja: recepcionProLogic v1.0.27 y
+         widgetPublicoLogic v0.7.4 — leen el flag explícito en vez de
+         deducir la obligatoriedad de la mera presencia en mapeoFases (que
+         rompía Tinte/Mechas/Coloración).
+         Cero cambios a CSS global, render de tarjetas, modales de
+         creación/edición, duplicar, cobro por peso, bonos, tour ni
+         descuentos. Solo se tocan 4 funciones: addChipServicio,
+         renderChipsCascada, renderFases (carga) y collectFases (guardado).
+       v1.12.1: FIX — al borrar un servicio, la tarjeta no desaparecía de
+         la lista (había que recargar). closeModal() ponía currentCatalogId
+         = null ANTES de que onCatalogDeleted lo usara en el findIndex, así
+         que siempre buscaba null y nunca quitaba la tarjeta. Ahora se usa
+         el catalogId REAL que devuelve el backend (r.catalogId). El error
+         de Wix [ServiceCatalog_beforeRemove] es de un hook ajeno
+         (backend/data.js) y no afecta al borrado (la fila SÍ se elimina).
+       v1.12.0: 3 funcionalidades nuevas (solo conexión a CMS, sin lógica
+         de cálculo, que vive en otro sitio):
+           · DUPLICAR servicio: botón ⧉ en la tarjeta (junto al toggle
+             ON/OFF). Crea "Copia de <nombre>" con todos los campos del
+             original (nuevo setupUid/_id los pone el backend). Mensaje
+             nuevo type:'duplicateCatalog'.
+           · COBRO POR PESO: conmutador FIJO ↔ POR PESO (campo booleano
+             cobroporPeso). FIJO → precio único activo, precioGramo
+             deshabilitado. POR PESO → precioGramo activo (€/g), precio
+             único deshabilitado. Se conservan ambos valores en CMS al
+             deshabilitar (no se borra nada). Campos: cobroporPeso (bool),
+             precioGramo (number).
+           · BONOS: toggle bonoActivo + bonoNumero (servicios por bono) +
+             bonoDescuento (% descuento). Solo se conectan al CMS; el
+             cálculo del precio del bono se hace fuera del editor.
+         · Backend pareja: serviciosEdicionLogic v1.11.6.
+       v1.11.9: minProceso se guarda si la cascada tiene chip Proceso (no
+         según la tipología). Fix bug Botox (mostrar ≠ guardar).
+       v1.11.8: 4 campos nuevos enchufados al CMS ServiceCatalog
+         (lectura + escritura, sin tocar el resto del widget):
+           · Toggle vistaEnTour          (entre descripción e imagen)
+           · Textarea descripcionTour    (entre descripción e imagen)
+           · Toggle descuentoActivo      (entre Duración/Precio y Staff)
+           · Input descuentoPromo (0-100, mismo form-row que el toggle)
+         · Toggles reutilizan EXACTAMENTE las clases existentes
+           .card-toggle / .card-switch / .card-toggle-label (verde ON /
+           rojo OFF), con inline `position:static` para encajar inline.
+         · Sin nuevas reglas CSS: cero cambios estéticos en hojas de estilo.
+         · Backend pareja: serviciosEdicionLogic v1.11.4.
+       v1.11.7: CASCADA SIMPLIFICADA. Una sola batería de chips.
+         · 3 botones siempre visibles: + 🧪 Aplicación, + ⏳ Proceso,
+           + 🧩 Servicio ▾ (dropdown con los servicios del grupo cuyo
+           slug contiene "fase").
+         · CERO LÍMITES: cualquier fase repetible cuantas veces se quiera.
+         · Eliminado el bloque de checkboxes de selección previa.
+       v1.11.6: dos bloques (selector + batería), DEPRECATED por confuso.
+       v1.11.5: dropdown menú único (DEPRECATED).
+       v1.11.4: imagen modal click-to-open.
+       v1.11.3: toggle ON/OFF en tarjetas.
+       v1.11.2: separación claseServicio vs tipo.
+       v1.11.1: bloque fases/complementos cms-first.
+       v1.10: cms-only total.
+       ═══════════════════════════════════════════════════ */
+:root {
+  --bg: #0f1117;
+  --surface: #181b23;
+  --surface2: #1e222c;
+  --surface3: #252a36;
+  --border: rgba(255, 255, 255, .08);
+  --border-hover: rgba(255, 255, 255, .18);
+  --text: #e8e9ed;
+  --text-secondary: rgba(255, 255, 255, .65);
+  --muted: rgba(255, 255, 255, .40);
+  --accent: #c9a44a;
+  --accent-dim: rgba(201, 164, 74, .15);
+  --green: #36c06a;
+  --green-dim: rgba(54, 192, 106, .12);
+  --red: #e85454;
+  --red-dim: rgba(232, 84, 84, .12);
+  --blue: #4a9ec9;
+  --blue-dim: rgba(74, 158, 201, .12);
+  --purple: #9b59b6;
+  --purple-dim: rgba(155, 89, 182, .12);
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: "Bai Jamjuree", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  padding: 12px 14px;
+}
+
+.header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.header-brand { font-size: 12px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); }
+.header-version { font-size: 10px; color: var(--muted); letter-spacing: .5px; }
+
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+
+.search-box {
+  flex: 1; min-width: 180px;
+  background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); font-family: inherit; font-size: 12px;
+  padding: 8px 10px 8px 32px; outline: none; transition: border-color .2s;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='rgba(255,255,255,.35)' stroke-width='2'%3E%3Ccircle cx='6' cy='6' r='4.5'/%3E%3Cline x1='9.5' y1='9.5' x2='13' y2='13'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: 10px center;
+}
+.search-box:focus { border-color: var(--accent); }
+.search-box::placeholder { color: var(--muted); }
+
+.filter-select {
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text-secondary); border-radius: var(--radius-sm);
+  padding: 7px 28px 7px 10px; font-family: inherit; font-weight: 500; font-size: 11px;
+  cursor: pointer; outline: none; appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,.3)'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center;
+  transition: border-color .2s;
+}
+.filter-select:focus { border-color: var(--accent); }
+
+.btn-historial { background: var(--surface3); border: 1px solid var(--border); color: var(--text-secondary); border-radius: var(--radius-sm); padding: 7px 12px; font-family: inherit; font-weight: 600; font-size: 11px; cursor: pointer; transition: all .2s; }
+.btn-historial:hover { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.btn-historial.active { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+
+.counter { font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .3px; white-space: nowrap; margin-left: auto; }
+.counter strong { color: var(--accent); }
+
+.historial-list { display: flex; flex-direction: column; gap: 8px; }
+.historial-item { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; border-left: 3px solid var(--accent); }
+.historial-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.historial-servicio { font-size: 13px; font-weight: 700; color: var(--text); }
+.historial-fecha { font-size: 10px; color: var(--muted); }
+.historial-accion { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; padding: 2px 6px; border-radius: 3px; background: var(--blue-dim); color: var(--blue); margin-bottom: 8px; }
+.historial-cambios { font-size: 11px; color: var(--text-secondary); }
+.historial-cambio { display: flex; gap: 6px; margin-bottom: 2px; }
+.historial-campo { color: var(--muted); }
+.historial-antes { color: var(--red); text-decoration: line-through; }
+.historial-despues { color: var(--green); font-weight: 600; }
+
+.btn-volver { background: var(--surface3); border: 1px solid var(--border); color: var(--text-secondary); border-radius: var(--radius-sm); padding: 8px 16px; font-family: inherit; font-weight: 600; font-size: 11px; cursor: pointer; margin-bottom: 12px; transition: all .2s; }
+.btn-volver:hover { border-color: var(--accent); color: var(--accent); }
+
+.loading { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 60px 20px; color: var(--muted); font-size: 13px; }
+.spinner { width: 28px; height: 28px; border: 2.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.error-msg { background: var(--red-dim); border: 1px solid rgba(232, 84, 84, .25); border-radius: var(--radius); padding: 16px 20px; color: var(--red); font-size: 12px; font-weight: 500; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; transition: border-color .2s, box-shadow .2s; cursor: pointer; position: relative; display: flex; flex-direction: column; }
+.card:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(0, 0, 0, .25); }
+.card-img-wrap { width: 100%; height: 150px; background: var(--surface2); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.card-img { width: 100%; height: 100%; object-fit: cover; }
+.card-img-placeholder { font-size: 28px; color: var(--muted); opacity: .25; }
+.card-body { padding: 14px 16px 34px 16px; }
+.card.is-hidden { border-color: rgba(201, 164, 74, .4); }
+.card.is-hidden .card-name { color: var(--accent); }
+.card.is-hidden::after { content: 'OCULTO'; position: absolute; top: 10px; right: 12px; font-size: 8px; font-weight: 700; letter-spacing: 1px; color: var(--accent); background: var(--accent-dim); border: 1px solid rgba(201, 164, 74, .30); padding: 2px 6px; border-radius: 3px; }
+
+.card-toggle { position: absolute; bottom: 10px; right: 12px; display: flex; align-items: center; gap: 6px; z-index: 3; }
+.card-toggle-label { font-size: 8px; font-weight: 700; letter-spacing: .5px; color: var(--muted); text-transform: uppercase; }
+.card-toggle-label.on { color: var(--green); }
+.card-toggle-label.off { color: var(--red); }
+.card-switch { width: 34px; height: 18px; border-radius: 10px; background: var(--surface3); border: 1px solid var(--border); position: relative; cursor: pointer; transition: background .18s, border-color .18s; flex-shrink: 0; }
+.card-switch::after { content: ''; position: absolute; top: 1px; left: 1px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform .18s, background .18s; }
+.card-switch.on { background: var(--green-dim); border-color: var(--green); }
+.card-switch.on::after { transform: translateX(16px); background: var(--green); }
+.card-switch.busy { opacity: .5; pointer-events: none; }
+
+.card-dup { position: absolute; bottom: 10px; left: 12px; width: 26px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); background: var(--surface3); border: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; cursor: pointer; transition: all .15s; z-index: 3; }
+.card-dup:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-dim); }
+.card-dup.busy { opacity: .5; pointer-events: none; }
+
+.card-name { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 6px; padding-right: 55px; }
+.card-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+.badge { font-size: 8px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; padding: 2px 6px; border-radius: 3px; }
+.badge-cat { background: var(--surface3); color: var(--text-secondary); }
+.badge-fases { background: var(--purple-dim); color: var(--purple); }
+.badge-comp { background: var(--green-dim); color: var(--green); }
+.badge-variante { background: var(--blue-dim); color: var(--blue); }
+
+.card-info { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; }
+.info-item { display: flex; align-items: baseline; gap: 4px; }
+.info-label { color: var(--muted); }
+.info-value { color: var(--text-secondary); font-weight: 600; }
+.info-value.price { color: var(--accent); }
+
+.modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, .7); z-index: 1000; align-items: flex-start; justify-content: center; padding: 30px 12px; overflow-y: auto; }
+.modal-overlay.open { display: flex; }
+/* v1.14.0 — modal principal más ancho (1050px). Confirm-modal y modal
+   exclusivo (más abajo) mantienen anchos propios menores. */
+.modal { background: var(--surface); border: 1px solid var(--border-hover); border-radius: var(--radius); width: 92%; max-width: 1050px; max-height: 92vh; overflow-y: auto; box-shadow: 0 8px 32px rgba(0, 0, 0, .5); }
+.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+.modal-title { font-size: 14px; font-weight: 700; color: var(--accent); }
+.modal-close { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: all .15s; }
+.modal-close:hover { color: var(--text); background: var(--surface3); }
+.modal-body { padding: 20px; }
+
+/* v1.14.0 — Layout de dos columnas para el modal de edición. Bajo
+   900px de viewport colapsa a una columna. Los dos hijos directos
+   .modal-col reciben grid-column automáticamente. */
+.modal-body-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.modal-col { display: flex; flex-direction: column; }
+.modal-col > .form-group:last-child,
+.modal-col > .section-block:last-child { margin-bottom: 0; }
+@media (max-width: 900px) {
+  .modal-body-grid { grid-template-columns: 1fr; gap: 0; }
+}
+
+.form-group { margin-bottom: 16px; }
+.form-label { display: block; font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
+.form-input, .form-select { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: inherit; font-size: 13px; padding: 10px 12px; outline: none; transition: border-color .2s; }
+.form-input:focus, .form-select:focus { border-color: var(--accent); }
+.form-input::placeholder { color: var(--muted); }
+textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font-family: inherit; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form-hint { font-size: 10px; color: var(--muted); margin-top: 4px; }
+.form-select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,.3)'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; }
+
+.tipologia-wrap { background: var(--accent-dim); border: 1px solid rgba(201, 164, 74, .30); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 16px; }
+.tipologia-wrap .form-label { color: var(--accent); margin-bottom: 8px; }
+
+.staff-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.staff-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; transition: all .15s; }
+.staff-item:hover { border-color: var(--border-hover); }
+.staff-item.selected { border-color: var(--accent); background: var(--accent-dim); }
+.staff-item input { display: none; }
+.staff-name { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+.staff-item.selected .staff-name { color: var(--accent); }
+.staff-check { width: 16px; height: 16px; border: 2px solid var(--border); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 10px; color: transparent; transition: all .15s; }
+.staff-item.selected .staff-check { border-color: var(--accent); background: var(--accent); color: var(--bg); }
+
+.section-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.section-title { font-size: 12px; font-weight: 700; }
+.section-title.fases { color: var(--purple); }
+.section-title.comp { color: var(--green); }
+.section-title.var { color: var(--blue); }
+
+/* v1.14.0 — Estilos del modal secundario del CHIP ROJO (grupo exclusivo).
+   Reutiliza .modal-overlay pero un ancho intermedio. */
+.exc-modal { max-width: 500px; }
+.exc-servicios-list {
+  max-height: 340px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface2); padding: 6px;
+}
+.exc-servicio-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  cursor: pointer; transition: background .12s;
+  font-size: 13px; color: var(--text);
+}
+.exc-servicio-item:hover { background: var(--surface3); }
+.exc-servicio-item input { margin: 0; }
+.exc-empty {
+  padding: 24px 12px; text-align: center; color: var(--muted);
+  font-size: 12px; font-style: italic;
+}
+
+.modal-footer { display: flex; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--border); }
+.btn { flex: 1; padding: 10px 16px; border-radius: var(--radius-sm); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s; border: none; }
+.btn-cancel { background: var(--surface3); color: var(--text-secondary); }
+.btn-cancel:hover { background: var(--surface2); color: var(--text); }
+.btn-save { background: var(--accent); color: var(--bg); }
+.btn-save:hover { opacity: .9; }
+.btn-save:disabled { opacity: .5; cursor: not-allowed; }
+
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(60px); background: var(--surface3); border: 1px solid var(--border-hover); color: var(--text); font-family: inherit; font-size: 12px; font-weight: 600; padding: 10px 20px; border-radius: var(--radius); opacity: 0; transition: all .3s ease; pointer-events: none; z-index: 2000; }
+.toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+.toast.success { border-color: var(--green); color: var(--green); }
+.toast.error { border-color: var(--red); color: var(--red); }
+
+.empty-state { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 13px; }
+.btn-nuevo { background: var(--green); border: none; color: var(--bg); border-radius: var(--radius-sm); padding: 7px 14px; font-family: inherit; font-weight: 700; font-size: 11px; cursor: pointer; transition: opacity .2s; letter-spacing: .3px; }
+.btn-nuevo:hover { opacity: .85; }
+
+.form-check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: var(--text-secondary); }
+.form-check input { display: none; }
+.form-check-box { width: 18px; height: 18px; border: 2px solid var(--border); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: transparent; transition: all .15s; }
+.form-check input:checked~.form-check-box { border-color: var(--accent); background: var(--accent); color: var(--bg); }
+
+.image-area { display: flex; align-items: center; gap: 14px; }
+.image-preview { width: 110px; height: 130px; border-radius: var(--radius-sm); background: var(--surface2); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; overflow: hidden; color: var(--muted); font-size: 24px; flex-shrink: 0; }
+.image-preview.has-img { cursor: pointer; position: relative; }
+.image-preview.has-img::after { content: '⤢ Ampliar'; position: absolute; bottom: 0; left: 0; right: 0; font-size: 9px; font-weight: 600; letter-spacing: .3px; text-align: center; color: #fff; background: rgba(0, 0, 0, .55); padding: 3px 0; opacity: 0; transition: opacity .15s; }
+.image-preview.has-img:hover::after { opacity: 1; }
+.image-preview img { width: 100%; height: 100%; object-fit: cover; }
+.image-actions { flex: 1; }
+.image-hint { font-size: 10px; color: var(--muted); margin-top: 4px; }
+.btn-upload { background: var(--surface3); border: 1px solid var(--border); color: var(--text-secondary); border-radius: var(--radius-sm); padding: 6px 12px; font-family: inherit; font-weight: 600; font-size: 11px; cursor: pointer; transition: all .15s; }
+.btn-upload:hover { border-color: var(--accent); color: var(--accent); }
+
+.category-separator { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 6px 0 2px 0; margin-top: 4px; }
+.category-separator-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--accent); white-space: nowrap; }
+.category-separator-line { flex: 1; height: 1px; background: var(--border); }
+.category-separator-count { font-size: 10px; color: var(--muted); white-space: nowrap; }
+
+.btn-delete { flex: 0 0 auto; padding: 10px 14px; border-radius: var(--radius-sm); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s; border: 1px solid rgba(232, 84, 84, .35); background: var(--red-dim); color: var(--red); }
+.btn-delete:hover { background: var(--red); color: var(--bg); border-color: var(--red); }
+
+.confirm-modal { max-width: 380px; }
+.confirm-body { padding: 24px 20px 8px 20px; text-align: center; }
+.confirm-icon { font-size: 36px; margin-bottom: 12px; }
+.confirm-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+.confirm-text { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.confirm-text strong { color: var(--accent); }
+.btn-confirm-delete { flex: 1; padding: 10px 16px; border-radius: var(--radius-sm); font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; transition: all .15s; border: none; background: var(--red); color: var(--bg); }
+.btn-confirm-delete:hover { opacity: .9; }
+
+.info-box { background: var(--blue-dim); border: 1px solid rgba(74, 158, 201, .25); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 16px; font-size: 11px; line-height: 1.5; color: var(--text-secondary); }
+.info-box strong { color: var(--blue); }
+.info-box .info-block { margin-bottom: 6px; }
+.info-box .info-block:last-child { margin-bottom: 0; }
+
+.variante-row { display: grid; grid-template-columns: 1.4fr .8fr .8fr 1.2fr auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+.variante-row .form-input { padding: 7px 9px; font-size: 12px; }
+.btn-add-line { border-radius: var(--radius-sm); padding: 5px 10px; font-family: inherit; font-weight: 600; font-size: 11px; cursor: pointer; transition: all .15s; }
+.btn-add-var { background: var(--blue-dim); border: 1px solid rgba(74, 158, 201, .35); color: var(--blue); }
+.btn-add-var:hover { background: var(--blue); color: var(--bg); }
+.btn-add-fase { background: var(--purple-dim); border: 1px solid rgba(155, 89, 182, .35); color: var(--purple); }
+.btn-add-fase:hover { background: var(--purple); color: var(--bg); }
+.btn-del-line { border-radius: var(--radius-sm); padding: 6px 9px; font-family: inherit; font-size: 13px; cursor: pointer; line-height: 1; background: var(--red-dim); border: 1px solid rgba(232, 84, 84, .30); color: var(--red); }
+.btn-del-line:hover { background: var(--red); color: var(--bg); }
+
+.cols-head { display: grid; gap: 6px; font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; padding: 0 2px; }
+.cols-head.var { grid-template-columns: 1.4fr .8fr .8fr 1.2fr auto; }
+
+.empty-line { font-size: 11px; color: var(--muted); padding: 6px 2px; }
+
+.fase-row { display: grid; grid-template-columns: 28px 1fr auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+.fase-order { font-size: 11px; font-weight: 700; color: var(--muted); text-align: center; }
+.fase-row .form-select { padding: 7px 9px; font-size: 12px; }
+
+.comp-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.comp-item { display: flex; align-items: center; gap: 8px; padding: 7px 9px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; transition: all .15s; }
+.comp-item:hover { border-color: var(--border-hover); }
+.comp-item.selected { border-color: var(--green); background: var(--green-dim); }
+.comp-item input { display: none; }
+.comp-name { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+.comp-item.selected .comp-name { color: var(--green); }
+.comp-check { width: 15px; height: 15px; border: 2px solid var(--border); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 9px; color: transparent; transition: all .15s; }
+.comp-item.selected .comp-check { border-color: var(--green); background: var(--green); color: var(--bg); }
+/* v1.14.1 — estado bloqueado: el servicio ya está en un chip rojo
+   (grupo exclusivo) del mapeoFases. Se muestra en gris, no clicable,
+   con una nota debajo del nombre indicando el grupo al que pertenece. */
+.comp-item.locked-in-exclusivo { cursor: not-allowed; opacity: .55; background: transparent; border-style: dashed; }
+.comp-item.locked-in-exclusivo:hover { border-color: var(--border); }
+.comp-item.locked-in-exclusivo .comp-check { border-color: rgba(255,255,255,.10); background: transparent; color: transparent; }
+.comp-item.locked-in-exclusivo .comp-name { color: var(--muted); }
+.comp-locked-hint { display: block; font-size: 9.5px; color: #ff8a8a; margin-top: 2px; letter-spacing: .2px; }
+
+.family-q { display: none; margin-top: 10px; }
+.family-q.show { display: block; }
+
+/* v1.14.3 — Responsive móvil del pop-up de edición.
+   El .modal-body-grid ya colapsa a 1 columna bajo 900px, pero las
+   rejillas internas del modal mantenían sus columnas fijas y
+   desbordaban en anchos de móvil real (~360-430px), provocando
+   scroll horizontal. Bajo 560px se apilan a 1 columna. Sin cambios
+   de color, copy, handlers ni IDs. Solo grid-template-columns. */
+@media (max-width: 560px) {
+  .variante-row { grid-template-columns: 1fr; }
+  .cols-head.var { grid-template-columns: 1fr; }
+  .form-row { grid-template-columns: 1fr; }
+  .staff-grid { grid-template-columns: 1fr; }
+  .comp-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+  <div class="header">
+    <span class="header-brand">KAMISUITE · Edición Servicios</span>
+    <span class="header-version"> v1.14.7</span>
+  </div>
+
+  <div class="toolbar" id="toolbar" style="display:none;">
+    <input type="text" class="search-box" id="searchBox" placeholder="Buscar servicio...">
+    <select class="filter-select" id="filterCategory"><option value="">Todas las categorías</option></select>
+    <select class="filter-select" id="filterVisibility">
+      <option value="">Visibles y ocultos</option>
+      <option value="visible">Solo visibles</option>
+      <option value="hidden">Solo ocultos</option>
+    </select>
+    <select class="filter-select" id="filterTipo">
+      <option value="">Todos los tipos</option>
+      <option value="principal">Principal</option>
+      <option value="ambos">Ambos</option>
+      <option value="complemento">Complemento</option>
+    </select>
+    <button class="btn-nuevo" id="btnNuevo">+ NUEVO</button>
+    <button class="btn-historial" id="btnHistorial">📋 Historial</button>
+    <span class="counter" id="counter"></span>
+  </div>
+
+  <div id="content">
+    <div class="loading"><div class="spinner"></div><span>Cargando servicios…</span></div>
+  </div>
+
+  <!-- MODAL (edición Y creación, compartido) -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title" id="modalTitle">Editar Servicio</span>
+        <button class="modal-close" id="btnModalClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="fCatalogId">
+
+        <div class="modal-body-grid">
+          <!-- ═══════════ COLUMNA IZQUIERDA — identidad + económico + staff ═══════════ -->
+          <div class="modal-col" id="modalColLeft">
+
+            <div class="form-group">
+              <label class="form-label">Nombre *</label>
+              <input type="text" class="form-input" id="fNombre" placeholder="Nombre del servicio">
+            </div>
+
+            <div class="tipologia-wrap">
+              <label class="form-label">Tipo de servicio</label>
+              <select class="form-select" id="fTipologia">
+                <option value="simple_unico">Simple — un solo servicio</option>
+                <option value="simple_variantes">Simple con variantes (M/L/XL…)</option>
+                <option value="complejo_fases">Complejo con fases</option>
+                <option value="complejo_proceso">Complejo con fases + tiempo de proceso</option>
+              </select>
+              <div class="family-q" id="familyQ">
+                <label class="form-label" style="margin-top:8px;">Selecciona Familia</label>
+                <select class="form-select" id="fFamilyComplejo"></select>
+                <input type="text" class="form-input" id="fFamilyNew" placeholder="Nombre de la nueva familia" style="display:none;margin-top:6px;">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" id="rolGroup">
+                <label class="form-label">Rol</label>
+                <select class="form-select" id="fTipo">
+                  <option value="principal">Principal</option>
+                  <option value="complemento">Complemento</option>
+                  <option value="ambos">Ambos</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Grupo (categoría visible)</label>
+                <select class="form-select" id="fGroup"></select>
+                <input type="text" class="form-input" id="fGroupNew" placeholder="Nombre del nuevo grupo" style="display:none;margin-top:6px;">
+              </div>
+            </div>
+
+            <!-- v1.12.0 — Conmutador FIJO ↔ POR PESO (campo cobroporPeso) -->
+            <div class="form-group">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <label class="form-label" style="margin-bottom:0;">Tarifa</label>
+                <div class="card-toggle" id="togglePeso" style="position:static;">
+                  <span class="card-toggle-label on" id="lblCobroFijo">FIJO</span>
+                  <div class="card-switch" id="swCobroPeso" role="switch" aria-checked="false"></div>
+                  <span class="card-toggle-label off" id="lblCobroPeso">POR PESO</span>
+                </div>
+              </div>
+              <p class="form-hint">FIJO: precio único por servicio. POR PESO: precio por gramo (€/g).</p>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Duración (min)</label>
+                <input type="number" class="form-input" id="fDuracion" min="0" step="5" placeholder="60">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Precio (EUR)</label>
+                <input type="number" class="form-input" id="fPrecio" min="0" step="0.5" placeholder="0">
+              </div>
+            </div>
+
+            <!-- v1.12.0 — Precio por gramo (activo solo en modo POR PESO) -->
+            <div class="form-group" id="precioGramoWrap">
+              <label class="form-label">Precio por gramo (€/g)</label>
+              <input type="number" class="form-input" id="fPrecioGramo" min="0" step="0.1" placeholder="0">
+            </div>
+
+            <!-- v1.11.8 — Descuento promocional -->
+            <div class="form-row">
+              <div class="form-group" style="display:flex;flex-direction:column;justify-content:flex-end;">
+                <label class="form-label">Descuento activo</label>
+                <div class="card-toggle" id="toggleDescuento" style="position:static;align-self:flex-start;padding-bottom:8px;">
+                  <span class="card-toggle-label off" id="lblDescuentoActivo">OFF</span>
+                  <div class="card-switch" id="swDescuentoActivo" role="switch" aria-checked="false"></div>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Descuento promocional (%)</label>
+                <input type="number" class="form-input" id="fDescuentoPromo" min="0" max="100" step="1" placeholder="0">
+              </div>
+            </div>
+
+            <!-- v1.12.0 — Bonos (solo conexión a CMS, cálculo fuera) -->
+            <div class="form-group">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <label class="form-label" style="margin-bottom:0;">Bono activo</label>
+                <div class="card-toggle" id="toggleBono" style="position:static;">
+                  <span class="card-toggle-label off" id="lblBonoActivo">OFF</span>
+                  <div class="card-switch" id="swBonoActivo" role="switch" aria-checked="false"></div>
+                </div>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Servicios por bono</label>
+                <input type="number" class="form-input" id="fBonoNumero" min="0" step="1" placeholder="0">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Descuento del bono (%)</label>
+                <input type="number" class="form-input" id="fBonoDescuento" min="0" max="100" step="1" placeholder="0">
+              </div>
+            </div>
+            <!-- v1.14.7 — caducidad (días) + frecuencia mínima entre usos (días) -->
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Caducidad del bono (días)</label>
+                <input type="number" class="form-input" id="fBonoValidezDias" min="1" step="1" placeholder="Global si vacío">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Días entre usos</label>
+                <input type="number" class="form-input" id="fBonoIntervaloDias" min="0" step="1" placeholder="0 = libre">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Staff asignado</label>
+              <div class="staff-grid" id="fStaffGrid"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Uso (plataforma)</label>
+              <select class="form-select" id="fUso">
+                <option value="">— Sin definir —</option>
+                <option value="kamisuite">KAMISUITE (solo apps internas)</option>
+                <option value="wixnativo">Wix nativo (solo widget público)</option>
+                <option value="ambos">Ambos</option>
+              </select>
+            </div>
+
+          </div>
+          <!-- ═══════════ FIN COLUMNA IZQUIERDA ═══════════ -->
+
+          <!-- ═══════════ COLUMNA DERECHA — variantes + fases + complementos + descripción ═══════════ -->
+          <div class="modal-col" id="modalColRight">
+
+            <!-- VARIANTES -->
+            <div class="section-block" id="blockVariantes" style="display:none;margin-top:0;padding-top:0;border-top:0;">
+              <div class="section-head">
+                <span class="section-title var">🎚️ Variantes de precio</span>
+                <button class="btn-add-line btn-add-var" id="btnAddVariante" type="button">+ Añadir variante</button>
+              </div>
+              <p class="form-hint" style="margin-bottom:8px;"><strong>Tamaño/Estilo es comodín:</strong> longitud (M/L/XL), color, etc.</p>
+              <div class="cols-head var" id="variantesHead" style="display:none;">
+                <span>Nombre</span><span>Precio €</span><span>Dur. min</span><span>Tamaño/Estilo</span><span></span>
+              </div>
+              <div id="variantesList"></div>
+            </div>
+
+            <!-- FASES v1.11.7 -->
+            <div class="section-block" id="blockFases" style="display:none;margin-top:0;padding-top:0;border-top:0;">
+              <div class="section-head">
+                <span class="section-title fases">🔗 Fases de la cascada</span>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;">
+                  <button class="btn-add-line" id="btnAddAplicacion" type="button" style="padding:6px 11px;font-size:12px;background:rgba(255,180,80,.12);border:1px solid rgba(255,180,80,.4);color:#ffc985;border-radius:6px;cursor:pointer;font-weight:600;">+ 🧪 Aplicación</button>
+                  <button class="btn-add-line" id="btnAddProceso" type="button" style="padding:6px 11px;font-size:12px;background:rgba(160,140,255,.12);border:1px solid rgba(160,140,255,.4);color:#c5b8ff;border-radius:6px;cursor:pointer;font-weight:600;">+ ⏳ Proceso</button>
+                  <div style="position:relative;">
+                    <button class="btn-add-line" id="btnAddServicio" type="button" style="padding:6px 11px;font-size:12px;background:rgba(120,210,120,.10);border:1px solid rgba(120,210,120,.4);color:#a7e3a7;border-radius:6px;cursor:pointer;font-weight:600;">+ 🧩 Servicio ▾</button>
+                    <div id="servicioAddMenu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#1a1c25;border:1px solid #2d3142;border-radius:8px;padding:4px;min-width:240px;max-height:340px;overflow-y:auto;z-index:1000;box-shadow:0 6px 24px rgba(0,0,0,.5);"></div>
+                  </div>
+                  <!-- v1.14.0 — Chip rojo: grupo exclusivo opcional -->
+                  <button class="btn-add-line" id="btnAddExclusivo" type="button" style="padding:6px 11px;font-size:12px;background:rgba(232,84,84,.10);border:1px solid rgba(232,84,84,.45);color:#ff6b6b;border-radius:6px;cursor:pointer;font-weight:600;">+ 🎯 Grupo exclusivo</button>
+                </div>
+              </div>
+              <p class="form-hint" style="margin:6px 0 8px 0;">Pulsa los botones para añadir fases en el orden deseado. ◀ ▶ para reordenar, ✕ para quitar. Puedes repetir cualquier fase tantas veces como quieras. El <span style="color:#ff6b6b;font-weight:700;">grupo exclusivo</span> permite ofrecer varios servicios donde el cliente elige uno o ninguno.</p>
+              <div id="chipsCascada" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-height:42px;padding:10px;background:#10131a;border:1px dashed #2d3142;border-radius:8px;"></div>
+
+              <!-- Minutos de proceso (visible si hay chip Proceso) -->
+              <div class="form-group" id="procesoMinWrap" style="display:none;margin-top:12px;margin-bottom:0;">
+                <label class="form-label">Minutos de proceso (tiempo neutro)</label>
+                <input type="number" class="form-input" id="fMinProceso" min="0" step="5" placeholder="45">
+                <p class="form-hint">Duración del chip <b>⏳ Proceso</b>. Mientras dura, el profesional queda libre.</p>
+              </div>
+            </div>
+
+            <!-- COMPLEMENTOS -->
+            <div class="section-block" id="blockComplementos" style="display:none;margin-top:0;padding-top:0;border-top:0;">
+              <div class="section-head">
+                <span class="section-title comp">➕ Complementos compatibles</span>
+              </div>
+              <p class="form-hint" style="margin-bottom:8px;">Servicios que el cliente puede añadir a este. Marca los que apliquen.</p>
+              <div class="comp-grid" id="complementosGrid"></div>
+            </div>
+
+            <div class="form-group" style="margin-top:16px;">
+              <label class="form-label">Descripción</label>
+              <textarea class="form-input" id="fDescripcion" rows="3" placeholder="Descripción visible para el cliente..."></textarea>
+            </div>
+
+            <!-- v1.11.8 — Tour del salón -->
+            <div class="form-group">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;">
+                <label class="form-label" style="margin-bottom:0;">Visible en Tour del salón</label>
+                <div class="card-toggle" id="toggleTour" style="position:static;">
+                  <span class="card-toggle-label off" id="lblVistaEnTour">OFF</span>
+                  <div class="card-switch" id="swVistaEnTour" role="switch" aria-checked="false"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Descripción larga (Tour)</label>
+              <textarea class="form-input" id="fDescripcionTour" rows="4" placeholder="Descripción extendida para el Tour del salón..."></textarea>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Imagen</label>
+              <div class="image-area">
+                <div id="fImagePreview" class="image-preview">✂️</div>
+                <div class="image-actions">
+                  <input type="file" id="fImageFile" accept="image/*" style="display:none;">
+                  <button class="btn-upload" onclick="document.getElementById('fImageFile').click()">📁 Cambiar imagen</button>
+                  <div class="image-hint">JPG, PNG, WebP. Máx. 3 MB.</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Orden</label>
+                <input type="number" class="form-input" id="fOrder" min="0" step="1" placeholder="99">
+              </div>
+              <div class="form-group" style="display:flex;align-items:flex-end;padding-bottom:2px;">
+                <label class="form-check">
+                  <input type="checkbox" id="fActive" checked>
+                  <span class="form-check-box">✓</span>
+                  Activo
+                </label>
+              </div>
+            </div>
+
+            <div class="info-box" style="margin-bottom:0;">
+              <div class="info-block"><strong>TIPO DE SERVICIO</strong> define la estructura: simple, con variantes, complejo (con fases) o complemento.</div>
+              <div class="info-block"><strong>ROL</strong>: principal (el cliente lo reserva) o ambos (también sirve de complemento). <strong>USO</strong>: en qué plataforma se ofrece. Son independientes.</div>
+            </div>
+
+          </div>
+          <!-- ═══════════ FIN COLUMNA DERECHA ═══════════ -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-delete" id="btnDelete" style="display:none;">🗑️ Eliminar</button>
+        <button class="btn btn-cancel" id="btnCancel">Cancelar</button>
+        <button class="btn btn-save" id="btnSave">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- v1.14.0 — MODAL SECUNDARIO: configurar CHIP ROJO (grupo exclusivo) -->
+  <div class="modal-overlay" id="modalExclusivo">
+    <div class="modal exc-modal">
+      <div class="modal-header">
+        <span class="modal-title" id="excTitle">🎯 Grupo exclusivo</span>
+        <button class="modal-close" id="btnExcClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Nombre del grupo</label>
+          <input type="text" class="form-input" id="excLabel" placeholder="Ej: Tratamiento">
+          <p class="form-hint">Se mostrará al cliente como título del panel expandible.</p>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">Servicios a incluir (elige varios)</label>
+          <p class="form-hint" style="margin-bottom:6px;">El cliente podrá elegir uno de ellos o ninguno.</p>
+          <div class="exc-servicios-list" id="excServiciosList"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-cancel" id="btnExcCancel">Cancelar</button>
+        <button class="btn btn-save" id="btnExcSave">Añadir a la cascada</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONFIRMAR ELIMINAR -->
+  <div class="modal-overlay" id="modalConfirmDelete">
+    <div class="modal confirm-modal">
+      <div class="confirm-body">
+        <div class="confirm-icon">🗑️</div>
+        <div class="confirm-title">¿Eliminar del catálogo KAMISUITE?</div>
+        <div class="confirm-text">Vas a eliminar <strong id="confirmDeleteName">—</strong> del catálogo KAMISUITE.</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-cancel" id="btnConfirmDeleteCancel">Cancelar</button>
+        <button class="btn-confirm-delete" id="btnConfirmDeleteOk">Eliminar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+let allServicios = [];
+let allStaff = [];
+let allGroups = [];
+let allFamilies = []; // v1.14.5 — familias únicas presentes en servicios complejos
+let historialCambios = [];
+let currentCatalogId = null;
+let modoCrear = false;
+let vistaActual = 'servicios';
+
+let fImageBase64 = null,
+  fImageFileName = null,
+  fImageMimeType = null;
+let fImagePreviewUrl = '';
+let pendingImageCatalogId = null;
+let pendingToggle = null;
+
+function setImagePreview(url, placeholder) {
+  fImagePreviewUrl = url || '';
+  if (url) {
+    el.fImagePreview.innerHTML = `<img src="${esc(url)}" alt="preview">`;
+    el.fImagePreview.classList.add('has-img');
+    el.fImagePreview.title = 'Abrir imagen en una pestaña nueva';
+  } else {
+    el.fImagePreview.innerHTML = placeholder || '✂️';
+    el.fImagePreview.classList.remove('has-img');
+    el.fImagePreview.removeAttribute('title');
+  }
+}
+
+function derivarTipologia(s) {
+  const clasesValidas = ['simple_unico', 'simple_variantes', 'complejo_fases', 'complejo_proceso'];
+  if (s.claseServicio && clasesValidas.includes(s.claseServicio)) return s.claseServicio;
+  if (Array.isArray(s.mapeoFases) && s.mapeoFases.length > 0) {
+    const tieneProceso = s.mapeoFases.some(f => f && f.tipo === 'proceso') || (typeof s.minProcesoCatalog === 'number' && s.minProcesoCatalog > 0);
+    return tieneProceso ? 'complejo_proceso' : 'complejo_fases';
+  }
+  if (s.hasVariants || (Array.isArray(s.variantes) && s.variantes.length > 0)) return 'simple_variantes';
+  return 'simple_unico';
+}
+
+const el = {
+  toolbar: document.getElementById('toolbar'),
+  content: document.getElementById('content'),
+  search: document.getElementById('searchBox'),
+  filterCat: document.getElementById('filterCategory'),
+  filterVis: document.getElementById('filterVisibility'),
+  filterTipo: document.getElementById('filterTipo'),
+  counter: document.getElementById('counter'),
+  toast: document.getElementById('toast'),
+  btnNuevo: document.getElementById('btnNuevo'),
+  btnHistorial: document.getElementById('btnHistorial'),
+  modal: document.getElementById('modalOverlay'),
+  modalTitle: document.getElementById('modalTitle'),
+  btnModalClose: document.getElementById('btnModalClose'),
+  btnCancel: document.getElementById('btnCancel'),
+  btnSave: document.getElementById('btnSave'),
+  btnDelete: document.getElementById('btnDelete'),
+  fCatalogId: document.getElementById('fCatalogId'),
+  fNombre: document.getElementById('fNombre'),
+  fTipologia: document.getElementById('fTipologia'),
+  familyQ: document.getElementById('familyQ'),
+  fFamilyComplejo: document.getElementById('fFamilyComplejo'),
+  fFamilyNew: document.getElementById('fFamilyNew'), // v1.14.5
+  rolGroup: document.getElementById('rolGroup'),
+  fTipo: document.getElementById('fTipo'),
+  fGroup: document.getElementById('fGroup'),
+  fGroupNew: document.getElementById('fGroupNew'),
+  fDuracion: document.getElementById('fDuracion'),
+  fPrecio: document.getElementById('fPrecio'),
+  fStaffGrid: document.getElementById('fStaffGrid'),
+  fUso: document.getElementById('fUso'),
+  fDescripcion: document.getElementById('fDescripcion'),
+  fImagePreview: document.getElementById('fImagePreview'),
+  fImageFile: document.getElementById('fImageFile'),
+  fOrder: document.getElementById('fOrder'),
+  fActive: document.getElementById('fActive'),
+  blockVariantes: document.getElementById('blockVariantes'),
+  btnAddVariante: document.getElementById('btnAddVariante'),
+  variantesList: document.getElementById('variantesList'),
+  variantesHead: document.getElementById('variantesHead'),
+  blockFases: document.getElementById('blockFases'),
+  procesoMinWrap: document.getElementById('procesoMinWrap'),
+  fMinProceso: document.getElementById('fMinProceso'),
+  blockComplementos: document.getElementById('blockComplementos'),
+  complementosGrid: document.getElementById('complementosGrid'),
+  modalConfirmDelete: document.getElementById('modalConfirmDelete'),
+  confirmDeleteName: document.getElementById('confirmDeleteName'),
+  btnConfirmDeleteCancel: document.getElementById('btnConfirmDeleteCancel'),
+  btnConfirmDeleteOk: document.getElementById('btnConfirmDeleteOk'),
+  swVistaEnTour: document.getElementById('swVistaEnTour'),
+  lblVistaEnTour: document.getElementById('lblVistaEnTour'),
+  fDescripcionTour: document.getElementById('fDescripcionTour'),
+  swDescuentoActivo: document.getElementById('swDescuentoActivo'),
+  lblDescuentoActivo: document.getElementById('lblDescuentoActivo'),
+  fDescuentoPromo: document.getElementById('fDescuentoPromo'),
+  swCobroPeso: document.getElementById('swCobroPeso'),
+  lblCobroFijo: document.getElementById('lblCobroFijo'),
+  lblCobroPeso: document.getElementById('lblCobroPeso'),
+  fPrecioGramo: document.getElementById('fPrecioGramo'),
+  precioGramoWrap: document.getElementById('precioGramoWrap'),
+  swBonoActivo: document.getElementById('swBonoActivo'),
+  lblBonoActivo: document.getElementById('lblBonoActivo'),
+  fBonoNumero: document.getElementById('fBonoNumero'),
+  fBonoDescuento: document.getElementById('fBonoDescuento'),
+  fBonoValidezDias: document.getElementById('fBonoValidezDias'),
+  fBonoIntervaloDias: document.getElementById('fBonoIntervaloDias')
+};
+
+function render(data) {
+  allServicios = data.servicios || [];
+  allStaff = data.staff || [];
+  const catSet = new Set();
+  allServicios.forEach(s => { if (s.category) catSet.add(s.category); });
+  el.filterCat.innerHTML = '<option value="">Todas las categorías</option>';
+  [...catSet].sort().forEach(c => {
+    el.filterCat.innerHTML += `<option value="${esc(c)}">${esc(c)}</option>`;
+  });
+  recomputeTaxonomias(); // v1.14.6 — extraído a helper reutilizable
+  el.toolbar.style.display = 'flex';
+  applyFilters();
+}
+
+// v1.14.6 — Recalcula grupos y familias derivadas de allServicios.
+// Se invoca al cargar la página Y tras cada guardado/creación/duplicado
+// que modifique allServicios. Así los selects fFamily / fGroup con
+// input "+Nueva" reflejan los valores nuevos SIN necesidad de refresh
+// de página (bug detectado 7-Jul-2026: crear "Moldeados" no aparecía
+// hasta refrescar).
+function recomputeTaxonomias() {
+  const grpSet = new Set();
+  allServicios.forEach(s => { if (s.group) grpSet.add(s.group); });
+  allGroups = [...grpSet].sort();
+  // Familias: solo servicios con claseServicio complejo (con fases o
+  // con fases+proceso). El wizard pregunta family solo ahí.
+  const famSet = new Set();
+  allServicios.forEach(s => {
+    const cs = s.claseServicio;
+    if ((cs === 'complejo_fases' || cs === 'complejo_proceso') && s.family) {
+      famSet.add(s.family);
+    }
+  });
+  allFamilies = [...famSet].sort();
+}
+
+function applyFilters() {
+  vistaActual = 'servicios';
+  el.btnHistorial.classList.remove('active');
+  const q = (el.search.value || '').toLowerCase().trim();
+  const catF = el.filterCat.value, visF = el.filterVis.value, tipoF = el.filterTipo.value;
+  const filtered = allServicios.filter(s => {
+    if (q && !s.name.toLowerCase().includes(q) && !(s.setupUid || '').toLowerCase().includes(q)) return false;
+    if (catF && s.category !== catF) return false;
+    if (visF === 'visible' && s.hidden) return false;
+    if (visF === 'hidden' && !s.hidden) return false;
+    if (tipoF && s.tipo !== tipoF) return false;
+    return true;
+  });
+  el.counter.innerHTML = `Mostrando <strong>${filtered.length}</strong> de ${allServicios.length}`;
+  if (filtered.length === 0) {
+    el.content.innerHTML = '<div class="empty-state">Sin resultados para los filtros actuales</div>';
+    return;
+  }
+  filtered.sort((a, b) => {
+    const ca = (a.category || '').toLowerCase(), cb = (b.category || '').toLowerCase();
+    if (ca !== cb) return ca.localeCompare(cb);
+    const ag = a.hidden ? 1 : 0, bg = b.hidden ? 1 : 0;
+    if (ag !== bg) return ag - bg;
+    return a.name.localeCompare(b.name);
+  });
+  const catCounts = {};
+  filtered.forEach(s => {
+    const c = s.category || 'Sin categoría';
+    catCounts[c] = (catCounts[c] || 0) + 1;
+  });
+  let html = '<div class="cards">';
+  let lastCat = null;
+  filtered.forEach(s => {
+    const cat = s.category || 'Sin categoría';
+    if (cat !== lastCat) {
+      html += `<div class="category-separator"><span class="category-separator-label">${esc(cat)}</span><span class="category-separator-line"></span><span class="category-separator-count">${catCounts[cat]}</span></div>`;
+      lastCat = cat;
+    }
+    html += buildCard(s);
+  });
+  html += '</div>';
+  el.content.innerHTML = html;
+  el.content.querySelectorAll('.card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.card-toggle')) return;
+      if (e.target.closest('.card-dup')) return;
+      openEditModal(card.dataset.id);
+    });
+  });
+  el.content.querySelectorAll('.card-toggle').forEach(tg => {
+    tg.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleActivo(tg.dataset.toggleId, tg);
+    });
+  });
+  el.content.querySelectorAll('.card-dup').forEach(dp => {
+    dp.addEventListener('click', (e) => {
+      e.stopPropagation();
+      duplicarServicio(dp.dataset.dupId, dp);
+    });
+  });
+}
+
+function buildCard(s) {
+  const hiddenCls = s.hidden ? ' is-hidden' : '';
+  const imgHTML = s.imageUrl ? `<img class="card-img" src="${esc(s.imageUrl)}" alt="${esc(s.name)}" loading="lazy">` : '<span class="card-img-placeholder">✂️</span>';
+  let badges = '';
+  if (s.tipo) badges += `<span class="badge badge-cat">${esc(s.tipo)}</span>`;
+  if (Array.isArray(s.mapeoFases) && s.mapeoFases.length > 0) badges += `<span class="badge badge-fases">${s.mapeoFases.length} FASES</span>`;
+  if (Array.isArray(s.complementos) && s.complementos.length > 0) badges += `<span class="badge badge-comp">${s.complementos.length} COMP</span>`;
+  if (Array.isArray(s.variantes) && s.variantes.length > 0) badges += `<span class="badge badge-variante">${s.variantes.length} VAR</span>`;
+  let priceStr = '—';
+  if (s.defaultPrice != null) priceStr = Number(s.defaultPrice).toFixed(0) + ' €';
+  const durStr = s.duration ? s.duration + ' min' : '—';
+  const staffCount = (Array.isArray(s.idStaff) ? s.idStaff.length : 0);
+  const isOn = (s.active !== false);
+  return `
+      <div class="card${hiddenCls}" data-id="${s.id}">
+        <div class="card-img-wrap">${imgHTML}</div>
+        <div class="card-body">
+          <div class="card-name">${esc(s.name)}</div>
+          <div class="card-badges">${badges}</div>
+          <div class="card-info">
+            <div class="info-item"><span class="info-label">Duración:</span><span class="info-value">${durStr}</span></div>
+            <div class="info-item"><span class="info-label">Precio:</span><span class="info-value price">${priceStr}</span></div>
+            <div class="info-item"><span class="info-label">Staff:</span><span class="info-value">${staffCount}</span></div>
+          </div>
+          <div class="card-dup" data-dup-id="${s.id}" title="Duplicar servicio">⧉</div>
+          <div class="card-toggle" data-toggle-id="${s.id}">
+            <span class="card-toggle-label ${isOn ? 'on' : 'off'}">${isOn ? 'ON' : 'OFF'}</span>
+            <div class="card-switch ${isOn ? 'on' : ''}" role="switch" aria-checked="${isOn}" title="${isOn ? 'Activo — desactivar' : 'Inactivo — activar'}"></div>
+          </div>
+        </div>
+      </div>`;
+}
+
+function toggleActivo(catalogId, toggleEl) {
+  const s = allServicios.find(x => x.id === catalogId);
+  if (!s) return;
+  const sw = toggleEl.querySelector('.card-switch');
+  if (sw && sw.classList.contains('busy')) return;
+  const nuevoActive = (s.active === false);
+  if (sw) {
+    sw.classList.add('busy');
+    sw.classList.toggle('on', nuevoActive);
+    sw.setAttribute('aria-checked', String(nuevoActive));
+  }
+  const lbl = toggleEl.querySelector('.card-toggle-label');
+  if (lbl) { lbl.textContent = nuevoActive ? 'ON' : 'OFF'; lbl.className = 'card-toggle-label ' + (nuevoActive ? 'on' : 'off'); }
+  pendingToggle = { catalogId, nuevoActive };
+  sendToParent({ type: 'save', payload: { _catalogId: s._catalogId || s.id, active: nuevoActive } });
+}
+
+function duplicarServicio(catalogId, dupEl) {
+  const s = allServicios.find(x => x.id === catalogId);
+  if (!s) return;
+  if (dupEl && dupEl.classList.contains('busy')) return;
+  if (dupEl) dupEl.classList.add('busy');
+  sendToParent({ type: 'duplicateCatalog', payload: { catalogId: s._catalogId || s.id } });
+}
+
+function mostrarHistorial() {
+  vistaActual = 'historial';
+  el.btnHistorial.classList.add('active');
+  el.counter.innerHTML = '';
+  if (historialCambios.length > 0) renderHistorial();
+  else {
+    el.content.innerHTML = '<div class="loading"><div class="spinner"></div>Cargando historial...</div>';
+    sendToParent({ type: 'loadHistorial' });
+  }
+}
+
+function volverDeHistorial() { applyFilters(); }
+
+function renderHistorial() {
+  if (historialCambios.length === 0) {
+    el.content.innerHTML = '<button class="btn-volver" id="btnVolverHist">← Volver a servicios</button><div class="empty-state">No hay cambios registrados</div>';
+  } else {
+    let html = '<button class="btn-volver" id="btnVolverHist">← Volver a servicios</button><div class="historial-list">';
+    historialCambios.forEach(item => {
+      html += `<div class="historial-item"><div class="historial-header"><span class="historial-servicio">${esc(item.servicioNombre)}</span><span class="historial-fecha">${formatFecha(item.fecha)}</span></div><span class="historial-accion">${esc(item.accion)}</span><div class="historial-cambios">${renderCambios(parseCambios(item.cambios))}</div></div>`;
+    });
+    html += '</div>';
+    el.content.innerHTML = html;
+    el.counter.innerHTML = `<strong>${historialCambios.length}</strong> cambios registrados`;
+  }
+  const b = document.getElementById('btnVolverHist');
+  if (b) b.addEventListener('click', volverDeHistorial);
+}
+
+function formatFecha(f) {
+  const d = new Date(f);
+  const p = n => n.toString().padStart(2, '0');
+  return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function parseCambios(s) { try { return JSON.parse(s); } catch { return {}; } }
+
+function renderCambios(o) {
+  const labels = { nombre: 'Nombre', duracion: 'Duración', precio: 'Precio' };
+  let html = '';
+  for (const c in o) {
+    const v = o[c];
+    if (v && typeof v === 'object' && 'antes' in v && 'despues' in v)
+      html += `<div class="historial-cambio"><span class="historial-campo">${labels[c]||c}:</span><span class="historial-antes">${fv(c,v.antes)}</span><span>→</span><span class="historial-despues">${fv(c,v.despues)}</span></div>`;
+  }
+  return html || '<span style="color:var(--muted)">Sin cambios detallados</span>';
+}
+
+function fv(c, v) {
+  if (v === null || v === undefined) return '—';
+  if (c === 'duracion') return v + ' min';
+  if (c === 'precio') return v + ' €';
+  return String(v);
+}
+
+function onHistorialLoaded(d) {
+  if (d.success) {
+    historialCambios = d.historial || [];
+    renderHistorial();
+  } else {
+    el.content.innerHTML = '<button class="btn-volver" id="btnVolverHist">← Volver</button><div class="error-msg">Error: ' + esc(d.error) + '</div>';
+    const b = document.getElementById('btnVolverHist');
+    if (b) b.addEventListener('click', volverDeHistorial);
+  }
+}
+
+function fillGroupSelect(selected) {
+  let html = '';
+  allGroups.forEach(g => { html += `<option value="${esc(g)}">${esc(g)}</option>`; });
+  html += '<option value="__new__">+ Nuevo grupo…</option>';
+  el.fGroup.innerHTML = html;
+  if (selected && allGroups.includes(selected)) {
+    el.fGroup.value = selected;
+    el.fGroupNew.style.display = 'none';
+  } else if (selected) {
+    const o = document.createElement('option');
+    o.value = selected;
+    o.textContent = selected;
+    el.fGroup.insertBefore(o, el.fGroup.lastChild);
+    el.fGroup.value = selected;
+    el.fGroupNew.style.display = 'none';
+  } else {
+    el.fGroup.selectedIndex = 0;
+    el.fGroupNew.style.display = 'none';
+  }
+}
+
+function onGroupChange() {
+  if (el.fGroup.value === '__new__') {
+    el.fGroupNew.style.display = 'block';
+    el.fGroupNew.focus();
+  } else el.fGroupNew.style.display = 'none';
+}
+
+function getGroupValue() {
+  return el.fGroup.value === '__new__' ? el.fGroupNew.value.trim() : el.fGroup.value;
+}
+
+// v1.14.5 — Familia autoexpansiva (patrón idéntico a fGroup / fGroupNew)
+function fillFamilySelect(selected) {
+  let html = '';
+  allFamilies.forEach(f => { html += `<option value="${esc(f)}">${esc(f)}</option>`; });
+  html += '<option value="__new__">+Nueva Familia</option>';
+  el.fFamilyComplejo.innerHTML = html;
+  if (selected && allFamilies.includes(selected)) {
+    el.fFamilyComplejo.value = selected;
+    el.fFamilyNew.style.display = 'none';
+  } else if (selected) {
+    const o = document.createElement('option');
+    o.value = selected;
+    o.textContent = selected;
+    el.fFamilyComplejo.insertBefore(o, el.fFamilyComplejo.lastChild);
+    el.fFamilyComplejo.value = selected;
+    el.fFamilyNew.style.display = 'none';
+  } else {
+    el.fFamilyComplejo.selectedIndex = 0;
+    el.fFamilyNew.style.display = 'none';
+  }
+}
+
+function onFamilyChange() {
+  if (el.fFamilyComplejo.value === '__new__') {
+    el.fFamilyNew.style.display = 'block';
+    el.fFamilyNew.focus();
+  } else el.fFamilyNew.style.display = 'none';
+}
+
+function getFamilyValue() {
+  return el.fFamilyComplejo.value === '__new__' ? el.fFamilyNew.value.trim() : el.fFamilyComplejo.value;
+}
+
+function aplicarTipologia() {
+  const t = el.fTipologia.value;
+  const esComplejoFases = (t === 'complejo_fases');
+  const esComplejoProceso = (t === 'complejo_proceso');
+  const esComplejo = esComplejoFases || esComplejoProceso;
+  const esVariantes = (t === 'simple_variantes');
+  el.blockVariantes.style.display = esVariantes ? 'block' : 'none';
+  el.blockFases.style.display = esComplejo ? 'block' : 'none';
+  if (typeof toggleProcesoMinWrap === 'function') toggleProcesoMinWrap();
+  else el.procesoMinWrap.style.display = esComplejoProceso ? 'block' : 'none';
+  el.blockComplementos.style.display = 'block';
+  el.familyQ.classList.toggle('show', esComplejo);
+  el.rolGroup.style.display = 'block';
+}
+
+function aplicarModoCobro() {
+  const porPeso = getSwitchValue(el.swCobroPeso);
+  if (el.lblCobroFijo) el.lblCobroFijo.className = 'card-toggle-label ' + (porPeso ? 'off' : 'on');
+  if (el.lblCobroPeso) el.lblCobroPeso.className = 'card-toggle-label ' + (porPeso ? 'on' : 'off');
+  if (el.fPrecio) {
+    el.fPrecio.disabled = porPeso;
+    el.fPrecio.style.opacity = porPeso ? '.45' : '1';
+  }
+  if (el.fPrecioGramo) {
+    el.fPrecioGramo.disabled = !porPeso;
+    el.fPrecioGramo.style.opacity = porPeso ? '1' : '.45';
+  }
+}
+
+function renderStaffGrid(selectedIds) {
+  const sel = Array.isArray(selectedIds) ? selectedIds : [];
+  el.fStaffGrid.innerHTML = allStaff.map(s => `
+      <label class="staff-item${sel.includes(s.id)?' selected':''}" data-staff-id="${esc(s.id)}" data-staff-name="${esc(s.name)}">
+        <input type="checkbox" ${sel.includes(s.id)?'checked':''}>
+        <span class="staff-check">✓</span><span class="staff-name">${esc(s.name)}</span>
+      </label>`).join('');
+  el.fStaffGrid.querySelectorAll('.staff-item').forEach(item => {
+    const cb = item.querySelector('input');
+    cb.addEventListener('change', () => item.classList.toggle('selected', cb.checked));
+  });
+}
+
+function getSelectedStaff() {
+  const ids = [], names = [];
+  el.fStaffGrid.querySelectorAll('.staff-item.selected').forEach(i => {
+    ids.push(i.dataset.staffId);
+    names.push(i.dataset.staffName);
+  });
+  return { ids, names };
+}
+
+function renderVariantes(variantes) {
+  el.variantesList.innerHTML = '';
+  const arr = Array.isArray(variantes) ? variantes : [];
+  if (arr.length === 0) {
+    el.variantesHead.style.display = 'none';
+    el.variantesList.innerHTML = '<div class="empty-line">Sin variantes. Pulsa "+ Añadir variante".</div>';
+    return;
+  }
+  el.variantesHead.style.display = 'grid';
+  arr.forEach(v => el.variantesList.appendChild(buildVarianteRow(v)));
+}
+
+function buildVarianteRow(v) {
+  const row = document.createElement('div');
+  row.className = 'variante-row';
+  row.innerHTML = `
+      <input type="text" class="form-input" data-k="nombre" placeholder="Nombre" value="${esc(v.nombre||'')}">
+      <input type="number" class="form-input" data-k="precio" min="0" step="0.5" placeholder="0" value="${(v.precio??'')}">
+      <input type="number" class="form-input" data-k="duracion" min="0" step="5" placeholder="0" value="${(v.duracion??'')}">
+      <input type="text" class="form-input" data-k="tamano_estilo" placeholder="M, azul…" value="${esc(v.tamano_estilo||'')}">
+      <button class="btn-del-line" type="button">✕</button>`;
+  row.querySelector('.btn-del-line').addEventListener('click', () => {
+    row.remove();
+    if (el.variantesList.children.length === 0) {
+      el.variantesHead.style.display = 'none';
+      el.variantesList.innerHTML = '<div class="empty-line">Sin variantes. Pulsa "+ Añadir variante".</div>';
+    }
+  });
+  return row;
+}
+
+function addVarianteRow() {
+  const e = el.variantesList.querySelector('.empty-line');
+  if (e) el.variantesList.innerHTML = '';
+  el.variantesHead.style.display = 'grid';
+  el.variantesList.appendChild(buildVarianteRow({ nombre: '', precio: '', duracion: '', tamano_estilo: '' }));
+}
+
+function collectVariantes() {
+  const out = [];
+  el.variantesList.querySelectorAll('.variante-row').forEach(r => {
+    const nombre = (r.querySelector('[data-k="nombre"]').value || '').trim();
+    const pr = r.querySelector('[data-k="precio"]').value;
+    const du = r.querySelector('[data-k="duracion"]').value;
+    const ta = (r.querySelector('[data-k="tamano_estilo"]').value || '').trim();
+    if (!nombre && pr === '' && du === '' && !ta) return;
+    out.push({
+      nombre,
+      precio: pr === '' ? null : (parseFloat(pr) || 0),
+      duracion: du === '' ? null : (parseInt(du) || 0),
+      tamano_estilo: ta
+    });
+  });
+  return out;
+}
+
+function candidatosFase(excludeId) {
+  return allServicios.filter(s => (s._catalogId || s.id) !== excludeId && s.setupUid).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// =====================================================
+// FASES DE CASCADA v1.13.0
+// Una sola batería de chips. 3 botones: + Aplicación, + Proceso, + Servicio ▾
+// El dropdown de Servicio lista los del grupo cuyo slug contiene "fase".
+// Cero límites: repite lo que quieras tantas veces como quieras.
+//
+// v1.13.0 — Cada chip tipo:'servicio' lleva un switch ON/OFF para marcar
+// la fase como OBLIGATORIA (el complemento correspondiente será required
+// en Recepción PRO y en el widget público). Default OFF: las fases
+// existentes en CMS sin el flag se cargan como opcionales. Los chips
+// 'aplicacion' y 'proceso' NO tienen toggle (no aplica obligatoriedad).
+// El flag se persiste como {tipo:'servicio', ref, obligatorio: bool}
+// dentro de mapeoFases.items.
+// =====================================================
+
+function serviciosDeFase(excludeId) {
+  return allServicios
+    .filter(s =>
+      (s._catalogId || s.id) !== excludeId &&
+      s.setupUid &&
+      s.group &&
+      String(s.group).toLowerCase().includes('fase')
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+let cascadaItems = [];
+let cascadaExcludeId = null;
+
+function renderChipsCascada() {
+  const box = document.getElementById('chipsCascada');
+  if (!box) return;
+  if (!cascadaItems.length) {
+    box.innerHTML = `<span style="color:#7a7f8b;font-size:12px;font-style:italic;">Sin fases. Usa los botones de arriba para añadir.</span>`;
+    toggleProcesoMinWrap();
+    return;
+  }
+  box.innerHTML = cascadaItems.map((it, i) => {
+    let label, color, bg, border;
+    if (it.tipo === 'aplicacion') {
+      label = '🧪 Aplicación'; color = '#ffc985';
+      bg = 'rgba(255,180,80,.14)'; border = 'rgba(255,180,80,.45)';
+    } else if (it.tipo === 'proceso') {
+      label = '⏳ Proceso'; color = '#c5b8ff';
+      bg = 'rgba(160,140,255,.14)'; border = 'rgba(160,140,255,.45)';
+    } else if (it.tipo === 'exclusivo') {
+      // v1.14.0 — CHIP ROJO: grupo exclusivo con label libre y N refs.
+      const nOps = Array.isArray(it.refs) ? it.refs.length : 0;
+      label = '🎯 ' + (it.label || 'Grupo exclusivo') + (nOps ? ` (${nOps})` : '');
+      color = '#ff6b6b';
+      bg = 'rgba(232,84,84,.10)'; border = 'rgba(232,84,84,.55)';
+    } else {
+      label = '🧩 ' + (it.label || it.ref || ''); color = '#a7e3a7';
+      bg = 'rgba(120,210,120,.10)'; border = 'rgba(120,210,120,.40)';
+    }
+
+    // v1.14.0 — BADGE ⏱ +Xmin en chip verde de servicio cuando el
+    // referenciado tiene minProcesoCatalog > 0. Lee del catálogo ya
+    // cargado (allServicios), campo enviado por serviciosEdicionLogic
+    // v1.11.5 línea 332. El motor recepcionProLogic v1.0.34 desdobla
+    // ese proceso automáticamente al materializar la fase.
+    let procBadgeHTML = '';
+    if (it.tipo === 'servicio' && it.ref) {
+      const svcRef = allServicios.find(s => s.setupUid === it.ref);
+      const mp = (svcRef && typeof svcRef.minProcesoCatalog === 'number') ? svcRef.minProcesoCatalog : 0;
+      if (mp > 0) {
+        procBadgeHTML = `<span title="Este servicio arrastra ${mp} min de proceso químico" style="display:inline-flex;align-items:center;padding:2px 7px;background:rgba(160,140,255,.20);color:#c5b8ff;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.2px;">⏱ +${mp}min</span>`;
+      }
+    }
+
+    // v1.13.0 — Switch OBLIGATORIO solo en chips tipo:'servicio'.
+    let oblToggleHTML = '';
+    if (it.tipo === 'servicio') {
+      const isOn = it.obligatorio === true;
+      const swStyle = isOn
+        ? 'background:#c9a44a;border:1px solid #c9a44a;'
+        : 'background:#252a36;border:1px solid rgba(255,255,255,.10);';
+      const ballPos = isOn ? 'right:1px;' : 'left:1px;';
+      const ballColor = isOn ? '#1a1c25' : 'rgba(255,255,255,.45)';
+      const lblText = isOn
+        ? '<span style="color:#c9a44a;font-size:9px;font-weight:700;letter-spacing:.4px;">OBLIG</span>'
+        : '';
+      oblToggleHTML = `<span class="chip-obl" data-idx="${i}" title="${isOn?'Obligatorio (clic para hacer opcional)':'Opcional (clic para hacer obligatorio)'}" style="display:inline-flex;align-items:center;gap:4px;margin:0 4px 0 6px;cursor:pointer;user-select:none;">
+        <span class="chip-obl-sw" style="position:relative;display:inline-block;width:22px;height:12px;border-radius:7px;${swStyle}transition:background .15s,border-color .15s;flex-shrink:0;">
+          <span style="position:absolute;top:1px;${ballPos}width:10px;height:10px;border-radius:50%;background:${ballColor};transition:all .15s;"></span>
+        </span>
+        ${lblText}
+      </span>`;
+    }
+
+    // v1.14.0 — Botón ✎ Editar solo en chip rojo, abre el submodal de
+    // configuración (label + servicios) precargado con el estado actual.
+    let editBtnHTML = '';
+    if (it.tipo === 'exclusivo') {
+      editBtnHTML = `<button type="button" class="chip-edit" data-idx="${i}" title="Editar grupo" style="background:transparent;border:0;color:#9ca3af;cursor:pointer;padding:0 4px;font-size:12px;">✎</button>`;
+    }
+
+    return `<div class="chip-cascada" data-idx="${i}" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:${bg};border:1px solid ${border};border-radius:999px;font-size:13px;font-weight:600;color:${color};">
+      <span style="color:#7a7f8b;font-weight:500;font-size:11px;">${i+1}</span>
+      <span>${esc(label)}</span>
+      ${procBadgeHTML}
+      ${oblToggleHTML}
+      ${editBtnHTML}
+      <button type="button" class="chip-up" data-idx="${i}" title="Antes" style="background:transparent;border:0;color:#9ca3af;cursor:pointer;padding:0 2px;font-size:13px;">◀</button>
+      <button type="button" class="chip-down" data-idx="${i}" title="Después" style="background:transparent;border:0;color:#9ca3af;cursor:pointer;padding:0 2px;font-size:13px;">▶</button>
+      <button type="button" class="chip-del" data-idx="${i}" title="Quitar" style="background:transparent;border:0;color:#ff6b6b;cursor:pointer;padding:0 4px;font-size:14px;font-weight:700;">✕</button>
+    </div>`;
+  }).join('');
+
+  box.querySelectorAll('.chip-up').forEach(b => b.addEventListener('click', (e) => {
+    const i = parseInt(e.currentTarget.dataset.idx, 10);
+    if (i > 0) { [cascadaItems[i-1], cascadaItems[i]] = [cascadaItems[i], cascadaItems[i-1]]; renderChipsCascada(); }
+  }));
+  box.querySelectorAll('.chip-down').forEach(b => b.addEventListener('click', (e) => {
+    const i = parseInt(e.currentTarget.dataset.idx, 10);
+    if (i < cascadaItems.length - 1) { [cascadaItems[i+1], cascadaItems[i]] = [cascadaItems[i], cascadaItems[i+1]]; renderChipsCascada(); }
+  }));
+  box.querySelectorAll('.chip-del').forEach(b => b.addEventListener('click', (e) => {
+    const i = parseInt(e.currentTarget.dataset.idx, 10);
+    const itDel = cascadaItems[i];
+    cascadaItems.splice(i, 1);
+    renderChipsCascada();
+    // v1.14.2 — Refresh del checklist tras borrar cualquier chip que apunte
+    // a un ref del catálogo (verde de servicio o rojo con refs). Chips de
+    // aplicación/proceso no afectan al bloqueo, se ignoran.
+    const afectaComp = itDel && (itDel.tipo === 'servicio' || itDel.tipo === 'exclusivo');
+    if (afectaComp && el.complementosGrid) {
+      renderComplementos(collectComplementos(), currentCatalogId || null);
+    }
+  }));
+
+  // v1.13.0 — Listener del switch OBLIGATORIO.
+  box.querySelectorAll('.chip-obl').forEach(b => b.addEventListener('click', (e) => {
+    const i = parseInt(e.currentTarget.dataset.idx, 10);
+    if (cascadaItems[i] && cascadaItems[i].tipo === 'servicio') {
+      cascadaItems[i].obligatorio = !(cascadaItems[i].obligatorio === true);
+      renderChipsCascada();
+    }
+  }));
+
+  // v1.14.0 — Listener del botón ✎ Editar (chip rojo). Abre submodal en
+  // modo edición.
+  box.querySelectorAll('.chip-edit').forEach(b => b.addEventListener('click', (e) => {
+    const i = parseInt(e.currentTarget.dataset.idx, 10);
+    if (cascadaItems[i] && cascadaItems[i].tipo === 'exclusivo') {
+      openExclusivoModal(i);
+    }
+  }));
+
+  toggleProcesoMinWrap();
+}
+
+function addChipAplicacion() {
+  cascadaItems.push({ tipo: 'aplicacion' });
+  renderChipsCascada();
+}
+function addChipProceso() {
+  cascadaItems.push({ tipo: 'proceso' });
+  renderChipsCascada();
+}
+// v1.13.0 — Servicio: arranca con obligatorio:false (default tras decisión
+// de Jal: las fases no obligan nada; el caso Botox+Planchado se marca a
+// mano tras el deploy).
+function addChipServicio(setupUid, name) {
+  cascadaItems.push({ tipo: 'servicio', ref: setupUid, label: name, obligatorio: false });
+  renderChipsCascada();
+  // v1.14.2 — El chip verde recién añadido bloquea su ref en el checklist.
+  if (el.complementosGrid) {
+    renderComplementos(collectComplementos(), currentCatalogId || null);
+  }
+}
+
+function renderServicioMenu() {
+  const menu = document.getElementById('servicioAddMenu');
+  if (!menu) return;
+  const cands = serviciosDeFase(cascadaExcludeId);
+  if (!cands.length) {
+    menu.innerHTML = `<div style="padding:12px;color:#7a7f8b;font-size:12px;font-style:italic;">No hay servicios en ningún grupo "complementos de fase".</div>`;
+    return;
+  }
+  menu.innerHTML = cands.map(c => `
+    <button type="button" class="servicio-opt" data-uid="${esc(c.setupUid)}" data-name="${esc(c.name)}" style="display:block;width:100%;padding:9px 12px;border:0;background:transparent;color:#e8eaf2;text-align:left;cursor:pointer;border-radius:6px;font-size:13px;">${esc(c.name)}</button>
+  `).join('');
+  menu.querySelectorAll('.servicio-opt').forEach(b => {
+    b.addEventListener('mouseover', () => { b.style.background = '#262936'; });
+    b.addEventListener('mouseout', () => { b.style.background = 'transparent'; });
+    b.addEventListener('click', () => {
+      addChipServicio(b.dataset.uid, b.dataset.name);
+      menu.style.display = 'none';
+    });
+  });
+}
+
+function toggleServicioMenu(ev) {
+  if (ev) ev.stopPropagation();
+  const menu = document.getElementById('servicioAddMenu');
+  if (!menu) return;
+  if (menu.style.display === 'none' || !menu.style.display) {
+    renderServicioMenu();
+    menu.style.display = 'block';
+  } else {
+    menu.style.display = 'none';
+  }
+}
+
+// Carga inicial desde mapeoFases (acepta v1.13.0 con flag obligatorio + legacy)
+function renderFases(mapeoFases, excludeId) {
+  cascadaExcludeId = excludeId;
+  const arr = Array.isArray(mapeoFases) ? mapeoFases : [];
+  cascadaItems = [];
+  const uidToName = {};
+  allServicios.forEach(s => { if (s.setupUid) uidToName[s.setupUid] = s.name; });
+  arr.forEach(f => {
+    if (!f || !f.tipo) return;
+    if (f.tipo === 'aplicacion') {
+      cascadaItems.push({ tipo: 'aplicacion' });
+    } else if (f.tipo === 'proceso') {
+      cascadaItems.push({ tipo: 'proceso' });
+    } else if (f.tipo === 'exclusivo' && Array.isArray(f.refs)) {
+      // v1.14.0 — CHIP ROJO cargado desde CMS. Filtramos refs a los que
+      // realmente existen en el catálogo actual (por si alguno se borró).
+      const refsValidas = f.refs.filter(r => uidToName[r]);
+      cascadaItems.push({
+        tipo: 'exclusivo',
+        label: (typeof f.label === 'string' && f.label.trim()) ? f.label.trim() : '',
+        refs: refsValidas
+      });
+    } else if (f.tipo === 'servicio' && f.ref) {
+      // v1.13.0 — el flag `obligatorio` viene del CMS. Coerción !! para
+      // que fases sin el flag (toda la base legacy) queden como false.
+      cascadaItems.push({
+        tipo: 'servicio',
+        ref: f.ref,
+        label: uidToName[f.ref] || '(sin nombre)',
+        obligatorio: !!f.obligatorio
+      });
+    }
+  });
+  renderChipsCascada();
+}
+
+function collectFases() {
+  return cascadaItems.map(it => {
+    // v1.13.0 — el flag `obligatorio` se persiste explícitamente. Default
+    // false. Solo aplica a chips tipo:'servicio'; aplicacion/proceso no
+    // lo llevan (no aplica obligatoriedad: la cascada los ejecuta siempre).
+    if (it.tipo === 'servicio') return { tipo: 'servicio', ref: it.ref, obligatorio: !!it.obligatorio };
+    // v1.14.0 — CHIP ROJO: persistir label + refs. Cero campos derivados.
+    if (it.tipo === 'exclusivo') return {
+      tipo: 'exclusivo',
+      label: it.label || '',
+      refs: Array.isArray(it.refs) ? it.refs.slice() : []
+    };
+    return { tipo: it.tipo };
+  });
+}
+
+// v1.14.0 — SUBMODAL del CHIP ROJO.
+// excEditingIdx == null → modo alta (añade al final).
+// excEditingIdx == número → modo edición del chip en esa posición.
+let excEditingIdx = null;
+
+function openExclusivoModal(idx) {
+  const overlay = document.getElementById('modalExclusivo');
+  const inputLabel = document.getElementById('excLabel');
+  const list = document.getElementById('excServiciosList');
+  const title = document.getElementById('excTitle');
+  if (!overlay || !inputLabel || !list || !title) return;
+
+  excEditingIdx = (typeof idx === 'number' && cascadaItems[idx] && cascadaItems[idx].tipo === 'exclusivo')
+    ? idx : null;
+
+  const editing = excEditingIdx != null;
+  const source = editing ? cascadaItems[excEditingIdx] : { label: '', refs: [] };
+  title.textContent = editing ? '🎯 Editar grupo exclusivo' : '🎯 Nuevo grupo exclusivo';
+  inputLabel.value = source.label || '';
+  const refsSel = new Set(Array.isArray(source.refs) ? source.refs : []);
+
+  // Candidatos: los mismos que candidatan al chip verde (group con "fase").
+  const cands = serviciosDeFase(cascadaExcludeId);
+  if (!cands.length) {
+    list.innerHTML = `<div class="exc-empty">No hay servicios en ningún grupo "complementos de fase".</div>`;
+  } else {
+    list.innerHTML = cands.map(c => `
+      <label class="exc-servicio-item">
+        <input type="checkbox" data-uid="${esc(c.setupUid)}" ${refsSel.has(c.setupUid) ? 'checked' : ''}>
+        <span>${esc(c.name)}</span>
+      </label>
+    `).join('');
+  }
+
+  overlay.classList.add('open');
+  setTimeout(() => inputLabel.focus(), 40);
+}
+
+function closeExclusivoModal() {
+  const overlay = document.getElementById('modalExclusivo');
+  if (overlay) overlay.classList.remove('open');
+  excEditingIdx = null;
+}
+
+function saveExclusivoModal() {
+  const inputLabel = document.getElementById('excLabel');
+  const list = document.getElementById('excServiciosList');
+  if (!inputLabel || !list) return;
+  const label = (inputLabel.value || '').trim();
+  const refs = Array.from(list.querySelectorAll('input[type=checkbox]:checked'))
+    .map(cb => cb.dataset.uid)
+    .filter(Boolean);
+
+  if (!label) {
+    inputLabel.style.borderColor = 'rgba(232,84,84,.7)';
+    inputLabel.focus();
+    return;
+  }
+  if (refs.length < 2) {
+    // Un grupo exclusivo con menos de 2 opciones no tiene sentido semántico.
+    showToast('Elige al menos 2 servicios en el grupo', 'error');
+    return;
+  }
+
+  if (excEditingIdx != null) {
+    cascadaItems[excEditingIdx] = { tipo: 'exclusivo', label, refs };
+  } else {
+    cascadaItems.push({ tipo: 'exclusivo', label, refs });
+  }
+  renderChipsCascada();
+  // v1.14.1 — Los refs del chip rojo bloquean automáticamente sus items en
+  // el checklist "Complementos compatibles" (auto-marcados + no clicables +
+  // nota). Se refresca aquí para reflejar el nuevo estado inmediatamente.
+  if (el.complementosGrid) {
+    renderComplementos(collectComplementos(), currentCatalogId || null);
+  }
+  closeExclusivoModal();
+}
+
+function toggleProcesoMinWrap() {
+  if (!el.procesoMinWrap) return;
+  const hayProceso = cascadaItems.some(it => it.tipo === 'proceso');
+  el.procesoMinWrap.style.display = hayProceso ? 'block' : 'none';
+}
+
+// COMPLEMENTOS
+function complementosCandidatos(excludeId) {
+  return allServicios.filter(s => (s._catalogId || s.id) !== excludeId && s.setupUid && (s.tipo === 'complemento' || s.tipo === 'ambos')).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// v1.14.2 — Mapa {setupUid → motivo} de TODOS los servicios presentes en la
+// cascada actual del mapeoFases, sea como chip verde (tipo:'servicio' →
+// motivo "ya está en la cascada") o dentro de refs de un chip rojo
+// (tipo:'exclusivo' → motivo "en grupo exclusivo: <label>"). Criterio
+// unificado: si un servicio está en la cascada por cualquier vía, se
+// bloquea en el checklist "Complementos compatibles" (auto-marcado, no
+// clicable, nota debajo). Coherente con la lógica de Recepción PRO que
+// lee `s.complementos` para pintar la lista de servicios elegibles.
+function bloqueadosPorCascada() {
+  const mapa = {};
+  if (!Array.isArray(cascadaItems)) return mapa;
+  for (const it of cascadaItems) {
+    if (!it) continue;
+    if (it.tipo === 'servicio' && typeof it.ref === 'string' && it.ref) {
+      // Solo lo bloqueamos si no fue bloqueado antes por un chip rojo (que
+      // tiene motivo más específico y prevalece si hay solape teórico).
+      if (!mapa[it.ref]) mapa[it.ref] = 'ya está en la cascada';
+    } else if (it.tipo === 'exclusivo' && Array.isArray(it.refs)) {
+      const label = (typeof it.label === 'string' && it.label.trim()) ? it.label.trim() : 'Grupo exclusivo';
+      for (const uid of it.refs) {
+        if (typeof uid === 'string' && uid) mapa[uid] = 'en grupo exclusivo: ' + label;
+      }
+    }
+  }
+  return mapa;
+}
+
+function renderComplementos(seleccionados, excludeId) {
+  const sel = Array.isArray(seleccionados) ? seleccionados : [];
+  const cands = complementosCandidatos(excludeId);
+  if (cands.length === 0) {
+    el.complementosGrid.innerHTML = '<div class="empty-line">No hay servicios marcados como complemento en el catálogo.</div>';
+    return;
+  }
+  const bloqueados = bloqueadosPorCascada();
+  el.complementosGrid.innerHTML = cands.map(c => {
+    const motivo = bloqueados[c.setupUid];
+    const enCascada = !!motivo;
+    // Los presentes en la cascada siempre selected (Recepción PRO ve el
+    // servicio como candidato en el popover) + locked-in-exclusivo (estilo
+    // gris + no clicables + nota del motivo).
+    const isSel = enCascada || sel.includes(c.setupUid);
+    const clsSel = isSel ? ' selected' : '';
+    const clsLock = enCascada ? ' locked-in-exclusivo' : '';
+    const hint = enCascada
+      ? `<span class="comp-locked-hint">${esc(motivo)}</span>`
+      : '';
+    return `
+      <label class="comp-item${clsSel}${clsLock}" data-uid="${esc(c.setupUid)}">
+        <input type="checkbox" ${isSel ? 'checked' : ''} ${enCascada ? 'disabled' : ''}>
+        <span class="comp-check">✓</span>
+        <span class="comp-name">${esc(c.name)}${hint}</span>
+      </label>`;
+  }).join('');
+  el.complementosGrid.querySelectorAll('.comp-item').forEach(item => {
+    // v1.14.2 — los bloqueados por cascada no reaccionan a clic.
+    if (item.classList.contains('locked-in-exclusivo')) return;
+    const cb = item.querySelector('input');
+    cb.addEventListener('change', () => item.classList.toggle('selected', cb.checked));
+  });
+}
+
+function collectComplementos() {
+  // v1.14.1 — recoge tanto los marcados por el estilista como los bloqueados
+  // por cascada (que también llevan la clase .selected desde renderComplementos).
+  const out = [];
+  el.complementosGrid.querySelectorAll('.comp-item.selected').forEach(i => out.push(i.dataset.uid));
+  return out;
+}
+
+function openEditModal(catalogId) {
+  const s = allServicios.find(x => x.id === catalogId);
+  if (!s) return;
+  modoCrear = false;
+  currentCatalogId = catalogId;
+  el.modalTitle.textContent = 'Editar Servicio';
+  el.btnSave.textContent = 'Guardar cambios';
+  el.btnDelete.style.display = 'inline-block';
+  el.fCatalogId.value = s._catalogId || s.id;
+  el.fNombre.value = s.name || '';
+  el.fDuracion.value = s.duration || '';
+  el.fPrecio.value = (s.defaultPrice != null) ? s.defaultPrice : '';
+  el.fDescripcion.value = s.descripcion || '';
+  el.fUso.value = s.uso || '';
+  el.fOrder.value = (s.order != null) ? s.order : 99;
+  el.fActive.checked = s.active !== false;
+  el.fTipo.value = (s.tipo === 'ambos' || s.tipo === 'complemento') ? s.tipo : 'principal';
+  el.fTipologia.value = derivarTipologia(s);
+  fillFamilySelect(s.family || ''); // v1.14.5 — autoexpansiva
+  fillGroupSelect(s.group || '');
+  renderStaffGrid(Array.isArray(s.idStaff) ? s.idStaff : []);
+  renderVariantes(s.variantes || []);
+  renderFases(s.mapeoFases || [], s._catalogId || s.id);
+  el.fMinProceso.value = (typeof s.minProcesoCatalog === 'number' && s.minProcesoCatalog > 0) ? s.minProcesoCatalog : '';
+  renderComplementos(s.complementos || [], s._catalogId || s.id);
+  fImageBase64 = null;
+  fImageFileName = null;
+  fImageMimeType = null;
+  el.fImageFile.value = '';
+  setImagePreview(s.imageUrl || '');
+  setSwitchVisual(el.swVistaEnTour, el.lblVistaEnTour, s.vistaEnTour === true);
+  if (el.fDescripcionTour) el.fDescripcionTour.value = s.descripcionTour || '';
+  setSwitchVisual(el.swDescuentoActivo, el.lblDescuentoActivo, s.descuentoActivo === true);
+  if (el.fDescuentoPromo) el.fDescuentoPromo.value = (typeof s.descuentoPromo === 'number') ? s.descuentoPromo : '';
+  setSwitchVisual(el.swCobroPeso, null, s.cobroporPeso === true);
+  if (el.fPrecioGramo) el.fPrecioGramo.value = (typeof s.precioGramo === 'number') ? s.precioGramo : '';
+  aplicarModoCobro();
+  setSwitchVisual(el.swBonoActivo, el.lblBonoActivo, s.bonoActivo === true);
+  if (el.fBonoNumero) el.fBonoNumero.value = (typeof s.bonoNumero === 'number') ? s.bonoNumero : '';
+  if (el.fBonoDescuento) el.fBonoDescuento.value = (typeof s.bonoDescuento === 'number') ? s.bonoDescuento : '';
+  if (el.fBonoValidezDias) el.fBonoValidezDias.value = (typeof s.bonusValidityDays === 'number') ? s.bonusValidityDays : '';
+  if (el.fBonoIntervaloDias) el.fBonoIntervaloDias.value = (typeof s.bonusUseIntervalDays === 'number') ? s.bonusUseIntervalDays : '';
+  aplicarTipologia();
+  el.btnSave.disabled = false;
+  el.modal.classList.add('open');
+}
+
+function openNuevoModal() {
+  modoCrear = true;
+  currentCatalogId = null;
+  el.modalTitle.textContent = 'Crear Servicio (CMS)';
+  el.btnSave.textContent = 'Crear servicio';
+  el.btnDelete.style.display = 'none';
+  el.fCatalogId.value = '';
+  el.fNombre.value = '';
+  el.fDuracion.value = '';
+  el.fPrecio.value = '';
+  el.fDescripcion.value = '';
+  el.fUso.value = '';
+  el.fOrder.value = '99';
+  el.fActive.checked = true;
+  el.fTipo.value = 'principal';
+  el.fTipologia.value = 'simple_unico';
+  fillFamilySelect(''); // v1.14.5 — autoexpansiva
+  fillGroupSelect('');
+  renderStaffGrid([]);
+  renderVariantes([]);
+  renderFases([], null);
+  renderComplementos([], null);
+  el.fMinProceso.value = '';
+  fImageBase64 = null;
+  fImageFileName = null;
+  fImageMimeType = null;
+  el.fImageFile.value = '';
+  setImagePreview('', '📷');
+  setSwitchVisual(el.swVistaEnTour, el.lblVistaEnTour, false);
+  if (el.fDescripcionTour) el.fDescripcionTour.value = '';
+  setSwitchVisual(el.swDescuentoActivo, el.lblDescuentoActivo, false);
+  if (el.fDescuentoPromo) el.fDescuentoPromo.value = '';
+  setSwitchVisual(el.swCobroPeso, null, false);
+  if (el.fPrecioGramo) el.fPrecioGramo.value = '';
+  aplicarModoCobro();
+  setSwitchVisual(el.swBonoActivo, el.lblBonoActivo, false);
+  if (el.fBonoNumero) el.fBonoNumero.value = '';
+  if (el.fBonoDescuento) el.fBonoDescuento.value = '';
+  if (el.fBonoValidezDias) el.fBonoValidezDias.value = '';
+  if (el.fBonoIntervaloDias) el.fBonoIntervaloDias.value = '';
+  aplicarTipologia();
+  el.btnSave.disabled = false;
+  el.modal.classList.add('open');
+}
+
+function closeModal() {
+  el.modal.classList.remove('open');
+  currentCatalogId = null;
+}
+
+function setSwitchVisual(swEl, lblEl, isOn) {
+  if (!swEl) return;
+  if (isOn) {
+    swEl.classList.add('on');
+    if (lblEl) {
+      lblEl.classList.add('on');
+      lblEl.classList.remove('off');
+      lblEl.textContent = 'ON';
+    }
+    swEl.setAttribute('aria-checked', 'true');
+  } else {
+    swEl.classList.remove('on');
+    if (lblEl) {
+      lblEl.classList.add('off');
+      lblEl.classList.remove('on');
+      lblEl.textContent = 'OFF';
+    }
+    swEl.setAttribute('aria-checked', 'false');
+  }
+}
+function getSwitchValue(swEl) {
+  return !!swEl && swEl.classList.contains('on');
+}
+function attachSwitchClick(swEl, lblEl) {
+  if (!swEl) return;
+  swEl.addEventListener('click', () => {
+    setSwitchVisual(swEl, lblEl, !swEl.classList.contains('on'));
+  });
+}
+
+function buildPayloadComun() {
+  const t = el.fTipologia.value;
+  const esComplejoFases = (t === 'complejo_fases');
+  const esComplejoProceso = (t === 'complejo_proceso');
+  const esComplejo = esComplejoFases || esComplejoProceso;
+  const esVariantes = (t === 'simple_variantes');
+
+  let family = 'simple';
+  if (esComplejo) family = getFamilyValue(); // v1.14.5 — soporta "+Nueva Familia"
+
+  const tipo = el.fTipo.value;
+  const claseServicio = t;
+
+  const { ids: staffIds, names: staffNames } = getSelectedStaff();
+
+  let mapeoFases = [];
+  if (esComplejo) {
+    mapeoFases = collectFases();
+  }
+  const hayProceso = cascadaItems.some(it => it.tipo === 'proceso');
+  const minProceso = hayProceso ?
+    (el.fMinProceso.value === '' ? null : (parseInt(el.fMinProceso.value) || 0)) :
+    null;
+
+  const vistaEnTour = getSwitchValue(el.swVistaEnTour);
+  const descripcionTour = el.fDescripcionTour ? el.fDescripcionTour.value : '';
+  const descuentoActivo = getSwitchValue(el.swDescuentoActivo);
+  const dpRaw = el.fDescuentoPromo ? el.fDescuentoPromo.value : '';
+  const descuentoPromo = (dpRaw === '' || dpRaw === null) ? null : (parseInt(dpRaw, 10));
+
+  const cobroporPeso = getSwitchValue(el.swCobroPeso);
+  const pgRaw = el.fPrecioGramo ? el.fPrecioGramo.value : '';
+  const precioGramo = (pgRaw === '' || pgRaw === null) ? null : (parseFloat(pgRaw) || 0);
+  const bonoActivo = getSwitchValue(el.swBonoActivo);
+  const bnRaw = el.fBonoNumero ? el.fBonoNumero.value : '';
+  const bonoNumero = (bnRaw === '' || bnRaw === null) ? null : (parseInt(bnRaw, 10) || 0);
+  const bdRaw = el.fBonoDescuento ? el.fBonoDescuento.value : '';
+  const bonoDescuento = (bdRaw === '' || bdRaw === null) ? null : (parseInt(bdRaw, 10) || 0);
+  const bvdRaw = el.fBonoValidezDias ? el.fBonoValidezDias.value : '';
+  const bonusValidityDays = (bvdRaw === '' || bvdRaw === null) ? null : (parseInt(bvdRaw, 10) || 0);
+  const bidRaw = el.fBonoIntervaloDias ? el.fBonoIntervaloDias.value : '';
+  const bonusUseIntervalDays = (bidRaw === '' || bidRaw === null) ? null : (parseInt(bidRaw, 10) || 0);
+
+  return {
+    nombre: el.fNombre.value.trim(),
+    duracion: el.fDuracion.value === '' ? null : (parseInt(el.fDuracion.value) || 0),
+    precio: el.fPrecio.value === '' ? null : (parseFloat(el.fPrecio.value) || 0),
+    descripcion: el.fDescripcion.value,
+    family,
+    group: getGroupValue(),
+    tipo,
+    claseServicio,
+    hasVariants: esVariantes,
+    order: parseInt(el.fOrder.value) || 99,
+    active: el.fActive.checked,
+    uso: el.fUso.value,
+    minProceso,
+    idStaff: staffIds,
+    staff: staffNames,
+    variantes: esVariantes ? collectVariantes() : [],
+    mapeoFases,
+    complementos: collectComplementos(),
+    vistaEnTour,
+    descripcionTour,
+    descuentoActivo,
+    descuentoPromo: (isNaN(descuentoPromo) ? null : descuentoPromo),
+    cobroporPeso,
+    precioGramo,
+    bonoActivo,
+    bonoNumero,
+    bonoDescuento,
+    bonusValidityDays,
+    bonusUseIntervalDays
+  };
+}
+
+function saveModal() {
+  const comun = buildPayloadComun();
+  if (!comun.nombre) {
+    showToast('El nombre es obligatorio', 'error');
+    return;
+  }
+  el.btnSave.disabled = true;
+  el.btnSave.textContent = modoCrear ? 'Creando...' : 'Guardando...';
+  if (modoCrear) {
+    const payload = {
+      label: comun.nombre,
+      family: comun.family,
+      group: comun.group,
+      tipo: comun.tipo,
+      duration: comun.duracion || 0,
+      price: comun.precio || 0,
+      order: comun.order,
+      hasVariants: comun.hasVariants,
+      active: comun.active,
+      descripcion: comun.descripcion,
+      uso: comun.uso,
+      minProceso: comun.minProceso,
+      idStaff: comun.idStaff,
+      staff: comun.staff,
+      variantes: comun.variantes,
+      mapeoFases: comun.mapeoFases,
+      complementos: comun.complementos,
+      claseServicio: comun.claseServicio,
+      vistaEnTour: comun.vistaEnTour,
+      descripcionTour: comun.descripcionTour,
+      descuentoActivo: comun.descuentoActivo,
+      descuentoPromo: comun.descuentoPromo,
+      cobroporPeso: comun.cobroporPeso,
+      precioGramo: comun.precioGramo,
+      bonoActivo: comun.bonoActivo,
+      bonoNumero: comun.bonoNumero,
+      bonoDescuento: comun.bonoDescuento,
+      bonusValidityDays: comun.bonusValidityDays,
+      bonusUseIntervalDays: comun.bonusUseIntervalDays
+    };
+    if (fImageBase64) {
+      payload.base64Data = fImageBase64;
+      payload.fileName = fImageFileName;
+      payload.mimeType = fImageMimeType;
+    }
+    sendToParent({ type: 'createCatalog', payload });
+  } else {
+    const payload = Object.assign({ _catalogId: el.fCatalogId.value }, comun);
+    sendToParent({ type: 'save', payload });
+    if (fImageBase64) {
+      pendingImageCatalogId = el.fCatalogId.value;
+      sendToParent({
+        type: 'uploadServiceImage',
+        payload: {
+          catalogId: el.fCatalogId.value,
+          base64Data: fImageBase64,
+          fileName: fImageFileName,
+          mimeType: fImageMimeType
+        }
+      });
+    }
+  }
+}
+
+function onImageSelected() {
+  const file = el.fImageFile.files?.[0];
+  if (!file) return;
+  if (file.size > 3 * 1024 * 1024) {
+    showToast('Imagen demasiado grande (máx. 3 MB)', 'error');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const dataUrl = ev.target.result;
+    fImageBase64 = dataUrl.split(',')[1];
+    fImageFileName = file.name;
+    fImageMimeType = file.type || 'image/jpeg';
+    setImagePreview(dataUrl);
+  };
+  reader.readAsDataURL(file);
+}
+
+function openConfirmDelete() {
+  const s = allServicios.find(x => x.id === currentCatalogId);
+  if (!s) return;
+  el.confirmDeleteName.textContent = s.name || '(sin nombre)';
+  el.btnConfirmDeleteOk.disabled = false;
+  el.btnConfirmDeleteOk.textContent = 'Eliminar';
+  el.modalConfirmDelete.classList.add('open');
+}
+
+function closeConfirmDelete() {
+  el.modalConfirmDelete.classList.remove('open');
+}
+
+function confirmDelete() {
+  const s = allServicios.find(x => x.id === currentCatalogId);
+  if (!s) return;
+  el.btnConfirmDeleteOk.disabled = true;
+  el.btnConfirmDeleteOk.textContent = 'Eliminando...';
+  sendToParent({
+    type: 'deleteCatalog',
+    payload: { catalogId: s._catalogId || s.id }
+  });
+}
+
+function onCatalogDeleted(r) {
+  el.btnConfirmDeleteOk.disabled = false;
+  el.btnConfirmDeleteOk.textContent = 'Eliminar';
+  showToast(`✓ Servicio "${r.nombre}" eliminado`, 'success');
+  closeConfirmDelete();
+  closeModal();
+  const delId = (r && r.catalogId) ? r.catalogId : currentCatalogId;
+  const idx = allServicios.findIndex(s => (s._catalogId || s.id) === delId);
+  if (idx >= 0) allServicios.splice(idx, 1);
+  historialCambios = [];
+  applyFilters();
+}
+
+function onCatalogDeleteError(m) {
+  el.btnConfirmDeleteOk.disabled = false;
+  el.btnConfirmDeleteOk.textContent = 'Eliminar';
+  showToast('✕ Error: ' + (m || 'No se pudo eliminar'), 'error');
+}
+
+function onCatalogCreated(r) {
+  el.btnSave.disabled = false;
+  el.btnSave.textContent = 'Crear servicio';
+  if (r.success) {
+    showToast(`✓ Servicio "${r.servicio.label}" creado`, 'success');
+    closeModal();
+    sendToParent({ type: 'ready' });
+  } else showToast('Error: ' + (r.error || 'No se pudo crear'), 'error');
+}
+
+function onCatalogDuplicated(r) {
+  if (r && r.success) {
+    showToast(`✓ Servicio duplicado: "${r.servicio && r.servicio.label ? r.servicio.label : 'Copia'}"`, 'success');
+    historialCambios = [];
+    sendToParent({ type: 'ready' });
+  } else {
+    showToast('✕ Error al duplicar: ' + ((r && r.error) || 'desconocido'), 'error');
+    applyFilters();
+  }
+}
+
+function showToast(msg, type = '') {
+  el.toast.textContent = msg;
+  el.toast.className = 'toast show' + (type ? ' ' + type : '');
+  setTimeout(() => el.toast.classList.remove('show'), 3000);
+}
+
+function esc(str) {
+  if (str === null || str === undefined) return '';
+  const d = document.createElement('div');
+  d.textContent = String(str);
+  return d.innerHTML;
+}
+
+el.search.addEventListener('input', applyFilters);
+el.filterCat.addEventListener('change', applyFilters);
+el.filterVis.addEventListener('change', applyFilters);
+el.filterTipo.addEventListener('change', applyFilters);
+el.btnNuevo.addEventListener('click', openNuevoModal);
+el.btnHistorial.addEventListener('click', () => {
+  if (vistaActual === 'historial') volverDeHistorial();
+  else mostrarHistorial();
+});
+el.btnModalClose.addEventListener('click', closeModal);
+el.btnCancel.addEventListener('click', closeModal);
+el.btnSave.addEventListener('click', saveModal);
+// v1.14.0 — Eliminado el listener que cerraba el modal al clicar en el
+// overlay. Ese comportamiento hacía perder cambios al hacer clic fuera de
+// una casilla mientras se editaba. El modal solo se cierra con la X (arriba
+// derecha), con Cancelar o al Guardar.
+el.fTipologia.addEventListener('change', aplicarTipologia);
+el.fGroup.addEventListener('change', onGroupChange);
+el.fFamilyComplejo.addEventListener('change', onFamilyChange); // v1.14.5
+el.fImageFile.addEventListener('change', onImageSelected);
+el.fImagePreview.addEventListener('click', () => {
+  if (fImagePreviewUrl) window.open(fImagePreviewUrl, '_blank', 'noopener');
+});
+attachSwitchClick(el.swVistaEnTour, el.lblVistaEnTour);
+attachSwitchClick(el.swDescuentoActivo, el.lblDescuentoActivo);
+el.swCobroPeso.addEventListener('click', () => {
+  setSwitchVisual(el.swCobroPeso, null, !el.swCobroPeso.classList.contains('on'));
+  aplicarModoCobro();
+});
+attachSwitchClick(el.swBonoActivo, el.lblBonoActivo);
+el.btnAddVariante.addEventListener('click', addVarianteRow);
+document.getElementById('btnAddAplicacion').addEventListener('click', addChipAplicacion);
+document.getElementById('btnAddProceso').addEventListener('click', addChipProceso);
+document.getElementById('btnAddServicio').addEventListener('click', toggleServicioMenu);
+// v1.14.0 — CHIP ROJO: abrir submodal en modo alta.
+document.getElementById('btnAddExclusivo').addEventListener('click', () => openExclusivoModal(null));
+document.getElementById('btnExcClose').addEventListener('click', closeExclusivoModal);
+document.getElementById('btnExcCancel').addEventListener('click', closeExclusivoModal);
+document.getElementById('btnExcSave').addEventListener('click', saveExclusivoModal);
+document.addEventListener('click', (ev) => {
+  const menu = document.getElementById('servicioAddMenu');
+  if (!menu || menu.style.display === 'none' || !menu.style.display) return;
+  if (ev.target.closest('#btnAddServicio') || ev.target.closest('#servicioAddMenu')) return;
+  menu.style.display = 'none';
+});
+el.btnDelete.addEventListener('click', openConfirmDelete);
+el.btnConfirmDeleteCancel.addEventListener('click', closeConfirmDelete);
+el.btnConfirmDeleteOk.addEventListener('click', confirmDelete);
+el.modalConfirmDelete.addEventListener('click', (e) => {
+  if (e.target === el.modalConfirmDelete) closeConfirmDelete();
+});
+
+function sendToParent(msg) { parent.postMessage(msg, '*'); }
+let readyConfirmed = false;
+
+window.addEventListener('message', (event) => {
+  const msg = event.data;
+  if (!msg || typeof msg !== 'object') return;
+  if (msg.type === 'data') {
+    readyConfirmed = true;
+    render(msg.payload);
+  }
+  if (msg.type === 'historialData') onHistorialLoaded(msg.payload);
+  if (msg.type === 'saved') {
+    if (pendingToggle) {
+      const { catalogId, nuevoActive } = pendingToggle;
+      pendingToggle = null;
+      const idx = allServicios.findIndex(s => s.id === catalogId);
+      if (idx >= 0) {
+        allServicios[idx].active = nuevoActive;
+        allServicios[idx].hidden = (nuevoActive === false);
+      }
+      showToast(nuevoActive ? '✓ Servicio activado' : '✓ Servicio desactivado', 'success');
+      applyFilters();
+      historialCambios = [];
+      return;
+    }
+    showToast('✓ Servicio actualizado correctamente', 'success');
+    closeModal();
+    el.btnSave.disabled = false;
+    el.btnSave.textContent = 'Guardar cambios';
+    if (msg.payload && msg.payload.servicio) {
+      const sv = msg.payload.servicio;
+      const idx = allServicios.findIndex(s => s.id === (sv._catalogId || sv.id));
+      if (idx >= 0) {
+        const x = allServicios[idx];
+        if (sv.name !== undefined) x.name = sv.name;
+        if (sv.duration !== undefined) x.duration = sv.duration;
+        if (sv.price !== undefined) x.defaultPrice = sv.price;
+        if (sv.descripcion !== undefined) x.descripcion = sv.descripcion;
+        if (sv.family !== undefined) { x.family = sv.family; x.familia = sv.family; }
+        if (sv.group !== undefined) { x.group = sv.group; x.category = sv.group; }
+        if (sv.tipo !== undefined) x.tipo = sv.tipo;
+        if (sv.order !== undefined) x.order = sv.order;
+        if (sv.active !== undefined) { x.active = sv.active; x.hidden = (sv.active === false); }
+        if (sv.uso !== undefined) x.uso = sv.uso;
+        if (sv.idStaff !== undefined) x.idStaff = sv.idStaff;
+        if (sv.staffNombres !== undefined) x.staffNombres = sv.staffNombres;
+        if (sv.variantes !== undefined) x.variantes = sv.variantes;
+        if (sv.complementos !== undefined) x.complementos = sv.complementos;
+        if (sv.mapeoFases !== undefined) x.mapeoFases = sv.mapeoFases;
+        if (sv.claseServicio !== undefined) x.claseServicio = sv.claseServicio;
+        if (sv.vistaEnTour !== undefined) x.vistaEnTour = sv.vistaEnTour;
+        if (sv.descripcionTour !== undefined) x.descripcionTour = sv.descripcionTour;
+        if (sv.descuentoActivo !== undefined) x.descuentoActivo = sv.descuentoActivo;
+        if (sv.descuentoPromo !== undefined) x.descuentoPromo = sv.descuentoPromo;
+        if (sv.cobroporPeso !== undefined) x.cobroporPeso = sv.cobroporPeso;
+        if (sv.precioGramo !== undefined) x.precioGramo = sv.precioGramo;
+        if (sv.bonoActivo !== undefined) x.bonoActivo = sv.bonoActivo;
+        if (sv.bonoNumero !== undefined) x.bonoNumero = sv.bonoNumero;
+        if (sv.bonoDescuento !== undefined) x.bonoDescuento = sv.bonoDescuento;
+        if (sv.bonusValidityDays !== undefined) x.bonusValidityDays = sv.bonusValidityDays;
+        if (sv.bonusUseIntervalDays !== undefined) x.bonusUseIntervalDays = sv.bonusUseIntervalDays;
+      }
+      recomputeTaxonomias(); // v1.14.6 — refrescar listas derivadas (allGroups, allFamilies)
+      applyFilters();
+    }
+    historialCambios = [];
+  }
+  if (msg.type === 'saveError') {
+    if (pendingToggle) {
+      pendingToggle = null;
+      showToast('✕ No se pudo cambiar el estado', 'error');
+      applyFilters();
+      return;
+    }
+    showToast('✕ Error: ' + (msg.message || 'No se pudo guardar'), 'error');
+    el.btnSave.disabled = false;
+    el.btnSave.textContent = 'Guardar cambios';
+  }
+  if (msg.type === 'error') {
+    el.content.innerHTML = `<div class="error-msg">❌ Error: ${esc(msg.message||'Desconocido')}</div>`;
+  }
+  if (msg.type === 'catalogCreated') onCatalogCreated(msg.payload);
+  if (msg.type === 'catalogCreateError') {
+    el.btnSave.disabled = false;
+    el.btnSave.textContent = 'Crear servicio';
+    showToast('✕ Error: ' + (msg.message || 'No se pudo crear'), 'error');
+  }
+  if (msg.type === 'catalogDuplicated') onCatalogDuplicated(msg.payload);
+  if (msg.type === 'catalogDuplicateError') {
+    showToast('✕ Error al duplicar: ' + (msg.message || ''), 'error');
+    applyFilters();
+  }
+  if (msg.type === 'serviceImageUploaded') {
+    showToast('✓ Imagen actualizada', 'success');
+    if (msg.payload?.publicUrl && pendingImageCatalogId) {
+      const u = msg.payload.publicUrl + '?t=' + Date.now();
+      const idx = allServicios.findIndex(s => (s._catalogId || s.id) === pendingImageCatalogId);
+      if (idx >= 0) allServicios[idx].imageUrl = u;
+      applyFilters();
+    }
+    pendingImageCatalogId = null;
+  }
+  if (msg.type === 'serviceImageError') {
+    showToast('✕ Error subiendo imagen: ' + (msg.message || ''), 'error');
+    pendingImageCatalogId = null;
+  }
+  if (msg.type === 'catalogDeleted') onCatalogDeleted(msg.payload);
+  if (msg.type === 'catalogDeleteError') onCatalogDeleteError(msg.message);
+});
+
+function pingReady() {
+  if (readyConfirmed) return;
+  sendToParent({ type: 'ready' });
+  setTimeout(pingReady, 800);
+}
+pingReady();
+</script>
+</body>
+</html>
