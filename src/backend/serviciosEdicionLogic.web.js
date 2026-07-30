@@ -1,8 +1,19 @@
 // =====================================================
 // KAMISUITE - Edición de Servicios Backend
 // =====================================================
-// VERSION: 1.11.7
-// FECHA: 7 de julio de 2026
+// VERSION: 1.12.0
+// FECHA: 30 de julio de 2026
+//
+// v1.12.0 — BONOS: caducidad y frecuencia por servicio.
+//   Se conectan dos campos nuevos de ServiceCatalog (leer + crear +
+//   actualizar), enteros ≥ 0, mismo patrón que bonoNumero:
+//     · bonusValidityDays     → caducidad del bono en DÍAS naturales.
+//       La emisión (voucherPublicLogic v1.1.0) usa este valor si > 0;
+//       si vacío/0 cae al voucherValidityMonths global (meses).
+//     · bonusUseIntervalDays  → días mínimos entre usos. Se congela en el
+//       bono al emitir; el canje (recepcionProLogic v1.0.42) lo aplica.
+//       0/vacío = LIBRE.
+//   Cero cambios en el resto de campos ni en ninguna otra función.
 //
 // EDITOR CMS-ONLY TOTAL.
 // El editor de servicios opera EXCLUSIVAMENTE sobre ServiceCatalog.
@@ -435,7 +446,10 @@ export const listarServiciosCompleto = webMethod(
           precioGramo: (typeof c.precioGramo === 'number') ? c.precioGramo : null,
           bonoActivo: c.bonoActivo === true,
           bonoNumero: (typeof c.bonoNumero === 'number') ? c.bonoNumero : null,
-          bonoDescuento: (typeof c.bonoDescuento === 'number') ? c.bonoDescuento : null
+          bonoDescuento: (typeof c.bonoDescuento === 'number') ? c.bonoDescuento : null,
+          // v1.12.0 — caducidad (días) + frecuencia mínima entre usos (días)
+          bonusValidityDays: (typeof c.bonusValidityDays === 'number') ? c.bonusValidityDays : null,
+          bonusUseIntervalDays: (typeof c.bonusUseIntervalDays === 'number') ? c.bonusUseIntervalDays : null
         }));
 
       const staff = await cargarStaffDesdeConfig();
@@ -496,7 +510,10 @@ export const actualizarServicio = webMethod(
       precioGramo,
       bonoActivo,
       bonoNumero,
-      bonoDescuento
+      bonoDescuento,
+      // v1.12.0 — caducidad (días) + frecuencia mínima entre usos (días)
+      bonusValidityDays,
+      bonusUseIntervalDays
     } = payload;
 
     try {
@@ -594,6 +611,23 @@ export const actualizarServicio = webMethod(
           registro.bonoDescuento = isNaN(n) ? null : Math.max(0, Math.min(100, n));
         }
       }
+      // v1.12.0 — caducidad (días naturales) + frecuencia mínima entre usos (días).
+      if (bonusValidityDays !== undefined) {
+        if (bonusValidityDays === null || bonusValidityDays === '') {
+          registro.bonusValidityDays = null;
+        } else {
+          const n = Number(bonusValidityDays);
+          registro.bonusValidityDays = isNaN(n) ? null : Math.max(0, Math.floor(n));
+        }
+      }
+      if (bonusUseIntervalDays !== undefined) {
+        if (bonusUseIntervalDays === null || bonusUseIntervalDays === '') {
+          registro.bonusUseIntervalDays = null;
+        } else {
+          const n = Number(bonusUseIntervalDays);
+          registro.bonusUseIntervalDays = isNaN(n) ? null : Math.max(0, Math.floor(n));
+        }
+      }
 
       // v1.11.7 — Fuente de verdad: SalonConfig.wixAnclaId (no más family).
       if (!registro.wixAnclaId || !registro.wixAnclaId.trim()) {
@@ -652,7 +686,10 @@ export const actualizarServicio = webMethod(
           precioGramo: (typeof registro.precioGramo === 'number') ? registro.precioGramo : null,
           bonoActivo: registro.bonoActivo === true,
           bonoNumero: (typeof registro.bonoNumero === 'number') ? registro.bonoNumero : null,
-          bonoDescuento: (typeof registro.bonoDescuento === 'number') ? registro.bonoDescuento : null
+          bonoDescuento: (typeof registro.bonoDescuento === 'number') ? registro.bonoDescuento : null,
+          // v1.12.0
+          bonusValidityDays: (typeof registro.bonusValidityDays === 'number') ? registro.bonusValidityDays : null,
+          bonusUseIntervalDays: (typeof registro.bonusUseIntervalDays === 'number') ? registro.bonusUseIntervalDays : null
         }
       };
 
@@ -700,6 +737,9 @@ export const crearServicioCatalogo = webMethod(
       bonoActivo,
       bonoNumero,
       bonoDescuento,
+      // v1.12.0 — caducidad (días) + frecuencia mínima entre usos (días)
+      bonusValidityDays,
+      bonusUseIntervalDays,
       base64Data,
       fileName,
       mimeType
@@ -766,6 +806,17 @@ export const crearServicioCatalogo = webMethod(
           if (bonoDescuento === undefined || bonoDescuento === null || bonoDescuento === '') return null;
           const n = Number(bonoDescuento);
           return isNaN(n) ? null : Math.max(0, Math.min(100, n));
+        })(),
+        // v1.12.0 — caducidad (días naturales) + frecuencia mínima entre usos (días)
+        bonusValidityDays: (() => {
+          if (bonusValidityDays === undefined || bonusValidityDays === null || bonusValidityDays === '') return null;
+          const n = Number(bonusValidityDays);
+          return isNaN(n) ? null : Math.max(0, Math.floor(n));
+        })(),
+        bonusUseIntervalDays: (() => {
+          if (bonusUseIntervalDays === undefined || bonusUseIntervalDays === null || bonusUseIntervalDays === '') return null;
+          const n = Number(bonusUseIntervalDays);
+          return isNaN(n) ? null : Math.max(0, Math.floor(n));
         })()
       };
 
@@ -837,7 +888,10 @@ export const crearServicioCatalogo = webMethod(
           precioGramo: (typeof inserted.precioGramo === 'number') ? inserted.precioGramo : null,
           bonoActivo: inserted.bonoActivo === true,
           bonoNumero: (typeof inserted.bonoNumero === 'number') ? inserted.bonoNumero : null,
-          bonoDescuento: (typeof inserted.bonoDescuento === 'number') ? inserted.bonoDescuento : null
+          bonoDescuento: (typeof inserted.bonoDescuento === 'number') ? inserted.bonoDescuento : null,
+          // v1.12.0
+          bonusValidityDays: (typeof inserted.bonusValidityDays === 'number') ? inserted.bonusValidityDays : null,
+          bonusUseIntervalDays: (typeof inserted.bonusUseIntervalDays === 'number') ? inserted.bonusUseIntervalDays : null
         }
       };
 
