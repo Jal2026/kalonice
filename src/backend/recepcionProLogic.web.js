@@ -1,9 +1,21 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.41
-// FECHA: 29 de julio de 2026
+// VERSION: 1.0.42
+// FECHA: 30 de julio de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.42: ⏱️ FRECUENCIA MÍNIMA ENTRE USOS DEL BONO en aplicarCanjeProducto.
+//          Nuevo chequeo en la RAMA BONO, justo tras el de caducidad y
+//          antes del match de servicio. Si el bono trae bonusUseIntervalDays
+//          > 0 (snapshot congelado al emitir; 0/vacío = LIBRE), se mide el
+//          intervalo en DÍAS NATURALES (calendario Madrid) contra el
+//          redeemDate más reciente del bono en KamisuiteVoucherRedemptions.
+//          Si no ha transcurrido el intervalo → bloqueo con mensaje (último
+//          uso + fecha disponible). Primer uso (sin canjes previos) siempre
+//          pasa. Bloqueo DURO (sin override en V1). Cero cambios en
+//          confirmarCanjeProducto, en el modelo económico del bono, en la
+//          rama KP-, ni en ninguna otra función.
 //
 // v1.0.41: 🧹 FIX quitarItemReserva — al quitar un servicio, quitar también su
 //          fase OCUPANTE de la cascada. Antes solo se borraba del
@@ -3547,6 +3559,54 @@ export const aplicarCanjeProducto = webMethod(
           const exp = new Date(bono.expirationDate);
           if (Number.isFinite(exp.getTime()) && exp <= ahora) {
             return { ok: false, version: VERSION, error: { message: 'El bono está caducado' } };
+          }
+        }
+
+        // v1.0.42 — FRECUENCIA MÍNIMA ENTRE USOS.
+        // El bono puede exigir un intervalo mínimo en días naturales entre
+        // canjes, congelado al emitir en bono.bonusUseIntervalDays
+        // (0/vacío = LIBRE). Se mide por día natural (calendario Madrid)
+        // contra el redeemDate más reciente del bono en el ledger. El
+        // primer uso (sin canjes previos) siempre pasa.
+        const intervaloDias = (typeof bono.bonusUseIntervalDays === 'number' && bono.bonusUseIntervalDays > 0)
+          ? Math.floor(bono.bonusUseIntervalDays)
+          : 0;
+        if (intervaloDias > 0) {
+          let ultimoCanjeMs = null;
+          try {
+            const redRes = await wixData.query(CMS_VOUCHER_REDEMPTIONS)
+              .eq('voucherId', bono._id)
+              .limit(1000)
+              .find({ suppressAuth: true });
+            for (const r of (redRes.items || [])) {
+              if (!r.redeemDate) continue;
+              const t = new Date(r.redeemDate).getTime();
+              if (Number.isFinite(t) && (ultimoCanjeMs === null || t > ultimoCanjeMs)) ultimoCanjeMs = t;
+            }
+          } catch (e) {
+            console.warn(`${TAG} ⚠️ intervalo bono ${safeCode}: query ledger falló (${e.message}) — se permite el canje`);
+          }
+          if (ultimoCanjeMs !== null) {
+            const DIA_MS = 86400000;
+            const madridDayMs = (ms) => {
+              const s = new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' }); // YYYY-MM-DD
+              const p = s.split('-');
+              return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+            };
+            const ultimoDia = madridDayMs(ultimoCanjeMs);
+            const hoyDia = madridDayMs(ahora.getTime());
+            const diasTranscurridos = Math.round((hoyDia - ultimoDia) / DIA_MS);
+            if (diasTranscurridos < intervaloDias) {
+              const disponibleMs = ultimoDia + intervaloDias * DIA_MS;
+              const fmt = (ms) => new Date(ms).toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' });
+              return {
+                ok: false,
+                version: VERSION,
+                error: {
+                  message: `Este bono admite un uso cada ${intervaloDias} días. Último uso: ${fmt(ultimoDia)}. Disponible desde: ${fmt(disponibleMs)}.`
+                }
+              };
+            }
           }
         }
 
