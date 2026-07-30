@@ -1,8 +1,24 @@
 // =====================================================
 // KAMISUITE - Bonos (Página Pública) Backend
 // =====================================================
-// VERSION: 1.0.2
-// FECHA: 3 de julio de 2026
+// VERSION: 1.1.0
+// FECHA: 30 de julio de 2026
+//
+// v1.1.0: 📆 CADUCIDAD Y FRECUENCIA POR SERVICIO (en días).
+//   · Caducidad del bono en DÍAS naturales desde la emisión, definida
+//     por servicio en ServiceCatalog.bonusValidityDays (Number). Si el
+//     servicio la define (> 0) manda; si está vacía/0 cae al global en
+//     meses (KamisuiteProductsConfig.voucherValidityMonths), de modo que
+//     los servicios aún no configurados siguen emitiendo como hasta hoy.
+//   · Frecuencia mínima entre usos: ServiceCatalog.bonusUseIntervalDays
+//     (Number) se CONGELA en el bono al emitir (snapshot en
+//     KamisuiteVouchers.bonusUseIntervalDays). 0/vacío = LIBRE. El canje
+//     en Recepción PRO leerá ese campo del bono (no del servicio).
+//   · Cambio localizado en confirmVoucherPayment (releer servicio +
+//     cálculo días/meses + snapshot) y nuevo helper calcularExpirationDateDias.
+//   · Sin cambios en F7 (email), variantes, createVoucherCheckout ni
+//     ninguna otra función. La caducidad de los bonos ya vendidos NO se
+//     recalcula: expirationDate es un snapshot inmutable de la emisión.
 //
 // v1.0.2: 🎚️ SOPORTE DE VARIANTES en la fase de compra del bono.
 //   Un servicio del ServiceCatalog con hasVariants:true y variantes
@@ -125,8 +141,10 @@
 //   appliedDiscount = bonoDescuento (% guardado para histórico)
 //
 // VALIDEZ:
-//   expirationDate = issueDate + KamisuiteProductsConfig.voucherValidityMonths
-//   (default 12 meses, decisión D-1).
+//   Por servicio (v1.1.0): si ServiceCatalog.bonusValidityDays > 0 →
+//     expirationDate = issueDate + bonusValidityDays (días naturales).
+//   Fallback global: si no → issueDate + voucherValidityMonths (meses,
+//     default 12, decisión D-1).
 //
 // CÓDIGO ÚNICO:
 //   Formato BN-XXXX-XXXX. Unicidad verificada por query.
@@ -138,7 +156,7 @@
 //     confirmVoucherPayment, cancelVoucherPayment: Permissions.SiteMember.
 //
 // CMS REFERENCIADOS:
-//   · ServiceCatalog              (read-only: catálogo de servicios).
+//   · ServiceCatalog              (read-only: catálogo + bonusValidityDays / bonusUseIntervalDays).
 //   · KamisuiteProductsConfig     (read-only: voucherValidityMonths).
 //   · KamisuitePrimeMemberships   (read-only: verificar PRIME activo).
 //   · KamisuiteVouchers           (insert/update: bonos emitidos).
@@ -150,6 +168,10 @@
 // v1.0.2 - Soporte de variantes: 1 card por servicio con array
 //          variantes[] para chips en el widget; voucherKey compuesta;
 //          serviceLabel con sufijo " · <variante>".
+// v1.1.0 - Caducidad por servicio en DÍAS (ServiceCatalog.bonusValidityDays,
+//          con fallback a voucherValidityMonths global) + snapshot de la
+//          frecuencia mínima entre usos (bonusUseIntervalDays) en el bono
+//          al emitir. Cambio localizado en confirmVoucherPayment + helper.
 // =====================================================
 
 import { Permissions, webMethod } from 'wix-web-module';
@@ -205,6 +227,15 @@ async function generarCodigoUnico() {
 function calcularExpirationDate(issueDate, validityMonths) {
   const dt = new Date(issueDate.getTime());
   dt.setMonth(dt.getMonth() + (validityMonths || 12));
+  return dt;
+}
+
+// v1.1.0 — Caducidad en DÍAS naturales desde la emisión (validez por
+// servicio). Se usa cuando ServiceCatalog.bonusValidityDays > 0; si no,
+// se mantiene el cálculo en meses de calcularExpirationDate().
+function calcularExpirationDateDias(issueDate, validityDays) {
+  const dt = new Date(issueDate.getTime());
+  dt.setDate(dt.getDate() + validityDays);
   return dt;
 }
 
@@ -911,6 +942,34 @@ export const confirmVoucherPayment = webMethod(
       }
 
       // Calcular fechas.
+      // v1.1.0 — Caducidad y frecuencia POR SERVICIO. Releemos el servicio
+      // del catálogo por serviceSetupUid (mismo dual-lookup que
+      // createVoucherCheckout) para obtener:
+      //   · bonusValidityDays  → caducidad en DÍAS desde la emisión. Si > 0
+      //     manda; si vacío/0 cae al voucherValidityMonths global (meses).
+      //   · bonusUseIntervalDays → días mínimos entre usos. Se CONGELA en el
+      //     bono (snapshot). 0/vacío = LIBRE. El canje en Recepción PRO lee
+      //     este campo del bono, no del servicio.
+      let servicioBono = null;
+      if (registro.serviceSetupUid) {
+        try {
+          const svcRes = await wixData.query(CMS_CATALOG)
+            .eq('setupUid', registro.serviceSetupUid)
+            .limit(1)
+            .find({ suppressAuth: true });
+          servicioBono = (svcRes.items || [])[0] || null;
+          if (!servicioBono) {
+            servicioBono = await wixData.get(CMS_CATALOG, registro.serviceSetupUid, { suppressAuth: true });
+          }
+        } catch (_) { servicioBono = null; }
+      }
+      const validityDays = (servicioBono && typeof servicioBono.bonusValidityDays === 'number' && servicioBono.bonusValidityDays > 0)
+        ? Math.floor(servicioBono.bonusValidityDays)
+        : 0;
+      const intervalDays = (servicioBono && typeof servicioBono.bonusUseIntervalDays === 'number' && servicioBono.bonusUseIntervalDays > 0)
+        ? Math.floor(servicioBono.bonusUseIntervalDays)
+        : 0;
+
       const cfgResult = await wixData.query(CMS_CONFIG).limit(1).find({ suppressAuth: true });
       const validityMonths = (cfgResult.items.length > 0 && typeof cfgResult.items[0].voucherValidityMonths === 'number')
         ? cfgResult.items[0].voucherValidityMonths
@@ -919,8 +978,13 @@ export const confirmVoucherPayment = webMethod(
       const now = new Date();
       registro.status = 'ACTIVO';
       registro.issueDate = now;
-      registro.expirationDate = calcularExpirationDate(now, validityMonths);
+      registro.expirationDate = (validityDays > 0)
+        ? calcularExpirationDateDias(now, validityDays)
+        : calcularExpirationDate(now, validityMonths);
+      registro.bonusUseIntervalDays = intervalDays;   // snapshot congelado (0 = LIBRE)
       registro.paymentMethod = 'Wix Pay';
+
+      console.log(`${TAG} 📆 Bono ${registro.code}: caducidad=${validityDays > 0 ? validityDays + 'd (servicio)' : validityMonths + 'm (global)'} · intervalo=${intervalDays > 0 ? intervalDays + 'd' : 'LIBRE'}`);
 
       const updated = await wixData.update(CMS_VOUCHERS, registro, { suppressAuth: true });
       console.log(`${TAG} ✅ Voucher ACTIVO: ${updated._id} | vence=${updated.expirationDate.toISOString()}`);
