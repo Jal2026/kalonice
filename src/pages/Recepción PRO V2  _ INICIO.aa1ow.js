@@ -1,9 +1,19 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.30
-// FECHA: 29 de julio de 2026
+// VERSION: 1.0.31
+// FECHA: 31 de julio de 2026
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
+//
+// v1.0.31: + ESPECIALES. Enganche del modal de venta manual (PRIME / Bonos /
+//          Tarjetas) con especialesVentaLogic. Nuevos handlers:
+//            · espBuscarCliente / espCrearCliente — selector de cliente del
+//              modal, reutilizan cacheContactos + crearContacto con canal
+//              propio para no colisionar con la búsqueda del aside.
+//            · getEspecialesData — config PRIME + servicios con bono +
+//              campañas de tarjeta vigentes.
+//            · emitirBono / emitirPrime / emitirTarjeta — emiten y cobran.
+//          + imports especialesVentaLogic + productosKamisuiteLogic. + 6 cases.
 //
 // v1.0.30: + Puente redimensionar-fase. Nuevo handler handleRedimensionarFase
 //          que llama a redimensionarFase (recepcionProLogic v1.0.39) y
@@ -385,6 +395,10 @@ import { listarProductos, venderProductosDesdeAgenda } from 'backend/tiendaProdu
 // Clientes: reutiliza el backend que ya usa la agenda legacy (CRM en memoria).
 import { cargarTodosContactos, crearContacto, editarContacto } from 'backend/recepcionLogic.web';
 
+// v1.0.31 — ESPECIALES: venta manual de PRIME / Bonos / Tarjetas.
+import { emitirBonoManual, emitirPrimeManual, emitirTarjetaManual } from 'backend/especialesVentaLogic.web';
+import { getProductosConfig, listarServiciosConBono, listarPromoCampaigns } from 'backend/productosKamisuiteLogic.web';
+
 // Arqueo de caja: backend existente (gemelo en KALONICE). No se modifica.
 import {
   calcularEfectivoEsperado,
@@ -432,7 +446,7 @@ import {
 // existente en salonConfigLogic.web.js (Permissions.SiteMember). NO se toca.
 import { getSalonConfig } from 'backend/salonConfigLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.30]';
+const TAG = '[RecepcionProCMS v1.0.31]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -504,6 +518,106 @@ function sendResponse(type, data = {}) {
     _el.setAttribute('response', JSON.stringify(payload));
   } catch (e) {
     console.error(`${TAG} ❌ setAttribute response falló:`, e);
+  }
+}
+
+// =====================================================
+// ESPECIALES — Venta manual de PRIME · Bonos · Tarjetas (v1.0.31)
+// =====================================================
+// Enganche del modal ESPECIALES del widget con especialesVentaLogic.
+// El selector de cliente reutiliza cacheContactos + crearContacto, pero
+// con mensajes propios (espBuscarCliente/espCrearCliente) para no pisar la
+// búsqueda de clientes del aside (buscarCliente/clientesEncontrados).
+
+// Búsqueda de cliente para el modal (misma lógica que handleBuscarCliente,
+// respuesta por canal propio 'espClientesEncontrados').
+function handleEspBuscarCliente(msg) {
+  const searchTerm = String(msg.query || '').trim().toLowerCase();
+  if (searchTerm.length < 2) { sendResponse('espClientesEncontrados', { clientes: [] }); return; }
+  const searchPhone = searchTerm.replace(/[\s\-\(\)]/g, '');
+  const filtered = cacheContactos.filter(c => {
+    const nombre = (c.nombreCompleto || '').toLowerCase();
+    const email = (c.email || '').toLowerCase();
+    const telefono = (c.telefono || '').replace(/[\s\-\(\)]/g, '');
+    return nombre.includes(searchTerm) || email.includes(searchTerm) || telefono.includes(searchPhone);
+  });
+  const limitados = filtered.slice(0, 20);
+  sendResponse('espClientesEncontrados', {
+    clientes: limitados,
+    totalEncontrados: filtered.length,
+    mostrados: limitados.length
+  });
+}
+
+// Alta de cliente nuevo desde el modal ESPECIALES.
+async function handleEspCrearCliente(msg) {
+  try {
+    const result = await crearContacto({
+      nombre: msg.nombre, apellido: msg.apellido,
+      telefono: msg.telefono, email: msg.email
+    });
+    if (result.ok && result.cliente) cacheContactos.push(result.cliente);
+    sendResponse('espClienteCreado', { data: result });
+  } catch (e) {
+    console.error(`${TAG} ❌ espCrearCliente:`, e);
+    sendResponse('espClienteCreado', { data: { ok: false, error: { message: e?.message || 'Error' } } });
+  }
+}
+
+// Datos para poblar el modal: config PRIME (precio) + servicios con bono +
+// campañas de tarjeta VIGENTES (active + ventana startDate/endDate).
+async function handleGetEspecialesData() {
+  try {
+    const [rCfg, rBonos, rCamp] = await Promise.all([
+      getProductosConfig(),
+      listarServiciosConBono(),
+      listarPromoCampaigns()
+    ]);
+    const ahora = Date.now();
+    const campaignsVigentes = (((rCamp && rCamp.success) ? rCamp.campaigns : []) || []).filter(c => {
+      if (c.active !== true) return false;
+      if (c.startDate && new Date(c.startDate).getTime() > ahora) return false;
+      if (c.endDate && new Date(c.endDate).getTime() < ahora) return false;
+      return true;
+    });
+    sendResponse('especialesData', {
+      config: (rCfg && rCfg.success) ? rCfg.config : null,
+      servicios: (rBonos && rBonos.success) ? rBonos.servicios : [],
+      campaigns: campaignsVigentes
+    });
+  } catch (e) {
+    console.error(`${TAG} ❌ getEspecialesData:`, e);
+    sendResponse('especialesData', { config: null, servicios: [], campaigns: [], error: e?.message || 'Error' });
+  }
+}
+
+async function handleEmitirBono(msg) {
+  try {
+    const data = await emitirBonoManual(msg.payload || {});
+    sendResponse('bonoEmitido', { data });
+  } catch (e) {
+    console.error(`${TAG} ❌ emitirBono:`, e);
+    sendResponse('bonoEmitido', { data: { success: false, error: e?.message || 'Error' } });
+  }
+}
+
+async function handleEmitirPrime(msg) {
+  try {
+    const data = await emitirPrimeManual(msg.payload || {});
+    sendResponse('primeEmitido', { data });
+  } catch (e) {
+    console.error(`${TAG} ❌ emitirPrime:`, e);
+    sendResponse('primeEmitido', { data: { success: false, error: e?.message || 'Error' } });
+  }
+}
+
+async function handleEmitirTarjeta(msg) {
+  try {
+    const data = await emitirTarjetaManual(msg.payload || {});
+    sendResponse('tarjetaEmitido', { data });
+  } catch (e) {
+    console.error(`${TAG} ❌ emitirTarjeta:`, e);
+    sendResponse('tarjetaEmitido', { data: { success: false, error: e?.message || 'Error' } });
   }
 }
 
@@ -1386,6 +1500,13 @@ $w.onReady(function () {
         case 'crearCliente':     handleCrearCliente(msg); break;
         case 'editarContacto':   handleEditarContacto(msg); break;
         case 'clientesReady':    if (cacheReady) sendResponse('clientesReady', { total: cacheContactos.length }); break;
+        // v1.0.31 — ESPECIALES (venta manual PRIME/Bonos/Tarjetas)
+        case 'espBuscarCliente':  handleEspBuscarCliente(msg); break;
+        case 'espCrearCliente':   handleEspCrearCliente(msg); break;
+        case 'getEspecialesData': handleGetEspecialesData(); break;
+        case 'emitirBono':        handleEmitirBono(msg); break;
+        case 'emitirPrime':       handleEmitirPrime(msg); break;
+        case 'emitirTarjeta':     handleEmitirTarjeta(msg); break;
         case 'caja-calcular':    handleCajaCalcular(msg); break;
         case 'caja-guardar':     handleCajaGuardar(msg); break;
         case 'caja-cerrar':      handleCajaCerrar(msg); break;
