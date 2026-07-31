@@ -1,0 +1,2113 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<title>KAMISUITE · Configuración Salón</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   widget_salon_config.html  v1.0.12
+   KAMISUITE — Widget Edición Configuración Salón
+   ═══════════════════════════════════════════════════════════════
+   CHANGELOG
+   v1.0.12 · 1 Ago 2026 · Arqueo de caja — 2 campos nuevos
+     - SECTIONS[modulos].fields += arqueoActivo (boolean). Toggle del
+       MÓDULO de arqueo/cierre de caja. Al activarlo, Recepción PRO
+       ofrece por la mañana la apertura de caja (fondo inicial del día).
+       Desactivado → Recepción PRO no muestra el modal de apertura.
+     - SECTIONS[operativa].fields += fondoCajaFijo (number). Fondo fijo
+       de caja diario en euros. Si el salón trabaja con fondo fijo cada
+       mañana, aquí indica el importe y la apertura lo propone. Vacío →
+       la apertura propone el efectivo contado en el cierre del día
+       anterior (arrastre natural del saldo).
+     - Ambos reutilizan renderField/renderToggle existentes (type
+       'number' soportado desde v1.0.6; boolean desde v1.0.0). Sin CSS
+       nuevo, sin tokens nuevos, sin cambios en el guardado.
+     - Pareja backend: salonConfigLogic v1.0.7 (ALL_FIELDS +2,
+       NUMBER_FIELDS += fondoCajaFijo, BOOLEAN_FIELDS += arqueoActivo).
+     - Pareja Recepción PRO: recepcionProCMS_widget v1.1.71 +
+       page code v1.0.32 + cashRegisterLogic v1.1.0.
+   v1.0.11 · 7 Jul 2026 · ANCLA — Service ID en sección Operativa
+     - SECTIONS[operativa].fields += wixAnclaId
+       (text, label "ANCLA — Service ID", placeholder "UUID del
+       servicio ancla"). Se ubica al final de la sección Operativa,
+       coherente con los tres Resource IDs vecinos.
+     - El backend salonConfigLogic v1.0.5 lo persiste. La fuente de
+       verdad del UUID pasa a SalonConfig y serviciosEdicionLogic
+       v1.11.7 lee de aquí en lugar de auto-resolver por family.
+     - Pareja backend: salonConfigLogic v1.0.5.
+     - Sin cambios en page code (getSalonConfig/updateSalonConfig ya
+       manejan el ciclo lectura/escritura de cualquier field ID de
+       ALL_FIELDS).
+   v1.0.10 · 6 Jul 2026 · Servicio/s editable por externo
+     - Nuevo campo por tarjeta en "Gestión Externos": textarea
+       multilinea "Servicio/s" (field id: serviceName). Se sitúa
+       DEBAJO del nombre del empleado, ANTES de la comisión, respetando
+       el orden solicitado.
+     - Reutiliza la clase nativa `.field-input` y el CSS ya existente
+       `textarea.field-input { min-height:80px; resize:vertical }`
+       (línea 453 del propio widget desde v1.0.0). Sin CSS nuevo, sin
+       tokens nuevos, sin `style` inline. Responsive: hereda el
+       comportamiento `.field-group.full-width` idéntico al del
+       textarea de "Texto legal RGPD" ya en producción.
+     - `renderExternalStaffBody` incluye la nueva textarea con
+       placeholder "Ej: Manicura, Pedicura, Pestañas". El valor se
+       precarga escapado con `escapeHtml`.
+     - Nuevo handler `onExternalServiceNameChange(externalServicesId)`
+       que actualiza el estado vivo y refresca el botón GUARDAR.
+     - `getExternalStaffDeltas` compara también `serviceName`: si la
+       cadena difiere del snapshot, la fila entra en el delta y se
+       incluye en el payload de externalStaffSave.
+     - `externalStaffData` y `externalStaffSaved` preservan/actualizan
+       serviceName (ya venía en la respuesta del backend desde v1.0.0).
+     - Sin cambios en el resto de secciones, en el CSS, en los campos
+       legacy de Operativa, ni en el guardado de SalonConfig.
+     - Pareja backend: externalStaffLogic.web v1.0.1
+       (updateExternalCommission acepta serviceName opcional).
+     - Pareja page code: pagecode_salon_config v1.0.3 (propaga
+       serviceName al backend).
+   v1.0.9 · 6 Jul 2026 · Nueva sección "Gestión Externos"
+     - NUEVA sección tras "Operativa" con `custom: 'externos'` (patrón
+       de sección con render propio, análogo al de "Apariencia").
+     - Renderiza una tarjeta por cada empleado con isExternal=true y
+       active=true en StaffConfig (leído desde el backend nuevo
+       externalStaffLogic.web v1.0.0). Cada tarjeta muestra:
+         · Nombre del empleado (readonly, desde StaffConfig)
+         · Comisión (%) editable (fila de ExternalServices)
+         · Toggle Activo (activeStatus de ExternalServices)
+     - Auto-migración transparente: si la fila de ExternalServices no
+       tiene aún staffResourceId, el backend la enlaza con el
+       wixResourceId de StaffConfig la primera vez que se abre la
+       sección (case-insensitive por contactPerson). Si no hay fila,
+       la crea con 0% y activa. El operador no ve nada de esto.
+     - El botón GUARDAR global (único, sigue siendo el mismo botón)
+       envía DOS mensajes al page code cuando corresponda:
+         1) 'salonConfigSave' con SalonConfig, como hasta ahora.
+         2) 'externalStaffSave' con los deltas de comisión/activo, sólo
+            si hay cambios en la sección de externos.
+     - Detección de cambios y confirmación de guardado incorporan la
+       nueva sección: hasChanges considera también externos; al
+       recibir 'externalStaffSaved' se refresca el estado base.
+     - Se disparan 'externalStaffReady' al recibir 'salonConfigData'
+       (una sola vez por sesión, como el resto).
+     - Los 3 campos legacy de Operativa (externalStaffName,
+       externalStaffArea, externalStaffResourceId) siguen INTACTOS por
+       compatibilidad con backends que los puedan leer.
+     - Sin cambios en CSS, tokens ni layout de las 8 secciones
+       existentes. La nueva sección reutiliza clases nativas
+       (.section, .section-header, .field-group, .toggle-row, etc.).
+     - Pareja backend: externalStaffLogic.web.js v1.0.0 (nuevo).
+     - Pareja page code: pagecode_salon_config v1.0.2 (add-only).
+     - Pareja cierre: cierreExternosLogic.web.js v1.1.0 (matching por
+       empleado vía staffResourceId + puente StaffConfig).
+   v1.0.8 · 28 Jun 2026 · Nueva sección "Facturación"
+     - NUEVA sección "Facturación" entre Legal y Apariencia, con 4
+       campos:
+         · invoiceSeries (text) — sigla de la serie de facturas
+           completas (F1 Verifactu). Ej: 'F'.
+         · ticketSeries  (text) — sigla de la serie de tickets /
+           facturas simplificadas (F2 Verifactu). Ej: 'T'.
+         · invoiceStartNumber (number) — primer número de la serie de
+           facturas. SOLO se aplica si InvoiceCounters está vacío.
+         · ticketStartNumber  (number) — primer número de la serie de
+           tickets. SOLO se aplica si InvoiceCounters está vacío.
+     - Estos 4 campos los lee facturacionSalonLogic.web.js (módulo
+       de Facturación del Salón a sus Clientes Finales) al inicializar
+       un contador nuevo. El CONTADOR VIVO se mantiene en la colección
+       InvoiceCounters y NO se edita desde este widget.
+     - Backend pareja: salonConfigLogic v1.0.4 (ALL_FIELDS +4,
+       NUMBER_FIELDS += invoiceStartNumber, ticketStartNumber).
+     - Sin cambios en el resto de secciones, estética ni lógica de
+       guardado: el botón GUARDAR sigue enviando un único payload con
+       TODOS los campos cambiados; el page code no se toca.
+   v1.0.7 · 21 Jun 2026 · FIX masterPin pierde ceros a la izquierda
+     - masterPin pasa de type:'number' a type:'pin'. Como number, el
+       guardado hacía Number("0000") → 0 (el PIN perdía los ceros ANTES
+       de llegar al backend, aunque el campo CMS fuese Texto). El nuevo
+       type:'pin' usa el mismo input numérico (inputmode + maxlength)
+       pero se guarda como TEXTO literal → "0000" se conserva.
+     - El campo masterPin en CMS debe ser Texto (no Número).
+     - timeOut sigue como number (numérico real). Backend sin cambios
+       (masterPin ya estaba fuera de NUMBER_FIELDS).
+   v1.0.6 · 21 Jun 2026 · Nueva sección "Accesos" (login Recepción PRO)
+     - NUEVA sección "Accesos" entre Horarios y Operativa, con 3 campos:
+         · usersActivation (boolean) — activa el sistema de login en
+           Recepción.
+         · masterPin (number, 4 dígitos) — PIN maestro para resetear el
+           PIN de un empleado desde el control de accesos.
+         · timeOut (number) — segundos de inactividad tras los que
+           Recepción vuelve a pedir el login.
+     - NEW soporte type:'number' en renderField (inputmode numeric,
+       maxlength opcional) y en guardar() (se envía como Number; 0 es
+       valor válido y se muestra). Backend pareja: salonConfigLogic v1.0.3
+       (NUMBER_FIELDS, ALL_FIELDS y BOOLEAN_FIELDS ampliados).
+     - Sin cambios en el resto de secciones, estética ni lógica previa.
+   v1.0.5 · 19 Jun 2026 · Bai Jamjuree en todo el editor
+     - body usa Bai Jamjuree (fuente aprobada KAMISUITE) en toda la
+       interfaz de configuración, no solo en la preview.
+   v1.0.4 · 19 Jun 2026 · Tipografía real en la preview
+     - La preview usa la fuente aprobada Bai Jamjuree (--kr-font),
+       igual que el widget público. Aurora aplica Instrument Sans.
+     - Cargadas Bai Jamjuree + Instrument Sans vía <link> Google Fonts
+       (misma URL que el bundle público v2.0.11).
+   v1.0.3 · 19 Jun 2026 · Preview ampliada del widget público
+     - La previsualización ahora replica el layout real del widget de
+       reserva: cabecera con foto + servicio/precio/duración, Paso 1
+       con chips de día, profesionales (avatares) y rail "Tu reserva".
+     - Imagen de cabecera incrustada en base64 (PREVIEW_HEADER_IMG),
+       sin URL externa. Datos de ejemplo fijos (no reales).
+     - Sigue mutando de color en vivo al elegir skin (tokens --kr-*).
+   v1.0.2 · 19 Jun 2026 · Concordancia CMS + selección de diseño
+     - Sección Legal: nuevo campo termsConditionsUrl (URL T&C)
+     - Sección Módulos Opcionales: nuevo toggle whatsappPro
+     - NUEVA sección "Apariencia": selector de skin (widgetSkin) con
+       previsualización en vivo de los 7 modelos de color.
+     - KR_SKINS incrustado (copia literal de kr-skins.js del bundle
+       público v2.0.11). SINCRONIZACIÓN: si cambian los skins en
+       kr-skins.js, actualizar también este bloque.
+     - widgetSkin se añade al payload de guardado.
+     - Sin cambios en el resto de secciones, estética ni lógica previa.
+   v1.0.1 · 10 May 2026 · Fix retry postMessage móvil
+     - salonConfigReady se reenvía cada 800ms hasta recibir respuesta
+     - Resuelve race condition page code no listo en móvil
+   v1.0.0 · 9 May 2026 · Creación inicial
+     - 6 secciones: Identidad, Horarios, Operativa, Comunicaciones,
+       Módulos Opcionales, Legal
+     - Modo oscuro
+     - Lectura + edición + guardado global
+     - Auto-creación primera fila si no existe
+     - 40 campos SalonConfig
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --bg-primary: #0f1117;
+  --bg-card: #1a1d27;
+  --bg-input: #242836;
+  --bg-section-header: #1e2230;
+  --border: #2e3348;
+  --border-focus: #d4a843;
+  --text-primary: #e8e6e1;
+  --text-secondary: #9b97a0;
+  --text-label: #bbb8c3;
+  --accent: #d4a843;
+  --accent-hover: #e5bc5a;
+  --success: #4ade80;
+  --error: #f87171;
+  --warning: #fbbf24;
+  --toggle-off: #3a3f52;
+  --toggle-on: #d4a843;
+  --scrollbar-track: #1a1d27;
+  --scrollbar-thumb: #3a3f52;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: "Bai Jamjuree", 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+body::-webkit-scrollbar { width: 6px; }
+body::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+body::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-brand {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.header-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.header-version {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-left: 4px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ── Status badge ── */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  transition: all 0.3s ease;
+}
+
+.status-badge.modified {
+  background: rgba(251, 191, 36, 0.15);
+  color: var(--warning);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+.status-badge.saving {
+  background: rgba(212, 168, 67, 0.15);
+  color: var(--accent);
+}
+
+.status-badge.saved {
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--success);
+}
+
+.status-badge.error {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--error);
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* ── Botón guardar ── */
+.btn-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #0f1117;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-transform: uppercase;
+}
+
+.btn-save:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.btn-save:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ── Loading overlay ── */
+.loading-overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  gap: 16px;
+}
+
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* ── Content area ── */
+.content {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 20px 24px 40px;
+}
+
+/* ── Sections ── */
+.section {
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-card);
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: var(--bg-section-header);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s ease;
+}
+
+.section-header:hover {
+  background: #252a3a;
+}
+
+.section-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.section-icon {
+  font-size: 16px;
+  width: 24px;
+  text-align: center;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.section-count {
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.section-chevron {
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: transform 0.3s ease;
+}
+
+.section.collapsed .section-chevron {
+  transform: rotate(-90deg);
+}
+
+.section.collapsed .section-body {
+  display: none;
+}
+
+.section-body {
+  padding: 16px 18px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 20px;
+}
+
+.section-body.single-col {
+  grid-template-columns: 1fr;
+}
+
+/* ── Field group ── */
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field-group.full-width {
+  grid-column: 1 / -1;
+}
+
+.field-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-label);
+  letter-spacing: 0.3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-label .field-id {
+  font-size: 9px;
+  color: var(--text-secondary);
+  font-family: 'Courier New', monospace;
+  opacity: 0.6;
+}
+
+.field-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  outline: none;
+}
+
+.field-input:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px rgba(212, 168, 67, 0.15);
+}
+
+.field-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
+.field-input.modified {
+  border-color: var(--warning);
+  background: rgba(251, 191, 36, 0.05);
+}
+
+textarea.field-input {
+  min-height: 80px;
+  resize: vertical;
+}
+
+select.field-input {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%239b97a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+
+/* ── Toggle switch ── */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+}
+
+.toggle-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toggle-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.toggle-desc {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.toggle-switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--toggle-off);
+  border-radius: 24px;
+  transition: 0.3s ease;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: 0.3s ease;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: var(--toggle-on);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+}
+
+/* ── Toast ── */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 999;
+  transform: translateY(80px);
+  opacity: 0;
+  transition: all 0.3s ease;
+  pointer-events: none;
+}
+
+.toast.visible {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.toast.success {
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--success);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+}
+
+.toast.error {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--error);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+}
+
+/* ── New badge ── */
+.new-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--success);
+  border: 1px solid rgba(74, 222, 128, 0.25);
+  border-radius: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  margin-bottom: 16px;
+}
+
+/* ── Apariencia: selector de skin ── */
+.skin-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.skin-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  cursor: pointer;
+  background: var(--bg-input);
+  transition: border-color 0.2s ease, transform 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skin-card:hover {
+  transform: translateY(-2px);
+}
+
+.skin-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(212, 168, 67, 0.25);
+}
+
+.skin-swatch {
+  height: 40px;
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.skin-swatch .sw-accent {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.7);
+}
+
+.skin-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.skin-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.skin-note {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.skin-id {
+  font-size: 9px;
+  color: var(--text-secondary);
+  font-family: 'Courier New', monospace;
+  opacity: 0.6;
+}
+
+/* ── Apariencia: preview en vivo ── */
+.skin-preview-wrap {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+}
+
+.skin-preview-title {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-label);
+  margin-bottom: 8px;
+  letter-spacing: 0.3px;
+}
+
+/* El preview usa los tokens --kr-* del skin aplicados inline en #skinPreview.
+   Defaults = Niebla (igual que :host del bundle público). */
+.kr-preview {
+  --kr-bg: oklch(98.6% 0.003 250);
+  --kr-surface: oklch(100% 0 0);
+  --kr-surface-2: oklch(97.2% 0.003 250);
+  --kr-inset: oklch(95.5% 0.004 250);
+  --kr-line: oklch(90% 0.005 250);
+  --kr-line-2: oklch(80% 0.008 250);
+  --kr-ink: oklch(22% 0.01 258);
+  --kr-ink-2: oklch(42% 0.012 258);
+  --kr-ink-3: oklch(60% 0.012 258);
+  --kr-accent: oklch(40% 0.022 258);
+  --kr-accent-2: oklch(33% 0.024 258);
+  --kr-accent-ink: oklch(98.5% 0.003 250);
+  --kr-accent-soft: oklch(93.5% 0.012 256);
+  --kr-accent-line: oklch(62% 0.02 256);
+  --kr-radius: 12px;
+  --kr-font: "Bai Jamjuree", ui-sans-serif, system-ui, sans-serif;
+
+  font-family: var(--kr-font);
+  background: var(--kr-bg);
+  border: 1px solid var(--kr-line);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* layout interno: contenido principal + rail "tu reserva" */
+.kr-preview__layout {
+  display: grid;
+  grid-template-columns: 1fr 240px;
+  gap: 14px;
+  align-items: start;
+}
+
+.kr-preview__main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* cabecera del servicio (foto + datos) */
+.kr-preview__svc {
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+  padding: 12px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.kr-preview__photo {
+  width: 84px;
+  height: 84px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex: none;
+  border: 1px solid var(--kr-line);
+}
+
+.kr-preview__svc-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.kr-preview__svc-cat {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--kr-accent);
+}
+
+.kr-preview__svc-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--kr-ink);
+}
+
+.kr-preview__svc-desc {
+  font-size: 10px;
+  color: var(--kr-ink-3);
+  line-height: 1.4;
+}
+
+.kr-preview__svc-meta {
+  font-size: 11px;
+  color: var(--kr-ink-2);
+  margin-top: 2px;
+}
+
+.kr-preview__svc-meta b { color: var(--kr-ink); }
+
+/* paso */
+.kr-preview__step-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--kr-accent);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.kr-preview__step-tag::before {
+  content: '';
+  width: 6px; height: 6px;
+  background: var(--kr-accent);
+  border-radius: 1px;
+  display: inline-block;
+}
+
+.kr-preview__step-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--kr-ink);
+  margin-top: 4px;
+}
+
+.kr-preview__step-sub {
+  font-size: 10px;
+  color: var(--kr-ink-3);
+  margin-bottom: 2px;
+}
+
+.kr-preview__minilabel {
+  font-size: 10px;
+  color: var(--kr-ink-2);
+  margin: 4px 0 2px;
+}
+
+/* chips de día */
+.kr-preview__days {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.kr-preview__day {
+  width: 46px;
+  padding: 7px 0;
+  border-radius: 10px;
+  border: 1px solid var(--kr-line-2);
+  background: var(--kr-surface);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.kr-preview__day small { font-size: 8px; color: var(--kr-ink-3); text-transform: lowercase; }
+.kr-preview__day b { font-size: 14px; color: var(--kr-ink); font-weight: 600; }
+.kr-preview__day span { font-size: 7px; color: var(--kr-ink-3); }
+
+.kr-preview__day.is-sel {
+  background: var(--kr-accent);
+  border-color: var(--kr-accent);
+}
+.kr-preview__day.is-sel small,
+.kr-preview__day.is-sel b,
+.kr-preview__day.is-sel span { color: var(--kr-accent-ink, #fff); }
+
+/* profesionales */
+.kr-preview__pros {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.kr-preview__pro {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px 6px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--kr-line-2);
+  background: var(--kr-surface);
+  font-size: 11px;
+  color: var(--kr-ink-2);
+}
+
+.kr-preview__pro-av {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--kr-inset);
+  color: var(--kr-ink-2);
+  font-size: 9px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.kr-preview__pro.is-sel {
+  border-color: var(--kr-accent);
+  background: var(--kr-accent-soft);
+  color: var(--kr-accent-2);
+  font-weight: 600;
+}
+.kr-preview__pro.is-sel .kr-preview__pro-av {
+  background: var(--kr-accent);
+  color: var(--kr-accent-ink, #fff);
+}
+
+/* rail "tu reserva" */
+.kr-preview__rail {
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-accent-line);
+  border-radius: var(--kr-radius);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kr-preview__rail-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--kr-ink-3);
+}
+
+.kr-preview__rail-svc {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--kr-ink);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--kr-line);
+}
+
+.kr-preview__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--kr-line);
+}
+
+.kr-preview__row span { color: var(--kr-ink-3); }
+.kr-preview__row b { color: var(--kr-ink); font-weight: 600; }
+
+.kr-preview__total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 2px;
+}
+
+.kr-preview__total span { font-size: 13px; color: var(--kr-ink); font-weight: 600; }
+.kr-preview__total b { font-size: 22px; color: var(--kr-ink); font-weight: 700; letter-spacing: -0.5px; }
+
+@media (max-width: 720px) {
+  .kr-preview__layout { grid-template-columns: 1fr; }
+}
+
+/* ── Responsive ── */
+@media (max-width: 640px) {
+  .section-body {
+    grid-template-columns: 1fr;
+  }
+  .header {
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .header-right {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .content {
+    padding: 16px 12px 40px;
+  }
+}
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<div class="header">
+  <div class="header-left">
+    <div>
+      <span class="header-brand">KAMISUITE</span>
+      <span class="header-title"> · CONFIGURACIÓN SALÓN</span>
+      <span class="header-version">v1.0.12</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="status-badge" id="statusBadge">
+      <span class="status-dot"></span>
+      <span id="statusText">Cargando...</span>
+    </div>
+    <button class="btn-save" id="btnSave" disabled onclick="guardar()">
+      💾 GUARDAR
+    </button>
+  </div>
+</div>
+
+<!-- ── Main content ── -->
+<div class="content" id="mainContent">
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="spinner"></div>
+    <div class="loading-text">Cargando configuración del salón...</div>
+  </div>
+</div>
+
+<!-- ── Toast ── -->
+<div class="toast" id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   WIDGET LOGIC
+   ═══════════════════════════════════════════════════════════════ */
+
+// ── State ──
+let configData = null;
+let originalData = null;
+let hasChanges = false;
+let isSaving = false;
+let readyReceived = false;
+let readyRetryInterval = null;
+let selectedSkin = 'niebla';     // skin actualmente seleccionado en el editor
+let originalSkin = 'niebla';     // skin tal como vino del CMS (para detectar cambios)
+
+// v1.0.9 — Estado de la sección "Gestión Externos".
+// externalStaffData: array vivo con la comisión y el activeStatus que
+// muestra el widget en cada momento (mutado por los handlers de UI).
+// originalExternalStaff: snapshot del último estado guardado (para
+// detectar cambios y para poder revertir).
+// externalStaffLoaded: true cuando el backend ya respondió.
+let externalStaffData = [];
+let originalExternalStaff = [];
+let externalStaffLoaded = false;
+
+/* ───────────────────────────────────────────────────────────────
+   KR_SKINS — copia literal de kr-skins.js (bundle público v2.0.11)
+   SINCRONIZACIÓN: si se editan los skins en el bundle, replicar aquí.
+   Cada skin: { group, label, note, swatch:[bg,accent], tokens:{...} }
+   ─────────────────────────────────────────────────────────────── */
+const PREVIEW_HEADER_IMG = "data:image/jpeg;base64,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";
+
+const KR_SKINS = {
+  niebla: {
+    group: "neutra", label: "Niebla", note: "Fría · de arranque",
+    swatch: ["oklch(98.6% 0.003 250)", "oklch(40% 0.022 258)"],
+    tokens: {}
+  },
+  arena: {
+    group: "neutra", label: "Arena", note: "Cálida · papel",
+    swatch: ["oklch(98.4% 0.009 78)", "oklch(42% 0.028 64)"],
+    tokens: {
+      "--kr-bg": "oklch(98.4% 0.009 78)",
+      "--kr-surface": "oklch(99.6% 0.006 80)",
+      "--kr-surface-2": "oklch(97% 0.012 78)",
+      "--kr-inset": "oklch(95.6% 0.014 76)",
+      "--kr-line": "oklch(90% 0.016 72)",
+      "--kr-line-2": "oklch(82% 0.02 68)",
+      "--kr-ink": "oklch(31% 0.018 60)",
+      "--kr-ink-2": "oklch(48% 0.016 60)",
+      "--kr-ink-3": "oklch(64% 0.014 62)",
+      "--kr-accent": "oklch(42% 0.028 64)",
+      "--kr-accent-2": "oklch(35% 0.03 62)",
+      "--kr-accent-soft": "oklch(93% 0.022 72)",
+      "--kr-accent-line": "oklch(64% 0.026 66)",
+      "--kr-focus": "oklch(58% 0.09 70)",
+      "--kr-radius": "13px"
+    }
+  },
+  grafito: {
+    group: "neutra", label: "Grafito", note: "Puro · alto contraste",
+    swatch: ["oklch(99% 0 0)", "oklch(22% 0 0)"],
+    tokens: {
+      "--kr-bg": "oklch(99% 0 0)",
+      "--kr-surface": "oklch(100% 0 0)",
+      "--kr-surface-2": "oklch(97% 0 0)",
+      "--kr-inset": "oklch(95.5% 0 0)",
+      "--kr-line": "oklch(89% 0 0)",
+      "--kr-line-2": "oklch(80% 0 0)",
+      "--kr-ink": "oklch(20% 0 0)",
+      "--kr-ink-2": "oklch(42% 0 0)",
+      "--kr-ink-3": "oklch(62% 0 0)",
+      "--kr-accent": "oklch(22% 0 0)",
+      "--kr-accent-2": "oklch(12% 0 0)",
+      "--kr-accent-ink": "oklch(99% 0 0)",
+      "--kr-accent-soft": "oklch(94.5% 0 0)",
+      "--kr-accent-line": "oklch(55% 0 0)",
+      "--kr-focus": "oklch(50% 0 0)",
+      "--kr-radius": "6px"
+    }
+  },
+  lumiere: {
+    group: "salon", label: "Lumière", note: "Lujo · latón",
+    swatch: ["oklch(98.2% 0.012 88)", "oklch(56% 0.085 78)"],
+    tokens: {
+      "--kr-bg": "oklch(98.2% 0.012 88)",
+      "--kr-surface": "oklch(99.6% 0.008 88)",
+      "--kr-surface-2": "oklch(96.6% 0.016 86)",
+      "--kr-inset": "oklch(95% 0.02 84)",
+      "--kr-line": "oklch(90% 0.022 82)",
+      "--kr-line-2": "oklch(80% 0.03 80)",
+      "--kr-ink": "oklch(26% 0.012 70)",
+      "--kr-ink-2": "oklch(45% 0.014 72)",
+      "--kr-ink-3": "oklch(62% 0.018 76)",
+      "--kr-accent": "oklch(56% 0.085 78)",
+      "--kr-accent-2": "oklch(47% 0.08 74)",
+      "--kr-accent-ink": "oklch(99% 0.01 88)",
+      "--kr-accent-soft": "oklch(93% 0.035 84)",
+      "--kr-accent-line": "oklch(66% 0.075 80)",
+      "--kr-focus": "oklch(58% 0.085 78)",
+      "--kr-radius": "4px"
+    }
+  },
+  botanica: {
+    group: "salon", label: "Botánica", note: "Fresco · verde",
+    swatch: ["oklch(98.6% 0.01 150)", "oklch(48% 0.09 156)"],
+    tokens: {
+      "--kr-bg": "oklch(98.6% 0.01 150)",
+      "--kr-surface": "oklch(99.8% 0.006 150)",
+      "--kr-surface-2": "oklch(97% 0.016 152)",
+      "--kr-inset": "oklch(95.4% 0.02 152)",
+      "--kr-line": "oklch(90% 0.022 154)",
+      "--kr-line-2": "oklch(81% 0.03 156)",
+      "--kr-ink": "oklch(28% 0.025 160)",
+      "--kr-ink-2": "oklch(46% 0.022 158)",
+      "--kr-ink-3": "oklch(63% 0.02 156)",
+      "--kr-accent": "oklch(48% 0.09 156)",
+      "--kr-accent-2": "oklch(40% 0.085 158)",
+      "--kr-accent-soft": "oklch(93% 0.03 152)",
+      "--kr-accent-line": "oklch(62% 0.08 156)",
+      "--kr-focus": "oklch(56% 0.1 156)",
+      "--kr-radius": "16px"
+    }
+  },
+  aurora: {
+    group: "salon", label: "Aurora", note: "Moderno · magenta",
+    swatch: ["oklch(98.7% 0.006 320)", "oklch(56% 0.16 350)"],
+    tokens: {
+      "--kr-bg": "oklch(98.7% 0.006 320)",
+      "--kr-surface": "oklch(100% 0 0)",
+      "--kr-surface-2": "oklch(97.4% 0.01 322)",
+      "--kr-inset": "oklch(96% 0.014 326)",
+      "--kr-line": "oklch(91% 0.016 330)",
+      "--kr-line-2": "oklch(82% 0.024 336)",
+      "--kr-ink": "oklch(27% 0.03 326)",
+      "--kr-ink-2": "oklch(46% 0.026 330)",
+      "--kr-ink-3": "oklch(64% 0.022 334)",
+      "--kr-accent": "oklch(56% 0.16 350)",
+      "--kr-accent-2": "oklch(48% 0.17 352)",
+      "--kr-accent-soft": "oklch(94% 0.04 348)",
+      "--kr-accent-line": "oklch(66% 0.14 350)",
+      "--kr-focus": "oklch(58% 0.16 350)",
+      "--kr-radius": "12px",
+      "--kr-font": '"Instrument Sans", ui-sans-serif, system-ui, sans-serif'
+    }
+  },
+  oceano: {
+    group: "salon", label: "Azul Océano", note: "Celeste · marino",
+    swatch: ["oklch(98.4% 0.012 232)", "oklch(55% 0.15 240)"],
+    tokens: {
+      "--kr-bg": "oklch(98.4% 0.012 232)",
+      "--kr-surface": "oklch(99.7% 0.007 232)",
+      "--kr-surface-2": "oklch(97% 0.018 233)",
+      "--kr-inset": "oklch(95.2% 0.024 233)",
+      "--kr-line": "oklch(90% 0.028 234)",
+      "--kr-line-2": "oklch(80.5% 0.042 236)",
+      "--kr-ink": "oklch(28% 0.045 250)",
+      "--kr-ink-2": "oklch(46% 0.038 248)",
+      "--kr-ink-3": "oklch(63% 0.032 244)",
+      "--kr-accent": "oklch(50% 0.13 244)",
+      "--kr-accent-2": "oklch(42% 0.14 246)",
+      "--kr-accent-ink": "oklch(99% 0.015 233)",
+      "--kr-accent-soft": "oklch(93% 0.038 234)",
+      "--kr-accent-line": "oklch(64% 0.11 240)",
+      "--kr-focus": "oklch(58% 0.14 244)",
+      "--kr-radius": "12px",
+      "--kr-orange": "oklch(56% 0.13 240)",
+      "--kr-orange-2": "oklch(48% 0.14 242)",
+      "--kr-orange-ink": "oklch(99% 0.015 233)",
+      "--kr-orange-soft": "oklch(95% 0.032 233)",
+      "--kr-orange-line": "oklch(72% 0.085 237)",
+      "--kr-green-soft": "oklch(90% 0.072 233)",
+      "--kr-green-soft-2": "oklch(85% 0.095 233)",
+      "--kr-green": "oklch(54% 0.155 240)",
+      "--kr-green-ink": "oklch(41% 0.115 244)",
+      "--kr-green-ink-on": "oklch(99% 0.02 233)",
+      "--kr-green-line": "oklch(77% 0.092 236)"
+    }
+  }
+};
+
+const SKIN_ORDER = ['niebla', 'arena', 'grafito', 'lumiere', 'botanica', 'aurora', 'oceano'];
+
+// ── Field definitions by section ──
+const SECTIONS = [
+  {
+    key: 'identidad',
+    title: 'Identidad',
+    icon: '🏪',
+    fields: [
+      { id: 'brandName',    label: 'Nombre comercial',  type: 'text',  placeholder: 'Ej: Hair-Times' },
+      { id: 'legalName',    label: 'Razón social',      type: 'text',  placeholder: 'Ej: CEFFYL REAL ESTATE SL' },
+      { id: 'taxId',        label: 'CIF / NIF',         type: 'text',  placeholder: 'Ej: B72957673' },
+      { id: 'phone',        label: 'Teléfono',          type: 'text',  placeholder: 'Ej: 916 266 222' },
+      { id: 'address',      label: 'Dirección completa', type: 'text', placeholder: 'Calle, nº, CP, Ciudad', fullWidth: true },
+      { id: 'domain',       label: 'Dominio web',       type: 'text',  placeholder: 'Ej: hair-times.com' },
+      { id: 'siteUrl',      label: 'URL del site',      type: 'text',  placeholder: 'https://www.hair-times.com' },
+      { id: 'logoUrl',      label: 'URL del logo',      type: 'text',  placeholder: 'https://...' },
+      { id: 'tier',         label: 'Plan contratado',   type: 'select', options: ['', 'BUSINESS', 'ELITE', 'ELITE_IA'] },
+      { id: 'active',       label: 'Salón activo',      type: 'boolean', desc: 'Activo en la plataforma' },
+      { id: 'bookingEmail', label: 'Email reservas',    type: 'text',  placeholder: 'booking@...' },
+      { id: 'invoiceEmail', label: 'Email facturas',    type: 'text',  placeholder: 'info@...' },
+      { id: 'gmailAccount', label: 'Cuenta Gmail',      type: 'text',  placeholder: 'salon@gmail.com' },
+      { id: 'instagramAccount', label: 'Instagram',     type: 'text',  placeholder: '@salon' },
+      { id: 'facebookAccount',  label: 'Facebook',      type: 'text',  placeholder: 'URL o nombre' },
+    ]
+  },
+  {
+    key: 'horarios',
+    title: 'Horarios',
+    icon: '🕐',
+    fields: [
+      { id: 'hoursMonday',    label: 'Lunes',     type: 'text', placeholder: '10:00-20:00 (vacío = cerrado)' },
+      { id: 'hoursTuesday',   label: 'Martes',    type: 'text', placeholder: '10:00-20:00' },
+      { id: 'hoursWednesday', label: 'Miércoles', type: 'text', placeholder: '10:00-20:00' },
+      { id: 'hoursThursday',  label: 'Jueves',    type: 'text', placeholder: '10:00-20:00' },
+      { id: 'hoursFriday',    label: 'Viernes',   type: 'text', placeholder: '10:00-20:00' },
+      { id: 'hoursSaturday',  label: 'Sábado',    type: 'text', placeholder: '10:00-14:00' },
+    ]
+  },
+  {
+    key: 'accesos',
+    title: 'Accesos',
+    icon: '🔐',
+    fields: [
+      { id: 'usersActivation', label: 'Sistema de login en Recepción', type: 'boolean', desc: 'Activa el control de acceso por PIN en la pantalla de Recepción' },
+      { id: 'masterPin',       label: 'PIN maestro (4 dígitos)',       type: 'pin', placeholder: 'Ej: 1234', maxlength: 4, desc: 'Permite resetear el PIN de un empleado desde el control de accesos' },
+      { id: 'timeOut',         label: 'Inactividad antes de pedir login (segundos)', type: 'number', placeholder: 'Ej: 60', desc: 'Segundos de inactividad tras los que Recepción vuelve a pedir el login' },
+    ]
+  },
+  {
+    key: 'operativa',
+    title: 'Operativa',
+    icon: '⚙️',
+    fields: [
+      { id: 'defaultProfessional', label: 'Nombre genérico equipo', type: 'text', placeholder: 'Ej: Equipo Hair-Times' },
+      { id: 'reportsTitle',        label: 'Título en informes',    type: 'text', placeholder: 'Ej: Hair Times' },
+      { id: 'externalStaffName',   label: 'Staff externo — nombre', type: 'text', placeholder: 'Ej: Emy' },
+      { id: 'externalStaffArea',   label: 'Staff externo — área',   type: 'text', placeholder: 'Ej: uñas pestañas' },
+      { id: 'externalStaffResourceId', label: 'Staff externo — Resource ID', type: 'text', placeholder: 'UUID Wix' },
+      { id: 'processResourceId',   label: 'PROCESO — Resource ID',  type: 'text', placeholder: 'UUID recurso PROCESO' },
+      { id: 'anyResourceId',       label: 'CUALQUIERA — Resource ID', type: 'text', placeholder: 'UUID recurso CUALQUIERA' },
+      { id: 'wixAnclaId',          label: 'ANCLA — Service ID',       type: 'text', placeholder: 'UUID del servicio ancla' },
+      { id: 'fondoCajaFijo',       label: 'Fondo fijo de caja diario (€)', type: 'number', placeholder: 'Ej: 100 · vacío = arrastrar cierre anterior' },
+    ]
+  },
+  {
+    // v1.0.9 — Sección "Gestión Externos" (render propio).
+    // El array `fields` queda vacío intencionadamente: las tarjetas
+    // se generan dinámicamente en renderExternalStaffSection() a
+    // partir de externalStaffData (respuesta del backend
+    // externalStaffLogic.listExternalStaff).
+    key: 'gestionExternos',
+    title: 'Gestión Externos',
+    icon: '🤝',
+    custom: 'externos'
+  },
+  {
+    key: 'comunicaciones',
+    title: 'Comunicaciones',
+    icon: '📧',
+    fields: [
+      { id: 'confirmationTemplateId', label: 'Template confirmación', type: 'text', placeholder: 'Ej: VA5UQRG' },
+      { id: 'reminderTemplateId',     label: 'Template recordatorio', type: 'text', placeholder: 'Ej: VGPVvYO' },
+      { id: 'senderEmail',  label: 'Email remitente',  type: 'text', placeholder: 'noreply@...' },
+      { id: 'senderName',   label: 'Nombre remitente',  type: 'text', placeholder: 'Ej: Hair-Times' },
+      { id: 'waPhoneId',    label: 'WhatsApp Phone ID',  type: 'text', placeholder: 'Meta Phone Number ID' },
+      { id: 'waAccountId',  label: 'WhatsApp Account ID', type: 'text', placeholder: 'Meta WABA ID' },
+      { id: 'waActive',     label: 'WhatsApp activo',    type: 'boolean', desc: 'Envío de mensajes por WhatsApp' },
+    ]
+  },
+  {
+    key: 'modulos',
+    title: 'Módulos Opcionales',
+    icon: '🧩',
+    fields: [
+      { id: 'shopActive',    label: 'Tienda online',       type: 'boolean', desc: 'Módulo de venta de productos activo' },
+      { id: 'loyaltyActive', label: 'Club de fidelización', type: 'boolean', desc: 'Programa de puntos y recompensas activo' },
+      { id: 'whatsappPro',   label: 'WhatsApp PRO',         type: 'boolean', desc: 'Funcionalidades avanzadas de WhatsApp (campañas, marketing)' },
+      { id: 'arqueoActivo',  label: 'Arqueo y cierre de caja', type: 'boolean', desc: 'Activa la apertura de caja por la mañana (fondo inicial) y el arqueo/cierre del día en Recepción' },
+    ]
+  },
+  {
+    key: 'legal',
+    title: 'Legal / RGPD',
+    icon: '📜',
+    fields: [
+      { id: 'privacyPolicyUrl',  label: 'URL Política de Privacidad', type: 'text', placeholder: 'https://...' },
+      { id: 'termsConditionsUrl', label: 'URL Términos y Condiciones', type: 'text', placeholder: 'https://...' },
+      { id: 'gdprName',  label: 'Responsable RGPD',   type: 'text', placeholder: 'Nombre del responsable' },
+      { id: 'gdprEmail', label: 'Email derechos RGPD', type: 'text', placeholder: 'gdpr@...' },
+      { id: 'gdprText',  label: 'Texto legal RGPD',    type: 'textarea', placeholder: 'Texto de protección de datos...', fullWidth: true },
+    ]
+  },
+  {
+    // v1.0.8 — Sección Facturación.
+    // 4 campos leídos por facturacionSalonLogic.web (módulo de Facturación
+    // del Salón a sus Clientes Finales). Valores INICIALES de la serie y
+    // contador: el contador vivo se mantiene en InvoiceCounters, no aquí.
+    key: 'facturacion',
+    title: 'Facturación',
+    icon: '🧾',
+    fields: [
+      { id: 'invoiceSeries',      label: 'Serie facturas (F1)',       type: 'text',   placeholder: 'Ej: F' },
+      { id: 'ticketSeries',       label: 'Serie tickets (F2)',        type: 'text',   placeholder: 'Ej: T' },
+      { id: 'invoiceStartNumber', label: 'Nº inicial serie facturas', type: 'number', placeholder: 'Ej: 1' },
+      { id: 'ticketStartNumber',  label: 'Nº inicial serie tickets',  type: 'number', placeholder: 'Ej: 1' },
+    ]
+  },
+  {
+    key: 'apariencia',
+    title: 'Apariencia',
+    icon: '🎨',
+    custom: 'skin'   // sección con render propio (selector de skin + preview)
+  }
+];
+
+// ── Message listener ──
+window.addEventListener('message', (event) => {
+  let msg;
+  try {
+    msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+  } catch (e) {
+    return;
+  }
+  if (!msg || !msg.type) return;
+  handleMessage(msg);
+});
+
+// ── RETRY: enviar salonConfigReady cada 800ms hasta recibir respuesta ──
+function startReadyRetry() {
+  window.parent.postMessage({ type: 'salonConfigReady' }, '*');
+
+  readyRetryInterval = setInterval(() => {
+    if (readyReceived) {
+      clearInterval(readyRetryInterval);
+      readyRetryInterval = null;
+      return;
+    }
+    console.log('[SalonConfig Widget] Retry salonConfigReady...');
+    window.parent.postMessage({ type: 'salonConfigReady' }, '*');
+  }, 800);
+}
+
+// Arrancar retry al cargar
+startReadyRetry();
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'salonConfigLoading':
+      readyReceived = true;
+      if (readyRetryInterval) { clearInterval(readyRetryInterval); readyRetryInterval = null; }
+      showLoading(msg.message);
+      break;
+    case 'salonConfigData':
+      readyReceived = true;
+      if (readyRetryInterval) { clearInterval(readyRetryInterval); readyRetryInterval = null; }
+      configData = msg.config;
+      originalData = JSON.parse(JSON.stringify(msg.config));
+      // skin actual desde el CMS (fallback niebla)
+      selectedSkin = (configData.widgetSkin && KR_SKINS[configData.widgetSkin]) ? configData.widgetSkin : 'niebla';
+      originalSkin = selectedSkin;
+      hideLoading();
+      renderForm();
+      if (msg.isNew) {
+        showNewBadge();
+      }
+      setStatus('ready', 'Listo');
+      // v1.0.9 — pedir la lista de externos ahora que ya hay UI.
+      window.parent.postMessage({ type: 'externalStaffReady' }, '*');
+      break;
+    case 'salonConfigSaving':
+      setStatus('saving', 'Guardando...');
+      break;
+    case 'salonConfigSaved':
+      configData = msg.config;
+      originalData = JSON.parse(JSON.stringify(msg.config));
+      selectedSkin = (configData.widgetSkin && KR_SKINS[configData.widgetSkin]) ? configData.widgetSkin : 'niebla';
+      originalSkin = selectedSkin;
+      hasChanges = false;
+      isSaving = false;
+      document.getElementById('btnSave').disabled = true;
+      setStatus('saved', 'Guardado ✓');
+      showToast('Configuración guardada correctamente', 'success');
+      clearModifiedMarks();
+      // v1.0.9 — recalcular estado por si había cambios de externos
+      // aún sin guardar (poco probable, pero coherente).
+      checkForChanges();
+      setTimeout(() => setStatus('ready', 'Listo'), 3000);
+      break;
+    case 'salonConfigError':
+      readyReceived = true;
+      if (readyRetryInterval) { clearInterval(readyRetryInterval); readyRetryInterval = null; }
+      isSaving = false;
+      document.getElementById('btnSave').disabled = false;
+      setStatus('error', 'Error');
+      showToast('Error: ' + (msg.message || 'desconocido'), 'error');
+      break;
+
+    // ── v1.0.9 · Gestión Externos ────────────────────────────────
+    case 'externalStaffData':
+      externalStaffData = Array.isArray(msg.staff) ? msg.staff.map(x => ({
+        externalServicesId:   x.externalServicesId,
+        staffResourceId:      x.staffResourceId,
+        displayName:          x.displayName,
+        canonicalName:        x.canonicalName,
+        contactPerson:        x.contactPerson,
+        commissionPercentage: Number(x.commissionPercentage || 0),
+        activeStatus:         x.activeStatus === true,
+        serviceName:          x.serviceName || ''
+      })) : [];
+      originalExternalStaff = JSON.parse(JSON.stringify(externalStaffData));
+      externalStaffLoaded = true;
+      renderExternalStaffBody();
+      checkForChanges();
+      break;
+    case 'externalStaffSaving':
+      // el estado global 'saving' ya está activo desde guardar()
+      break;
+    case 'externalStaffSaved':
+      // Reflejar los cambios confirmados en el snapshot base.
+      if (Array.isArray(msg.saved)) {
+        for (const s of msg.saved) {
+          const idx = externalStaffData.findIndex(x => x.externalServicesId === s.externalServicesId);
+          if (idx >= 0) {
+            externalStaffData[idx].commissionPercentage = Number(s.commissionPercentage || 0);
+            externalStaffData[idx].activeStatus         = s.activeStatus === true;
+            // v1.0.10 — serviceName confirmado por el backend (puede
+            // venir undefined si el backend antiguo aún no lo devuelve;
+            // en ese caso, preservamos el valor local ya escrito).
+            if (s.serviceName !== undefined && s.serviceName !== null) {
+              externalStaffData[idx].serviceName = String(s.serviceName);
+            }
+          }
+        }
+      }
+      originalExternalStaff = JSON.parse(JSON.stringify(externalStaffData));
+      if (Array.isArray(msg.errors) && msg.errors.length) {
+        showToast('Algunos externos no se han podido guardar: ' + msg.errors.length, 'error');
+      }
+      // El botón GUARDAR y el estado se resetean cuando ambos guardados
+      // están confirmados (SalonConfig + externos). Ver checkForChanges.
+      renderExternalStaffBody();
+      checkForChanges();
+      break;
+    case 'externalStaffError':
+      showToast('Error en externos: ' + (msg.message || 'desconocido'), 'error');
+      break;
+  }
+}
+
+// ── Render ──
+function renderForm() {
+  const content = document.getElementById('mainContent');
+  let html = '';
+
+  html += '<div id="newBadgeContainer"></div>';
+
+  SECTIONS.forEach((section) => {
+    if (section.custom === 'skin') {
+      html += renderSkinSection(section);
+      return;
+    }
+    // v1.0.9 — sección "Gestión Externos": marco propio con body
+    // vacío que se rellena al recibir externalStaffData.
+    if (section.custom === 'externos') {
+      html += renderExternalStaffSection(section);
+      return;
+    }
+
+    const fieldCount = section.fields.length;
+    const isSingleCol = section.key === 'modulos';
+
+    html += `<div class="section collapsed" id="section-${section.key}">`;
+    html += `<div class="section-header" onclick="toggleSection('${section.key}')">`;
+    html += `<div class="section-header-left">`;
+    html += `<span class="section-icon">${section.icon}</span>`;
+    html += `<span class="section-title">${section.title}</span>`;
+    html += `<span class="section-count">${fieldCount} campos</span>`;
+    html += `</div>`;
+    html += `<span class="section-chevron" id="chevron-${section.key}">▼</span>`;
+    html += `</div>`;
+
+    html += `<div class="section-body${isSingleCol ? ' single-col' : ''}">`;
+
+    section.fields.forEach(field => {
+      if (field.type === 'boolean') {
+        html += renderToggle(field);
+      } else {
+        html += renderField(field);
+      }
+    });
+
+    html += `</div></div>`;
+  });
+
+  content.innerHTML = html;
+
+  // Tras inyectar el HTML, aplicar el preview del skin seleccionado
+  applySkinPreview(selectedSkin);
+}
+
+function renderField(field) {
+  // v1.0.6 — para number, 0 es un valor válido (no vaciar con || '').
+  const rawVal = configData[field.id];
+  const value = (field.type === 'number')
+    ? ((rawVal === null || rawVal === undefined || rawVal === '') ? '' : String(rawVal))
+    : (rawVal || '');
+  const fullClass = field.fullWidth ? ' full-width' : '';
+
+  let inputHtml = '';
+
+  if (field.type === 'textarea') {
+    inputHtml = `<textarea class="field-input" id="field-${field.id}" 
+      data-field="${field.id}" data-original="${escapeAttr(value)}"
+      placeholder="${field.placeholder || ''}"
+      oninput="onFieldChange('${field.id}')">${escapeHtml(value)}</textarea>`;
+  } else if (field.type === 'select') {
+    inputHtml = `<select class="field-input" id="field-${field.id}"
+      data-field="${field.id}" data-original="${escapeAttr(value)}"
+      onchange="onFieldChange('${field.id}')">`;
+    (field.options || []).forEach(opt => {
+      const selected = opt === value ? ' selected' : '';
+      const label = opt === '' ? '— Seleccionar —' : opt;
+      inputHtml += `<option value="${escapeAttr(opt)}"${selected}>${escapeHtml(label)}</option>`;
+    });
+    inputHtml += `</select>`;
+  } else if (field.type === 'number' || field.type === 'pin') {
+    // v1.0.7 — number y pin comparten input (inputmode numeric + maxlength).
+    // La diferencia está en el GUARDADO: number → Number(); pin → texto
+    // literal (conserva ceros a la izquierda, p. ej. "0000").
+    const maxAttr = field.maxlength ? ` maxlength="${field.maxlength}"` : '';
+    inputHtml = `<input type="text" inputmode="numeric"${maxAttr} class="field-input" id="field-${field.id}"
+      data-field="${field.id}" data-original="${escapeAttr(value)}"
+      value="${escapeAttr(value)}"
+      placeholder="${field.placeholder || ''}"
+      oninput="onFieldChange('${field.id}')">`;
+  } else {
+    inputHtml = `<input type="text" class="field-input" id="field-${field.id}"
+      data-field="${field.id}" data-original="${escapeAttr(value)}"
+      value="${escapeAttr(value)}"
+      placeholder="${field.placeholder || ''}"
+      oninput="onFieldChange('${field.id}')">`;
+  }
+
+  return `<div class="field-group${fullClass}">
+    <label class="field-label">
+      ${escapeHtml(field.label)}
+      <span class="field-id">${field.id}</span>
+    </label>
+    ${inputHtml}
+  </div>`;
+}
+
+function renderToggle(field) {
+  const checked = configData[field.id] === true ? ' checked' : '';
+
+  return `<div class="field-group full-width">
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <span class="toggle-label">${escapeHtml(field.label)}</span>
+        ${field.desc ? `<span class="toggle-desc">${escapeHtml(field.desc)}</span>` : ''}
+        <span class="field-id" style="font-size:9px;color:var(--text-secondary);font-family:monospace;opacity:0.6;margin-top:2px;">${field.id}</span>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="field-${field.id}" data-field="${field.id}"
+          ${checked} onchange="onToggleChange('${field.id}')">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  </div>`;
+}
+
+// ── Render: sección Apariencia (selector de skin + preview) ──
+function renderSkinSection(section) {
+  let cards = '';
+  SKIN_ORDER.forEach(id => {
+    const skin = KR_SKINS[id];
+    if (!skin) return;
+    const bg = skin.swatch[0];
+    const accent = skin.swatch[1];
+    const sel = id === selectedSkin ? ' is-selected' : '';
+    cards += `<div class="skin-card${sel}" id="skincard-${id}" onclick="selectSkin('${id}')">
+      <div class="skin-swatch" style="background:${bg};">
+        <span class="sw-accent" style="background:${accent};"></span>
+      </div>
+      <div class="skin-meta">
+        <span class="skin-name">${escapeHtml(skin.label)}</span>
+        <span class="skin-note">${escapeHtml(skin.note)}</span>
+        <span class="skin-id">${id}</span>
+      </div>
+    </div>`;
+  });
+
+  return `<div class="section" id="section-apariencia">
+    <div class="section-header" onclick="toggleSection('apariencia')">
+      <div class="section-header-left">
+        <span class="section-icon">${section.icon}</span>
+        <span class="section-title">${section.title}</span>
+        <span class="section-count">widgetSkin</span>
+      </div>
+      <span class="section-chevron" id="chevron-apariencia">▼</span>
+    </div>
+    <div class="section-body single-col">
+      <div class="field-group full-width">
+        <label class="field-label">
+          Modelo de color del widget de reserva
+          <span class="field-id">widgetSkin</span>
+        </label>
+      </div>
+      <div class="skin-grid">${cards}</div>
+      <div class="skin-preview-wrap">
+        <div class="skin-preview-title">Previsualización en vivo · datos de ejemplo</div>
+        <div class="kr-preview" id="skinPreview">
+          <div class="kr-preview__layout">
+            <div class="kr-preview__main">
+
+              <div class="kr-preview__svc">
+                <img class="kr-preview__photo" src="${PREVIEW_HEADER_IMG}" alt="">
+                <div class="kr-preview__svc-info">
+                  <span class="kr-preview__svc-cat">Corte Mujer</span>
+                  <span class="kr-preview__svc-name">Corte Femenino</span>
+                  <span class="kr-preview__svc-desc">Corte personalizado adaptado al estilo, textura y movimiento del cabello.</span>
+                  <span class="kr-preview__svc-meta"><b>desde 20,50 €</b> · ≈ 30 min</span>
+                </div>
+              </div>
+
+              <div>
+                <span class="kr-preview__step-tag">Paso 1</span>
+                <div class="kr-preview__step-title">¿Cuándo y con quién?</div>
+                <div class="kr-preview__step-sub">Elige el día y la profesional para tu cita.</div>
+
+                <div class="kr-preview__minilabel">¿Qué día?</div>
+                <div class="kr-preview__days">
+                  <div class="kr-preview__day is-sel"><small>vie</small><b>19</b><span>hoy</span></div>
+                  <div class="kr-preview__day"><small>sáb</small><b>20</b><span>mañana</span></div>
+                  <div class="kr-preview__day"><small>dom</small><b>21</b><span>&nbsp;</span></div>
+                  <div class="kr-preview__day"><small>lun</small><b>22</b><span>&nbsp;</span></div>
+                  <div class="kr-preview__day"><small>mar</small><b>23</b><span>&nbsp;</span></div>
+                </div>
+
+                <div class="kr-preview__minilabel">Profesional · para el servicio principal</div>
+                <div class="kr-preview__pros">
+                  <div class="kr-preview__pro is-sel"><span class="kr-preview__pro-av">··</span>Cualquiera</div>
+                  <div class="kr-preview__pro"><span class="kr-preview__pro-av">LU</span>Lucía</div>
+                  <div class="kr-preview__pro"><span class="kr-preview__pro-av">MA</span>Marta</div>
+                  <div class="kr-preview__pro"><span class="kr-preview__pro-av">SA</span>Sara</div>
+                </div>
+              </div>
+
+            </div>
+
+            <div class="kr-preview__rail">
+              <span class="kr-preview__rail-tag">Tu reserva</span>
+              <span class="kr-preview__rail-svc">Corte Femenino</span>
+              <div class="kr-preview__row"><span>Día</span><b>vie 19 jun</b></div>
+              <div class="kr-preview__row"><span>Hora</span><b>Por elegir</b></div>
+              <div class="kr-preview__row"><span>Profesional</span><b>Cualquiera</b></div>
+              <div class="kr-preview__row"><span>Duración aprox.</span><b>30 min</b></div>
+              <div class="kr-preview__total"><span>Total</span><b>20,50 €</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── Apariencia: seleccionar skin ──
+function selectSkin(id) {
+  if (!KR_SKINS[id]) return;
+  selectedSkin = id;
+
+  // marca visual de la card seleccionada
+  SKIN_ORDER.forEach(s => {
+    const card = document.getElementById('skincard-' + s);
+    if (card) card.classList.toggle('is-selected', s === id);
+  });
+
+  applySkinPreview(id);
+  checkForChanges();
+}
+
+// ── Apariencia: aplicar tokens del skin al bloque de preview ──
+function applySkinPreview(id) {
+  const el = document.getElementById('skinPreview');
+  if (!el) return;
+  const skin = KR_SKINS[id];
+  if (!skin) return;
+
+  // limpiar cualquier token que algún skin pudiera haber fijado
+  const all = new Set();
+  Object.values(KR_SKINS).forEach(s => Object.keys(s.tokens || {}).forEach(k => all.add(k)));
+  all.forEach(k => el.style.removeProperty(k));
+
+  // aplicar los tokens del skin elegido (niebla = {} → defaults del CSS)
+  Object.entries(skin.tokens || {}).forEach(([k, v]) => el.style.setProperty(k, v));
+}
+
+// ── v1.0.9 · Render: sección "Gestión Externos" ───────────────────
+// Marco de la sección (header + body vacío). Se renderiza dentro del
+// bucle de renderForm. El contenido interior lo pinta después
+// renderExternalStaffBody() al recibir externalStaffData.
+function renderExternalStaffSection(section) {
+  return `<div class="section collapsed" id="section-${section.key}">
+    <div class="section-header" onclick="toggleSection('${section.key}')">
+      <div class="section-header-left">
+        <span class="section-icon">${section.icon}</span>
+        <span class="section-title">${section.title}</span>
+        <span class="section-count" id="ext-count">cargando…</span>
+      </div>
+      <span class="section-chevron" id="chevron-${section.key}">▼</span>
+    </div>
+    <div class="section-body single-col" id="ext-body">
+      <div class="field-group full-width">
+        <label class="field-label">Cargando empleados externos…</label>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Pinta el interior de la sección "Gestión Externos" tras recibir
+// externalStaffData. Cada tarjeta = 3 field-groups reutilizando las
+// clases nativas (.field-group, .field-label, .field-id, .field-input,
+// .toggle-row, .toggle-info, .toggle-label, .toggle-desc, .toggle-switch,
+// .toggle-slider) — sin CSS nuevo.
+function renderExternalStaffBody() {
+  const body   = document.getElementById('ext-body');
+  const countL = document.getElementById('ext-count');
+  if (!body) return;
+
+  if (!externalStaffLoaded) {
+    if (countL) countL.textContent = 'cargando…';
+    return;
+  }
+
+  if (!externalStaffData.length) {
+    if (countL) countL.textContent = '0 externos';
+    body.innerHTML = `<div class="field-group full-width">
+      <label class="field-label">No hay empleados marcados como externos en StaffConfig.</label>
+    </div>`;
+    return;
+  }
+
+  if (countL) countL.textContent = externalStaffData.length + (externalStaffData.length === 1 ? ' externo' : ' externos');
+
+  let html = '';
+  for (const item of externalStaffData) {
+    const idAttr = escapeAttr(item.externalServicesId);
+    const nombre = escapeHtml(item.displayName || item.canonicalName || '—');
+    const pctVal = String(item.commissionPercentage);
+    const svcVal = item.serviceName || '';   // v1.0.10
+    const isAct  = item.activeStatus === true;
+    const checked = isAct ? ' checked' : '';
+
+    html += `
+    <div class="field-group full-width">
+      <label class="field-label">
+        ${nombre}
+        <span class="field-id">${escapeHtml(item.staffResourceId || '')}</span>
+      </label>
+    </div>
+
+    <div class="field-group full-width">
+      <label class="field-label">
+        Servicio/s
+        <span class="field-id">serviceName</span>
+      </label>
+      <textarea class="field-input"
+        id="ext-svc-${idAttr}"
+        data-ext-id="${idAttr}"
+        data-ext-field="serviceName"
+        data-original="${escapeAttr(svcVal)}"
+        placeholder="Ej: Manicura, Pedicura, Pestañas"
+        oninput="onExternalServiceNameChange('${idAttr}')">${escapeHtml(svcVal)}</textarea>
+    </div>
+
+    <div class="field-group full-width">
+      <label class="field-label">
+        Comisión (%)
+        <span class="field-id">commissionPercentage</span>
+      </label>
+      <input type="text" inputmode="decimal" class="field-input"
+        id="ext-comm-${idAttr}"
+        data-ext-id="${idAttr}"
+        data-ext-field="commissionPercentage"
+        data-original="${escapeAttr(pctVal)}"
+        value="${escapeAttr(pctVal)}"
+        placeholder="0"
+        oninput="onExternalCommissionChange('${idAttr}')">
+    </div>
+
+    <div class="field-group full-width">
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <span class="toggle-label">Activo</span>
+          <span class="toggle-desc">Aplica en cierres a partir de mañana.</span>
+          <span class="field-id">activeStatus</span>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox"
+            id="ext-active-${idAttr}"
+            data-ext-id="${idAttr}"
+            data-ext-field="activeStatus"
+            ${checked}
+            onchange="onExternalActiveChange('${idAttr}')">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+    `;
+  }
+
+  body.innerHTML = html;
+}
+
+// Handler: input de comisión. Actualiza el estado vivo y refresca el
+// botón GUARDAR.
+function onExternalCommissionChange(externalServicesId) {
+  const el = document.getElementById('ext-comm-' + externalServicesId);
+  if (!el) return;
+  const raw = (el.value || '').trim().replace(',', '.');
+  const num = raw === '' ? 0 : Number(raw);
+  const val = (isNaN(num) || num < 0) ? 0 : num;
+
+  const idx = externalStaffData.findIndex(x => x.externalServicesId === externalServicesId);
+  if (idx >= 0) externalStaffData[idx].commissionPercentage = val;
+
+  const original = Number(el.getAttribute('data-original') || 0);
+  if (val !== original) el.classList.add('modified'); else el.classList.remove('modified');
+
+  checkForChanges();
+}
+
+// v1.0.10 — Handler: textarea de Servicio/s. Actualiza el estado vivo
+// (cadena literal, sin normalizar) y refresca el botón GUARDAR.
+function onExternalServiceNameChange(externalServicesId) {
+  const el = document.getElementById('ext-svc-' + externalServicesId);
+  if (!el) return;
+  const val = el.value || '';
+
+  const idx = externalStaffData.findIndex(x => x.externalServicesId === externalServicesId);
+  if (idx >= 0) externalStaffData[idx].serviceName = val;
+
+  const original = el.getAttribute('data-original') || '';
+  if (val !== original) el.classList.add('modified'); else el.classList.remove('modified');
+
+  checkForChanges();
+}
+
+// Handler: toggle activo/no activo.
+function onExternalActiveChange(externalServicesId) {
+  const el = document.getElementById('ext-active-' + externalServicesId);
+  if (!el) return;
+  const idx = externalStaffData.findIndex(x => x.externalServicesId === externalServicesId);
+  if (idx >= 0) externalStaffData[idx].activeStatus = el.checked === true;
+  checkForChanges();
+}
+
+// Devuelve los deltas de externos respecto al snapshot original.
+// Un ítem entra si commissionPercentage, activeStatus o serviceName
+// (v1.0.10) difieren.
+function getExternalStaffDeltas() {
+  const deltas = [];
+  for (const cur of externalStaffData) {
+    const orig = originalExternalStaff.find(x => x.externalServicesId === cur.externalServicesId);
+    if (!orig) {
+      deltas.push({
+        externalServicesId:   cur.externalServicesId,
+        commissionPercentage: Number(cur.commissionPercentage || 0),
+        activeStatus:         cur.activeStatus === true,
+        serviceName:          cur.serviceName || ''
+      });
+      continue;
+    }
+    const pctChanged = Number(cur.commissionPercentage || 0) !== Number(orig.commissionPercentage || 0);
+    const actChanged = (cur.activeStatus === true) !== (orig.activeStatus === true);
+    const svcChanged = (cur.serviceName || '') !== (orig.serviceName || '');   // v1.0.10
+    if (pctChanged || actChanged || svcChanged) {
+      deltas.push({
+        externalServicesId:   cur.externalServicesId,
+        commissionPercentage: Number(cur.commissionPercentage || 0),
+        activeStatus:         cur.activeStatus === true,
+        serviceName:          cur.serviceName || ''
+      });
+    }
+  }
+  return deltas;
+}
+
+// ── Interactions ──
+function toggleSection(key) {
+  const section = document.getElementById('section-' + key);
+  if (section) {
+    section.classList.toggle('collapsed');
+  }
+}
+
+function onFieldChange(fieldId) {
+  const el = document.getElementById('field-' + fieldId);
+  if (!el) return;
+
+  const currentVal = el.tagName === 'TEXTAREA' ? el.value : el.value;
+  const originalVal = el.getAttribute('data-original') || '';
+
+  if (currentVal !== originalVal) {
+    el.classList.add('modified');
+  } else {
+    el.classList.remove('modified');
+  }
+
+  checkForChanges();
+}
+
+function onToggleChange(fieldId) {
+  checkForChanges();
+}
+
+function checkForChanges() {
+  let modified = false;
+
+  SECTIONS.forEach(section => {
+    if (section.custom === 'skin') return;      // los skins se evalúan aparte
+    if (section.custom === 'externos') return;  // v1.0.9 — externos aparte
+    section.fields.forEach(field => {
+      const el = document.getElementById('field-' + field.id);
+      if (!el) return;
+
+      if (field.type === 'boolean') {
+        const current = el.checked;
+        const original = originalData[field.id] === true;
+        if (current !== original) modified = true;
+      } else {
+        const current = el.value || '';
+        const original = originalData[field.id] || '';
+        if (current !== original) modified = true;
+      }
+    });
+  });
+
+  // cambio de skin
+  if (selectedSkin !== originalSkin) modified = true;
+
+  // v1.0.9 — cambios en la sección de externos
+  if (externalStaffLoaded && getExternalStaffDeltas().length > 0) {
+    modified = true;
+  }
+
+  hasChanges = modified;
+  document.getElementById('btnSave').disabled = !modified || isSaving;
+
+  if (modified) {
+    setStatus('modified', 'Cambios sin guardar');
+  } else {
+    setStatus('ready', 'Listo');
+  }
+}
+
+function clearModifiedMarks() {
+  document.querySelectorAll('.field-input.modified').forEach(el => {
+    el.classList.remove('modified');
+    el.setAttribute('data-original', el.value);
+  });
+  // v1.0.9 — inputs de comisión de la sección externos usan el mismo
+  // atributo `data-original`. Los recorremos igual, aunque también se
+  // resetean al recibir externalStaffSaved (que repinta el body).
+  document.querySelectorAll('[data-ext-field="commissionPercentage"]').forEach(el => {
+    el.classList.remove('modified');
+    el.setAttribute('data-original', el.value);
+  });
+}
+
+// ── Save ──
+function guardar() {
+  if (!hasChanges || isSaving || !configData) return;
+
+  isSaving = true;
+  document.getElementById('btnSave').disabled = true;
+
+  // ─── Payload SalonConfig (secciones normales + skin) ───
+  // v1.0.9 — se envía siempre que se pulsa GUARDAR, aunque solo
+  // hayan cambiado externos. El backend salonConfigLogic.updateSalonConfig
+  // hace merge idempotente, así que reescribir los mismos valores no
+  // altera nada; simplifica el flujo del botón único.
+  const payload = { _id: configData._id };
+
+  SECTIONS.forEach(section => {
+    if (section.custom === 'skin') return;      // skin se añade aparte
+    if (section.custom === 'externos') return;  // v1.0.9 — externos van aparte
+    section.fields.forEach(field => {
+      const el = document.getElementById('field-' + field.id);
+      if (!el) return;
+
+      if (field.type === 'boolean') {
+        payload[field.id] = el.checked;
+      } else if (field.type === 'number') {
+        // v1.0.6 — number: enviar como Number (vacío → 0). El backend
+        // (NUMBER_FIELDS) también lo tipa, doble salvaguarda.
+        const raw = (el.value || '').trim();
+        payload[field.id] = raw === '' ? 0 : (Number(raw) || 0);
+      } else {
+        // v1.0.7 — texto y pin: literal (el pin conserva ceros, "0000").
+        payload[field.id] = el.value || '';
+      }
+    });
+  });
+
+  // widgetSkin (sección Apariencia)
+  payload.widgetSkin = selectedSkin;
+
+  window.parent.postMessage({ type: 'salonConfigSave', data: payload }, '*');
+
+  // v1.0.9 — Enviar deltas de externos, si los hay.
+  if (externalStaffLoaded) {
+    const deltas = getExternalStaffDeltas();
+    if (deltas.length > 0) {
+      window.parent.postMessage({ type: 'externalStaffSave', updates: deltas }, '*');
+    }
+  }
+}
+
+// ── UI helpers ──
+function setStatus(state, text) {
+  const badge = document.getElementById('statusBadge');
+  const textEl = document.getElementById('statusText');
+  badge.className = 'status-badge';
+  if (state !== 'ready') badge.classList.add(state);
+  textEl.textContent = text;
+}
+
+function showLoading(msg) {
+  const overlay = document.getElementById('loadingOverlay');
+  if (overlay) {
+    overlay.querySelector('.loading-text').textContent = msg || 'Cargando...';
+    overlay.style.display = 'flex';
+  }
+}
+
+function hideLoading() {
+  const overlay = document.getElementById('loadingOverlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+function showNewBadge() {
+  const container = document.getElementById('newBadgeContainer');
+  if (container) {
+    container.innerHTML = '<div class="new-badge">✨ NUEVA CONFIGURACIÓN — Rellena los datos del salón</div>';
+  }
+}
+
+function showToast(message, type) {
+  const toast = document.getElementById('toast');
+  toast.className = 'toast ' + type;
+  toast.innerHTML = `<span>${type === 'success' ? '✓' : '✗'}</span> ${escapeHtml(message)}`;
+  toast.classList.add('visible');
+  setTimeout(() => toast.classList.remove('visible'), 4000);
+}
+
+// ── Escape utils ──
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function escapeAttr(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+</script>
+</body>
+</html>
