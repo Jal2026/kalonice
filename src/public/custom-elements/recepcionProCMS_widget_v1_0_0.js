@@ -1,9 +1,42 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.70  ·  ESPECIALES: avisos amables dentro del modal
- * FECHA: 31 de julio de 2026
+ * VERSION: 1.1.71  ·  APERTURA DE CAJA: fondo inicial del día
+ * FECHA: 1 de agosto de 2026
  * ---------------------------------------------------------------------
+ * v1.1.71 (1 ago 2026) — APERTURA DE CAJA (fondo inicial del día). El
+ *   arqueo es un módulo OPCIONAL: cuando el salón tiene SalonConfig.
+ *   arqueoActivo=true, al abrir Recepción PRO por la mañana aparece un
+ *   modal profesional de apertura con el fondo inicial SUGERIDO ya
+ *   pre-rellenado (fondo fijo del salón, o el efectivo contado al cerrar
+ *   ayer, o 0 si no hay historial). El operador confirma en un click o
+ *   pulsa "Saltar hoy". El flag arqueoActivo y la sugerencia se calculan
+ *   en el backend/page code (check-apertura-caja → caja-fondo-sugerido);
+ *   el widget solo dispara el check una vez para HOY y reacciona.
+ *   · Estado nuevo: _aperturaChequeada (¿ya se pidió el check?),
+ *     _aperturaSaltadaFecha (fecha para la que se saltó la apertura),
+ *     _aperturaFondo (importe editable del modal).
+ *   · connectedCallback dispara _maybeCheckApertura() — solo si la fecha
+ *     mostrada es HOY (todayISO). Navegar a otro día no re-dispara.
+ *   · Handlers nuevos en _handleResponse: 'caja-fondo-sugerido' (abre el
+ *     modal, con guards de HOY / no-saltado / sin otro modal abierto),
+ *     'caja-abierta' (toast + refresca el arqueo si está abierto),
+ *     'apertura-estado' (informativo, no pinta nada).
+ *   · Modal _openAperturaModal reutiliza las clases del modal existente
+ *     (ks-modal-scrim, ks-modal, ks-disc-row, ks-pay pay-efectivo…). Sin
+ *     CSS nuevo. No cierra al clicar fuera (acto consciente): solo
+ *     "Saltar hoy" o "Confirmar apertura". Firma automática con el
+ *     empleado logueado la resuelve el page code (recordedBy).
+ *   · FUERA DE ALCANCE (sesión futura si se quiere): botón manual
+ *     "Registrar fondo inicial" DENTRO del arqueo para un registro ya
+ *     creado con fondo 0 — requiere una función backend que ACTUALICE
+ *     openingBalance de un registro existente (abrirCaja solo crea). No
+ *     se toca ahora para mantener el cambio quirúrgico. El workaround
+ *     de apuntar el fondo como "+ Entrada" sigue disponible.
+ *   · NO se toca: arqueo/cierre existente, ESPECIALES, cobro, drag&drop,
+ *     login PIN, calendario, banner promo, ni ningún flujo de negocio.
+ *     Solo se AÑADE el flujo de apertura (estado + 1 disparo + 3
+ *     handlers + 1 modal), todo add-only.
  * v1.1.70 (31 jul 2026) — ESPECIALES · buen gusto en las respuestas. Los
  *   avisos del modal (bloqueo por no-PRIME, bono ya activo, PRIME ya activa,
  *   éxito) dejan de pintarse como toast negro al pie y se muestran DENTRO del
@@ -2176,6 +2209,11 @@ button { font-family: inherit; cursor: pointer; }
       this._facturaFormLegalName = '';  // valor input razón social
       this._facturaGenerando = false;   // pulsado Ticket o Factura, esperando respuesta
       this._pagoCita = null;            // datos pago {tipoPago, desglose...} para mostrar método
+      // v1.1.71 — Apertura de caja (fondo inicial del día). Módulo opcional
+      // gobernado por SalonConfig.arqueoActivo (lo decide el page code).
+      this._aperturaChequeada = false;   // ¿ya se disparó check-apertura-caja?
+      this._aperturaSaltadaFecha = null; // fecha para la que el operador saltó
+      this._aperturaFondo = 0;           // importe editable del modal de apertura
     }
 
     connectedCallback() {
@@ -2262,7 +2300,112 @@ button { font-family: inherit; cursor: pointer; }
       // queries vs polling fijo cuando hay pestañas abiertas en background.
       this._startAutoRefresh();
 
+      // v1.1.71 — Apertura de caja: pedir el check UNA vez y solo para HOY.
+      // El page code decide (según SalonConfig.arqueoActivo) si responde con
+      // una sugerencia de fondo ('caja-fondo-sugerido') o no hace nada
+      // ('apertura-estado'). Fire-and-forget: nunca bloquea el montaje.
+      this._maybeCheckApertura();
+
       console.log(`${TAG} Montado.`);
+    }
+
+    // ═══════════════════════════════════════════════════
+    // v1.1.71 — APERTURA DE CAJA (fondo inicial del día)
+    // ═══════════════════════════════════════════════════
+    _maybeCheckApertura() {
+      if (this._aperturaChequeada) return;
+      if (this._fecha !== todayISO()) return;   // solo para HOY
+      this._aperturaChequeada = true;
+      this._sendToPage('check-apertura-caja', { fechaISO: this._fecha });
+    }
+
+    _onFondoSugerido(p) {
+      // Guards: solo HOY, solo si no se ha saltado hoy, y sin otro modal
+      // de caja/apertura ya abierto (no interrumpir un arqueo en curso).
+      if (this._fecha !== todayISO()) return;
+      if (this._aperturaSaltadaFecha === this._fecha) return;
+      if (this.shadowRoot.getElementById('aperturaScrim')) return;
+      if (this.shadowRoot.getElementById('cajaScrim')) return;
+      this._openAperturaModal({
+        fondoSugerido: Number(p.fondoSugerido || 0),
+        origen: p.origen || 'cero',
+        fechaOrigen: p.fechaOrigen || ''
+      });
+    }
+
+    _onCajaAbierta(p) {
+      if (p && p.ok) {
+        const fondo = Number((p.registro && p.registro.openingBalance) || 0);
+        this._toast(`Caja abierta ✓ · fondo ${fondo}€`);
+        this._cerrarApertura();
+        // Si el arqueo está abierto en este momento, refrescar para que el
+        // "Fondo inicial" y el "Efectivo esperado" reflejen el nuevo fondo.
+        this._cajaRefresh();
+      } else {
+        this._toast(`No se pudo abrir la caja${p && p.error ? ': ' + p.error : ''}`);
+      }
+    }
+
+    _origenAperturaTexto(origen, fechaOrigen, fondo) {
+      const eur = `${fondo || 0}€`;
+      switch (origen) {
+        case 'fondoFijo':
+          return `Fondo fijo configurado para tu salón: <strong>${eur}</strong>.`;
+        case 'cierreAyer':
+          return `Efectivo contado al cerrar caja el <strong>${esc(fechaOrigen || 'día anterior')}</strong>: <strong>${eur}</strong>.`;
+        case 'esperadoAyer':
+          return `Último efectivo registrado el <strong>${esc(fechaOrigen || 'día anterior')}</strong>: <strong>${eur}</strong>.`;
+        default:
+          return `No hay historial previo de caja. Empezamos desde <strong>0€</strong> (edítalo si tu caja arranca con otro fondo).`;
+      }
+    }
+
+    _openAperturaModal({ fondoSugerido, origen, fechaOrigen }) {
+      const root = this.shadowRoot;
+      root.getElementById('aperturaScrim')?.remove();
+      this._aperturaFondo = Number(fondoSugerido || 0);
+
+      const scrim = document.createElement('div');
+      scrim.className = 'ks-modal-scrim';
+      scrim.id = 'aperturaScrim';
+      // La apertura es un acto consciente: NO se cierra al clicar fuera.
+      // Solo "Saltar hoy" o "Confirmar apertura" cierran el modal.
+
+      const modal = document.createElement('div');
+      modal.className = 'ks-modal';
+      modal.id = 'aperturaModal';
+      modal.innerHTML = `
+        <div class="ks-modal-head">
+          <span class="ks-modal-staff">🌅 APERTURA DE CAJA</span>
+          <span class="ks-modal-status pending">Nuevo día</span>
+        </div>
+        <div class="ks-modal-meta">${this._fecha}</div>
+        <p class="ks-detail-note">${this._origenAperturaTexto(origen, fechaOrigen, this._aperturaFondo)}</p>
+        <div class="ks-disc-row">
+          <span class="ks-disc-lbl">💶 Fondo inicial</span>
+          <div class="ks-disc-input"><input id="aperturaInput" type="number" min="0" step="0.01" value="${this._aperturaFondo || ''}" placeholder="0"><span>€</span></div>
+        </div>
+        <div class="ks-modal-pays" style="margin-top:12px">
+          <button class="ks-pay" id="aperturaSaltar" style="flex:1;background:#fff;color:var(--ks-ink);border:1px solid var(--ks-line)">Saltar hoy</button>
+          <button class="ks-pay pay-efectivo" id="aperturaConfirm" style="flex:1">Confirmar apertura</button>
+        </div>`;
+      scrim.appendChild(modal);
+      root.appendChild(scrim);
+
+      const inp = modal.querySelector('#aperturaInput');
+      inp?.addEventListener('input', e => { this._aperturaFondo = parseFloat(e.target.value) || 0; });
+      modal.querySelector('#aperturaSaltar')?.addEventListener('click', () => {
+        this._aperturaSaltadaFecha = this._fecha;
+        this._cerrarApertura();
+      });
+      modal.querySelector('#aperturaConfirm')?.addEventListener('click', () => {
+        this._sendToPage('caja-abrir', { fechaISO: this._fecha, openingBalance: this._aperturaFondo });
+      });
+      setTimeout(() => { try { inp?.focus(); inp?.select(); } catch (_) {} }, 60);
+    }
+
+    _cerrarApertura() {
+      this.shadowRoot.getElementById('aperturaScrim')?.remove();
     }
 
     // v1.1.35 — Polling adaptativo
@@ -2748,6 +2891,16 @@ button { font-family: inherit; cursor: pointer; }
           break;
         case 'pinValidated':
           this._onPinValidated(p);
+          break;
+        // ─── v1.1.71: apertura de caja (fondo inicial del día) ───
+        case 'caja-fondo-sugerido':
+          this._onFondoSugerido(p);
+          break;
+        case 'caja-abierta':
+          this._onCajaAbierta(p);
+          break;
+        case 'apertura-estado':
+          // Informativo: módulo inactivo, o ya hay caja hoy. Nada que pintar.
           break;
         default: break;
       }
