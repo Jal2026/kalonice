@@ -1,9 +1,16 @@
 // =====================================================
 // KAMISUITE — Buscador de contactId (utilidad backoffice)
 // =====================================================
-// VERSION: 1.0.0
+// VERSION: 1.1.0
 // FECHA: 30 de julio de 2026
 // ARCHIVO: backend/contactLookup.web.js
+//
+// v1.1.0 — Añadido buscarContactoIdLote(): resuelve una LISTA de una vez
+//   (array de nombres o de objetos {nombre,telefono,email}). Vuelca la CRM
+//   una sola vez y cruza en memoria; marca cada fila como ok/ambiguo/
+//   no_encontrado. Cruce por email (fiable) > teléfono > nombre. El cruce
+//   por nombre es orden-independiente pero COLISIONA (nombres repetidos =
+//   ambiguo); con email por fila el resultado es 1:1.
 //
 // Buscador PUNTUAL de contactId de Wix CRM por nombre, teléfono o email.
 // Pensado para resolver el dueño de bonos importados (Excel de software
@@ -63,6 +70,21 @@ function formatearContacto(contact) {
 function tel9(tel) {
   const d = String(tel || '').replace(/\D/g, '');
   return d.length >= 9 ? d.slice(-9) : d;
+}
+
+// Normaliza nombre: minúsculas, sin acentos, espacios colapsados.
+function normNombre(s) {
+  return String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+// Clave de nombre ORDEN-INDEPENDIENTE (tokens ordenados alfabéticamente):
+// así "María García" y "García, María" cruzan igual.
+function nombreKey(s) {
+  const n = normNombre(s);
+  if (!n) return '';
+  return n.split(' ').filter(Boolean).sort().join(' ');
 }
 
 // buscarContactoId({ nombre, telefono, email })
@@ -148,6 +170,106 @@ export const buscarContactoId = webMethod(Permissions.Anyone, async (payload) =>
 
   } catch (e) {
     console.error(`${TAG} ❌ buscarContactoId:`, e);
+    return { ok: false, version: VERSION, error: safeErr(e) };
+  }
+});
+
+// buscarContactoIdLote({ items: [ ... ] })
+//   items puede ser un array de STRINGS (nombres) o de OBJETOS
+//   { nombre?, telefono?, email? }. Se vuelca la CRM UNA sola vez y se cruza
+//   todo en memoria (eficiente para listas largas).
+//   Prioridad de cruce por fila: email (fiable) > teléfono > nombre.
+//   → { ok, resumen:{total,ok,ambiguo,no_encontrado}, resultados:[
+//        { entrada, nombre, telefono, email, estado, matches:[...] } ] }
+//   estado: 'ok' (1 match) · 'ambiguo' (>1) · 'no_encontrado' (0)
+export const buscarContactoIdLote = webMethod(Permissions.Anyone, async (payload) => {
+  try {
+    const items = payload && Array.isArray(payload.items) ? payload.items : null;
+    if (!items || items.length === 0) {
+      return { ok: false, version: VERSION, error: { message: 'Payload sin items[] o vacío' } };
+    }
+
+    // Normalizar cada entrada.
+    const entradas = items.map((it) => {
+      if (typeof it === 'string') {
+        return { nombre: it.trim(), telefono: '', email: '', raw: it };
+      }
+      const nombre = String(it?.nombre || it?.name || '').trim();
+      const telefono = String(it?.telefono || it?.phone || '').trim();
+      const email = String(it?.email || '').trim().toLowerCase();
+      return { nombre, telefono, email, raw: nombre || email || telefono || JSON.stringify(it) };
+    });
+
+    // Volcado ÚNICO de toda la CRM.
+    const elevatedQuery = elevate(contacts.queryContacts);
+    const todos = [];
+    let skip = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+    let truncado = false;
+    while (hasMore) {
+      const r = await elevatedQuery().skip(skip).limit(pageSize).find();
+      const its = r?.items || [];
+      for (const c of its) todos.push(formatearContacto(c));
+      if (its.length < pageSize) hasMore = false;
+      else skip += pageSize;
+      if (skip >= 20000) { hasMore = false; truncado = true; } // tope de seguridad
+    }
+
+    // Índices en memoria.
+    const porEmail = new Map();   // email(lower)  -> [contactos]
+    const porTel = new Map();     // tel9          -> [contactos]
+    const porNombre = new Map();  // nombreKey     -> [contactos]
+    for (const c of todos) {
+      if (c.email) {
+        const k = c.email.toLowerCase();
+        if (!porEmail.has(k)) porEmail.set(k, []);
+        porEmail.get(k).push(c);
+      }
+      if (c.telefono) {
+        const k = tel9(c.telefono);
+        if (k) { if (!porTel.has(k)) porTel.set(k, []); porTel.get(k).push(c); }
+      }
+      const nk = nombreKey(c.nombreCompleto);
+      if (nk) { if (!porNombre.has(nk)) porNombre.set(nk, []); porNombre.get(nk).push(c); }
+    }
+
+    // Cruce por fila.
+    const resultados = entradas.map((e) => {
+      const encontrados = new Map();
+      if (e.email && porEmail.has(e.email)) {
+        for (const c of porEmail.get(e.email)) encontrados.set(c.contactId, { ...c, coincidePor: 'email' });
+      }
+      if (e.telefono) {
+        const k = tel9(e.telefono);
+        if (k && porTel.has(k)) {
+          for (const c of porTel.get(k)) if (!encontrados.has(c.contactId)) encontrados.set(c.contactId, { ...c, coincidePor: 'telefono' });
+        }
+      }
+      if (e.nombre) {
+        const nk = nombreKey(e.nombre);
+        if (nk && porNombre.has(nk)) {
+          for (const c of porNombre.get(nk)) if (!encontrados.has(c.contactId)) encontrados.set(c.contactId, { ...c, coincidePor: 'nombre' });
+        }
+      }
+      const matches = Array.from(encontrados.values());
+      let estado = 'no_encontrado';
+      if (matches.length === 1) estado = 'ok';
+      else if (matches.length > 1) estado = 'ambiguo';
+      return { entrada: e.raw, nombre: e.nombre, telefono: e.telefono, email: e.email, estado, matches };
+    });
+
+    const resumen = {
+      total: resultados.length,
+      ok: resultados.filter(r => r.estado === 'ok').length,
+      ambiguo: resultados.filter(r => r.estado === 'ambiguo').length,
+      no_encontrado: resultados.filter(r => r.estado === 'no_encontrado').length
+    };
+    console.log(`${TAG} 📋 lote: ${resumen.total} entradas · ${resumen.ok} ok · ${resumen.ambiguo} ambiguos · ${resumen.no_encontrado} sin match · CRM=${todos.length}${truncado ? ' (TRUNCADO 20k)' : ''}`);
+    return { ok: true, version: VERSION, truncado, totalContactosCRM: todos.length, resumen, resultados };
+
+  } catch (e) {
+    console.error(`${TAG} ❌ buscarContactoIdLote:`, e);
     return { ok: false, version: VERSION, error: safeErr(e) };
   }
 });
