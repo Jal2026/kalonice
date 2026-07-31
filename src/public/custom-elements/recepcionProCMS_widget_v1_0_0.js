@@ -1,9 +1,16 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.68  ·  FIX: el plegado de 1 min se ancla a la fase PRINCIPAL
- * FECHA: 30 de julio de 2026
+ * VERSION: 1.1.69  ·  ESPECIALES: venta manual de PRIME/Bonos/Tarjetas
+ * FECHA: 31 de julio de 2026
  * ---------------------------------------------------------------------
+ * v1.1.69 (31 jul 2026) — ESPECIALES. El botón AKIRA (zombi) pasa a ESPECIALES
+ *   y abre un modal de venta manual de los tres productos comerciales; se
+ *   elimina el botón Inicio (zombi). El modal reutiliza la búsqueda de clientes
+ *   (mensajes propios espBuscarCliente/espClientesEncontrados), tres pestañas
+ *   PRIME/Bono/Tarjeta pobladas por getEspecialesData, método de pago y emisión
+ *   (emitirBono/emitirPrime/emitirTarjeta). Sin selector de variante: ningún
+ *   servicio con bono de KALÓNICE tiene variantes.
  * v1.1.68 (30 jul 2026) — FIX del plegado de servicios de 1 min (widget-only).
  *   El plegado (v1.1.67) se anclaba a la PRIMERA fase ocupante de la cascada,
  *   no a la principal. Si la primera fase era corta (p.ej. "Lavado previo" de
@@ -1306,11 +1313,44 @@ button { font-family: inherit; cursor: pointer; }
 }
 .ks-brandhint { color: var(--ks-ink3); font-size: 12.5px; font-weight: 500; letter-spacing: .2px; }
 .ks-brandactions { margin-left: auto; display: flex; align-items: center; gap: 9px; }
-.ks-akira {
-  border: 1px solid var(--ks-line); background: #fff; color: var(--ks-ink);
-  padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+.ks-especiales {
+  border: 1px solid var(--ks-accent); background: var(--ks-accent); color: #fff;
+  padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer;
 }
-.ks-akira:hover { border-color: var(--ks-accent); color: var(--ks-accent-ink); }
+.ks-especiales:hover { filter: brightness(1.06); }
+/* ── Modal ESPECIALES (venta manual) ── */
+.esp-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.esp-modal { background: #fff; border-radius: 14px; width: min(560px,96vw); max-height: 92vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.esp-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 20px; border-bottom: 1px solid var(--ks-line); position: sticky; top: 0; background: #fff; z-index: 1; }
+.esp-title { font-size: 15px; font-weight: 700; color: var(--ks-ink); }
+.esp-x { border: none; background: transparent; font-size: 19px; cursor: pointer; color: #9ca3af; line-height: 1; }
+.esp-body { padding: 16px 20px; }
+.esp-sec { margin-bottom: 16px; }
+.esp-eyebrow { font-size: 10.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: #9ca3af; margin-bottom: 7px; display: block; }
+.esp-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--ks-line); border-radius: 8px; font-size: 13px; font-family: inherit; }
+.esp-select { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--ks-line); border-radius: 8px; font-size: 13px; font-family: inherit; background: #fff; }
+.esp-cli-results { border: 1px solid var(--ks-line); border-radius: 8px; margin-top: 6px; max-height: 180px; overflow: auto; }
+.esp-cli-item { padding: 8px 11px; cursor: pointer; border-bottom: 1px solid var(--ks-paper2); }
+.esp-cli-item:last-child { border-bottom: none; }
+.esp-cli-item:hover { background: var(--ks-paper2); }
+.esp-cli-name { font-size: 13px; font-weight: 600; color: var(--ks-ink); }
+.esp-cli-sub { font-size: 11px; color: #9ca3af; }
+.esp-chip { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid var(--ks-accent); border-radius: 8px; background: var(--ks-paper2); }
+.esp-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+.esp-tab { flex: 1; padding: 9px 4px; border: 1px solid var(--ks-line); background: #fff; border-radius: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; color: var(--ks-ink); }
+.esp-tab.active { background: var(--ks-accent); color: #fff; border-color: var(--ks-accent); }
+.esp-price { margin-top: 9px; font-size: 14px; font-weight: 700; color: var(--ks-ink); }
+.esp-price small { font-weight: 500; color: #9ca3af; font-size: 11px; }
+.esp-pay { display: flex; gap: 6px; }
+.esp-paybtn { flex: 1; padding: 9px; border: 1px solid var(--ks-line); background: #fff; border-radius: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; color: var(--ks-ink); }
+.esp-paybtn.active { background: var(--ks-ink); color: #fff; border-color: var(--ks-ink); }
+.esp-emit { width: 100%; margin-top: 4px; padding: 13px; border: none; border-radius: 10px; background: var(--ks-accent); color: #fff; font-size: 14px; font-weight: 700; cursor: pointer; }
+.esp-emit:disabled { opacity: .45; cursor: not-allowed; }
+.esp-row2 { display: flex; gap: 8px; }
+.esp-row2 > * { flex: 1; }
+.esp-link { background: none; border: none; color: var(--ks-accent); font-size: 12px; font-weight: 600; cursor: pointer; padding: 6px 0; }
+.esp-gift { margin-top: 10px; }
+.esp-muted { font-size: 12px; color: #9ca3af; }
 .ks-automodel {
   border: 1px solid var(--ks-line); background: var(--ks-paper2); color: var(--ks-ink2);
   padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
@@ -2522,6 +2562,13 @@ button { font-family: inherit; cursor: pointer; }
           break;
         }
         case 'clientesEncontrados': this._renderCliResults(p.clientes || []); break;
+        // v1.1.69 — ESPECIALES (venta manual)
+        case 'espClientesEncontrados': this._renderEspCli(p.clientes || []); break;
+        case 'espClienteCreado': this._onEspClienteCreado(p.data); break;
+        case 'especialesData': this._onEspData(p); break;
+        case 'bonoEmitido': this._onEspEmitido('bono', p.data); break;
+        case 'primeEmitido': this._onEspEmitido('prime', p.data); break;
+        case 'tarjetaEmitido': this._onEspEmitido('tarjeta', p.data); break;
         case 'clienteCreado': {
           const r = p.data || {};
           if (r.ok && r.cliente) { this._closeBlankForm(); this._seleccionarCliente(r.cliente); this._toast('Cliente creado'); }
@@ -2815,9 +2862,8 @@ button { font-family: inherit; cursor: pointer; }
             </div>
             <div class="ks-brandhint">Recepción PRO · agenda operativa · CMS-first</div>
             <div class="ks-brandactions">
-              <button class="ks-akira">✦ AKIRA</button>
+              <button class="ks-especiales" id="espBtn">✦ ESPECIALES</button>
               <button class="ks-automodel">Modelo automático</button>
-              <button class="ks-homebtn" title="Inicio">⌂</button>
             </div>
           </div>
           <div class="ks-toolbar">
@@ -2930,6 +2976,10 @@ button { font-family: inherit; cursor: pointer; }
         if (!this._puede('ajustes')) { this._toast('No tienes permiso para esta acción'); return; }
         this._openSettings();
       });
+
+      // v1.1.69 — ESPECIALES: venta manual de PRIME/Bonos/Tarjetas
+      const espBtnEl = root.getElementById('espBtn');
+      if (espBtnEl) espBtnEl.addEventListener('click', () => this._openEspeciales());
 
       // ── Datepicker (V1) ──
       const openDp = (e) => { e.stopPropagation(); this._openDatePicker(); };
@@ -6852,6 +6902,279 @@ button { font-family: inherit; cursor: pointer; }
       root.appendChild(t);
       clearTimeout(this._toastTimer);
       this._toastTimer = setTimeout(() => t.remove(), 2600);
+    }
+
+    // ═══════════════════════════════════════════════════
+    // v1.1.69 — ESPECIALES (venta manual PRIME/Bonos/Tarjetas)
+    // ═══════════════════════════════════════════════════
+    _openEspeciales() {
+      this._espCliente = null;
+      this._espNuevoAbierto = false;
+      this._espTab = 'bono';
+      this._espBonoIdx = -1;
+      this._espCampIdx = -1;
+      this._espRegalo = false;
+      this._espMetodo = 'Efectivo';
+      this._espEmitiendo = false;
+      const root = this.shadowRoot;
+      root.getElementById('espScrim')?.remove();
+      const scrim = document.createElement('div');
+      scrim.className = 'esp-scrim';
+      scrim.id = 'espScrim';
+      root.appendChild(scrim);
+      this._renderEsp();
+      // Datos frescos: config PRIME + servicios con bono + campañas vigentes.
+      this._sendToPage('getEspecialesData', {});
+    }
+
+    _closeEspeciales() {
+      this.shadowRoot.getElementById('espScrim')?.remove();
+    }
+
+    _renderEsp() {
+      const scrim = this.shadowRoot.getElementById('espScrim');
+      if (!scrim) return;
+      const cli = this._espCliente;
+      const data = this._espData;
+      const tab = this._espTab;
+
+      // ── Bloque cliente ──
+      let cliHTML;
+      if (cli) {
+        cliHTML = `<div class="esp-chip">
+          <div><div class="esp-cli-name">${esc(cli.nombre || 'Cliente')}</div>
+          <div class="esp-cli-sub">${esc(cli.telefono || '')}${cli.email ? ' · ' + esc(cli.email) : ''}</div></div>
+          <button class="esp-link" id="espCliChange">Cambiar</button>
+        </div>`;
+      } else if (this._espNuevoAbierto) {
+        cliHTML = `<div class="esp-row2">
+            <input class="esp-input" id="espNvNombre" placeholder="Nombre *" autocomplete="off" />
+            <input class="esp-input" id="espNvApellido" placeholder="Apellido" autocomplete="off" />
+          </div>
+          <div class="esp-row2" style="margin-top:8px;">
+            <input class="esp-input" id="espNvTel" placeholder="Teléfono" autocomplete="off" />
+            <input class="esp-input" id="espNvEmail" placeholder="Email" autocomplete="off" />
+          </div>
+          <div class="esp-row2" style="margin-top:8px;">
+            <button class="esp-link" id="espNvCancel">Cancelar</button>
+            <button class="esp-emit" id="espNvSave" style="margin-top:0;padding:9px;">Guardar cliente</button>
+          </div>`;
+      } else {
+        cliHTML = `<input class="esp-input" id="espCliBuscar" placeholder="Buscar por nombre, teléfono o email…" autocomplete="off" />
+          <div id="espCliResults"></div>
+          <button class="esp-link" id="espCliNuevo">+ Cliente nuevo</button>`;
+      }
+
+      // ── Bloque producto ──
+      let prodHTML = '';
+      if (!data) {
+        prodHTML = `<div class="esp-muted">Cargando productos…</div>`;
+      } else if (tab === 'prime') {
+        const cfg = data.config || {};
+        const precio = (typeof cfg.primeAnnualPrice === 'number') ? cfg.primeAnnualPrice : 0;
+        const meses = (typeof cfg.primeDurationMonths === 'number') ? cfg.primeDurationMonths : 12;
+        prodHTML = `<div class="esp-price">Tarjeta PRIME — ${precio}€ <small>· ${meses} meses de vigencia</small></div>`;
+      } else if (tab === 'bono') {
+        const servicios = data.servicios || [];
+        if (!servicios.length) {
+          prodHTML = `<div class="esp-muted">No hay servicios con bono activo.</div>`;
+        } else {
+          const opts = servicios.map((s, i) => `<option value="${i}"${i === this._espBonoIdx ? ' selected' : ''}>${esc(s.label)}</option>`).join('');
+          prodHTML = `<select class="esp-select" id="espBonoSel"><option value="-1">— Elige un servicio con bono —</option>${opts}</select>`;
+          const s = servicios[this._espBonoIdx];
+          if (s) {
+            prodHTML += `<div class="esp-price">${s.bonoNumero} sesiones — ${s.precioBonoCalculado}€ <small>· ${s.bonoDescuento}% dto sobre ${s.precioBrutoCalculado}€</small></div>`;
+          }
+        }
+      } else if (tab === 'tarjeta') {
+        const camps = data.campaigns || [];
+        if (!camps.length) {
+          prodHTML = `<div class="esp-muted">No hay campañas de tarjeta vigentes.</div>`;
+        } else {
+          const opts = camps.map((c, i) => `<option value="${i}"${i === this._espCampIdx ? ' selected' : ''}>${esc(c.name || c.serviceLabel || 'Tarjeta')}</option>`).join('');
+          prodHTML = `<select class="esp-select" id="espCampSel"><option value="-1">— Elige una campaña —</option>${opts}</select>`;
+          const c = camps[this._espCampIdx];
+          if (c) {
+            prodHTML += `<div class="esp-price">${c.promoPrice}€${c.serviceLabel ? ` <small>· ${esc(c.serviceLabel)}</small>` : ''}</div>`;
+            prodHTML += `<div class="esp-gift">
+              <label class="esp-muted"><input type="checkbox" id="espRegalo"${this._espRegalo ? ' checked' : ''}/> Es un regalo</label>
+              ${this._espRegalo ? `<div class="esp-row2" style="margin-top:8px;">
+                <input class="esp-input" id="espRecNombre" placeholder="Nombre destinatario *" autocomplete="off" />
+                <input class="esp-input" id="espRecEmail" placeholder="Email destinatario *" autocomplete="off" />
+              </div>
+              <input class="esp-input" id="espRecMsg" placeholder="Mensaje (opcional)" autocomplete="off" style="margin-top:8px;" />` : ''}
+            </div>`;
+          }
+        }
+      }
+
+      const precio = this._espPrecioActual();
+      const payHTML = ['Efectivo', 'Tarjeta', 'Bizum']
+        .map(m => `<button class="esp-paybtn${this._espMetodo === m ? ' active' : ''}" data-m="${m}">${m}</button>`).join('');
+      const puede = this._espPuedeEmitir();
+
+      scrim.innerHTML = `<div class="esp-modal">
+        <div class="esp-head"><span class="esp-title">✦ ESPECIALES · Venta manual</span><button class="esp-x" id="espX">✕</button></div>
+        <div class="esp-body">
+          <div class="esp-sec"><span class="esp-eyebrow">Cliente</span>${cliHTML}</div>
+          <div class="esp-sec"><span class="esp-eyebrow">Producto</span>
+            <div class="esp-tabs">
+              <button class="esp-tab${tab === 'prime' ? ' active' : ''}" data-tab="prime">⭐ PRIME</button>
+              <button class="esp-tab${tab === 'bono' ? ' active' : ''}" data-tab="bono">🎟️ Bono</button>
+              <button class="esp-tab${tab === 'tarjeta' ? ' active' : ''}" data-tab="tarjeta">🎁 Tarjeta</button>
+            </div>
+            ${prodHTML}
+          </div>
+          <div class="esp-sec"><span class="esp-eyebrow">Método de pago</span><div class="esp-pay">${payHTML}</div></div>
+          <button class="esp-emit" id="espEmit"${puede ? '' : ' disabled'}>${this._espEmitiendo ? 'Emitiendo…' : `Emitir y cobrar${precio > 0 ? ` · ${precio}€` : ''}`}</button>
+        </div>
+      </div>`;
+      this._espRewire();
+    }
+
+    _espRewire() {
+      const scrim = this.shadowRoot.getElementById('espScrim');
+      if (!scrim) return;
+      const $ = (id) => scrim.querySelector('#' + id);
+
+      $('espX') && $('espX').addEventListener('click', () => this._closeEspeciales());
+
+      const buscar = $('espCliBuscar');
+      if (buscar) {
+        buscar.addEventListener('input', e => {
+          const q = e.target.value;
+          clearTimeout(this._espBuscarTimer);
+          if (q.trim().length < 2) { this._renderEspCli([]); return; }
+          this._espBuscarTimer = setTimeout(() => this._sendToPage('espBuscarCliente', { query: q }), 250);
+        });
+      }
+      $('espCliNuevo') && $('espCliNuevo').addEventListener('click', () => { this._espNuevoAbierto = true; this._renderEsp(); });
+      $('espCliChange') && $('espCliChange').addEventListener('click', () => { this._espCliente = null; this._renderEsp(); });
+      $('espNvCancel') && $('espNvCancel').addEventListener('click', () => { this._espNuevoAbierto = false; this._renderEsp(); });
+      $('espNvSave') && $('espNvSave').addEventListener('click', () => this._espGuardarNuevo());
+
+      scrim.querySelectorAll('.esp-tab').forEach(b => b.addEventListener('click', () => {
+        this._espTab = b.getAttribute('data-tab'); this._renderEsp();
+      }));
+
+      $('espBonoSel') && $('espBonoSel').addEventListener('change', e => { this._espBonoIdx = parseInt(e.target.value, 10); this._renderEsp(); });
+      $('espCampSel') && $('espCampSel').addEventListener('change', e => { this._espCampIdx = parseInt(e.target.value, 10); this._renderEsp(); });
+      $('espRegalo') && $('espRegalo').addEventListener('change', e => { this._espRegalo = e.target.checked; this._renderEsp(); });
+
+      scrim.querySelectorAll('.esp-paybtn').forEach(b => b.addEventListener('click', () => {
+        this._espMetodo = b.getAttribute('data-m'); this._renderEsp();
+      }));
+
+      $('espEmit') && $('espEmit').addEventListener('click', () => this._espEmitir());
+    }
+
+    _renderEspCli(clientes) {
+      const scrim = this.shadowRoot.getElementById('espScrim');
+      if (!scrim) return;
+      const wrap = scrim.querySelector('#espCliResults');
+      if (!wrap) return;
+      if (!clientes || !clientes.length) { wrap.innerHTML = ''; return; }
+      this._espUltimosCli = clientes;
+      wrap.innerHTML = `<div class="esp-cli-results">${clientes.map((c, i) => `
+        <div class="esp-cli-item" data-idx="${i}">
+          <div class="esp-cli-name">${esc(c.nombreCompleto || c.nombre || 'Sin nombre')}</div>
+          <div class="esp-cli-sub">${esc(c.telefono || '')}${c.email ? ' · ' + esc(c.email) : ''}</div>
+        </div>`).join('')}</div>`;
+      wrap.querySelectorAll('.esp-cli-item').forEach(it => it.addEventListener('click', () => {
+        this._espSelectCliente(this._espUltimosCli[parseInt(it.getAttribute('data-idx'), 10)]);
+      }));
+    }
+
+    _espSelectCliente(c) {
+      if (!c) return;
+      this._espCliente = { contactId: c.contactId || '', nombre: c.nombreCompleto || c.nombre || '', telefono: c.telefono || '', email: c.email || '' };
+      this._espNuevoAbierto = false;
+      this._renderEsp();
+    }
+
+    _espGuardarNuevo() {
+      const scrim = this.shadowRoot.getElementById('espScrim');
+      if (!scrim) return;
+      const nombre = (scrim.querySelector('#espNvNombre')?.value || '').trim();
+      if (!nombre) { this._toast('Falta el nombre'); return; }
+      this._sendToPage('espCrearCliente', {
+        nombre,
+        apellido: (scrim.querySelector('#espNvApellido')?.value || '').trim(),
+        telefono: (scrim.querySelector('#espNvTel')?.value || '').trim(),
+        email: (scrim.querySelector('#espNvEmail')?.value || '').trim()
+      });
+    }
+
+    _onEspClienteCreado(data) {
+      if (data && data.ok && data.cliente) {
+        this._espSelectCliente(data.cliente);
+        this._toast('Cliente creado ✓');
+      } else {
+        this._toast('Error: ' + (data?.error?.message || 'no se pudo crear el cliente'));
+      }
+    }
+
+    _onEspData(p) {
+      this._espData = { config: p.config || null, servicios: p.servicios || [], campaigns: p.campaigns || [] };
+      if (this.shadowRoot.getElementById('espScrim')) this._renderEsp();
+    }
+
+    _espPrecioActual() {
+      const d = this._espData; if (!d) return 0;
+      if (this._espTab === 'prime') return (d.config && typeof d.config.primeAnnualPrice === 'number') ? d.config.primeAnnualPrice : 0;
+      if (this._espTab === 'bono') { const s = (d.servicios || [])[this._espBonoIdx]; return s ? (s.precioBonoCalculado || 0) : 0; }
+      if (this._espTab === 'tarjeta') { const c = (d.campaigns || [])[this._espCampIdx]; return c ? (c.promoPrice || 0) : 0; }
+      return 0;
+    }
+
+    _espPuedeEmitir() {
+      if (this._espEmitiendo) return false;
+      if (!this._espCliente || !this._espCliente.contactId) return false;
+      if (this._espTab === 'prime') return true;
+      if (this._espTab === 'bono') return this._espBonoIdx >= 0 && !!((this._espData && this._espData.servicios) || [])[this._espBonoIdx];
+      if (this._espTab === 'tarjeta') return this._espCampIdx >= 0 && !!((this._espData && this._espData.campaigns) || [])[this._espCampIdx];
+      return false;
+    }
+
+    _espEmitir() {
+      if (!this._espPuedeEmitir()) return;
+      const cli = this._espCliente;
+      const base = { contactId: cli.contactId, clientName: cli.nombre, buyerEmail: cli.email || '', buyerPhone: cli.telefono || '', metodoPago: this._espMetodo };
+      const scrim = this.shadowRoot.getElementById('espScrim');
+
+      if (this._espTab === 'prime') {
+        this._espEmitiendo = true; this._renderEsp();
+        this._sendToPage('emitirPrime', { payload: base });
+
+      } else if (this._espTab === 'bono') {
+        const s = this._espData.servicios[this._espBonoIdx];
+        this._espEmitiendo = true; this._renderEsp();
+        this._sendToPage('emitirBono', { payload: Object.assign({}, base, { serviceSetupUid: s.setupUid }) });
+
+      } else if (this._espTab === 'tarjeta') {
+        const c = this._espData.campaigns[this._espCampIdx];
+        const payload = Object.assign({}, base, { campaignId: c._id, isGift: this._espRegalo });
+        if (this._espRegalo && scrim) {
+          payload.recipientName = (scrim.querySelector('#espRecNombre')?.value || '').trim();
+          payload.recipientEmail = (scrim.querySelector('#espRecEmail')?.value || '').trim();
+          payload.recipientMessage = (scrim.querySelector('#espRecMsg')?.value || '').trim();
+          if (!payload.recipientName || !payload.recipientEmail) { this._toast('Faltan datos del destinatario del regalo'); return; }
+        }
+        this._espEmitiendo = true; this._renderEsp();
+        this._sendToPage('emitirTarjeta', { payload });
+      }
+    }
+
+    _onEspEmitido(tipo, data) {
+      this._espEmitiendo = false;
+      if (data && data.success) {
+        const nom = { bono: 'Bono', prime: 'PRIME', tarjeta: 'Tarjeta' }[tipo] || 'Producto';
+        this._toast(`${nom} emitido y cobrado ✓${data.code ? ' · ' + data.code : ''}`);
+        this._closeEspeciales();
+      } else {
+        this._renderEsp();
+        this._toast('Error: ' + (data && (data.error || (data.needsPrime ? 'el cliente no es PRIME activo' : '')) || 'no se pudo emitir'));
+      }
     }
   }
 
