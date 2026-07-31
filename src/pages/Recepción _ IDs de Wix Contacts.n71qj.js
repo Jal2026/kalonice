@@ -17,7 +17,7 @@
 // esta página + el backend van en el Velo de KALÓNICE.
 // =====================================================
 
-import { buscarContactoId } from 'backend/contactLookup.web';
+import { buscarContactoId, buscarContactoIdLote } from 'backend/contactLookup.web';
 
 $w.onReady(function () {
   const html = $w('#htmlBuscadorId'); // ← ID de tu HtmlComponent
@@ -38,6 +38,15 @@ $w.onReady(function () {
         html.postMessage(Object.assign({ type: 'results' }, res));
       } catch (e) {
         html.postMessage({ type: 'results', ok: false, error: { message: e && e.message ? e.message : 'Error' } });
+      }
+    }
+
+    if (msg.type === 'searchLote') {
+      try {
+        const res = await buscarContactoIdLote(msg.payload || {});
+        html.postMessage(Object.assign({ type: 'resultsLote' }, res));
+      } catch (e) {
+        html.postMessage({ type: 'resultsLote', ok: false, error: { message: e && e.message ? e.message : 'Error' } });
       }
     }
   });
