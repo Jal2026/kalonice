@@ -1,10 +1,14 @@
 // =====================================================
 // KAMISUITE — Buscador de contactId (utilidad backoffice)
 // =====================================================
-// VERSION: 1.1.0
+// VERSION: 1.2.0
 // FECHA: 30 de julio de 2026
 // ARCHIVO: backend/contactLookup.web.js
 //
+// v1.2.0 — Coincidencia DIFUSA en el lote: cuando un nombre no casa exacto,
+//   devuelve SUGERENCIAS (parecidos) con % — apodos (Mari→María), iniciales
+//   (M.→María), prefijos (Puri→Purificación), apellido de más/menos y erratas
+//   (Levenshtein). Nuevo estado 'sugerencia'. Umbral 0.70, top 4 por fila.
 // v1.1.0 — Añadido buscarContactoIdLote(): resuelve una LISTA de una vez
 //   (array de nombres o de objetos {nombre,telefono,email}). Vuelca la CRM
 //   una sola vez y cruza en memoria; marca cada fila como ok/ambiguo/
@@ -86,6 +90,67 @@ function nombreKey(s) {
   if (!n) return '';
   return n.split(' ').filter(Boolean).sort().join(' ');
 }
+
+// ---- Coincidencia DIFUSA (para sugerencias cuando no hay match exacto) ----
+
+// Apodos/diminutivos comunes → forma canónica (solo tokens 1:1).
+const NICK = {
+  mari: 'maria', meri: 'maria', mery: 'maria', cuca: 'maria',
+  charo: 'rosario', lola: 'dolores', pili: 'pilar', conchi: 'concepcion',
+  concha: 'concepcion', tere: 'teresa', chelo: 'consuelo', pepe: 'jose',
+  paco: 'francisco', curro: 'francisco', nacho: 'ignacio', quique: 'enrique',
+  kike: 'enrique', puri: 'purificacion', inma: 'inmaculada', montse: 'montserrat',
+  toni: 'antonio', chus: 'jesus', susi: 'susana'
+};
+function canonTok(t) { return NICK[t] || t; }
+
+function lev(a, b) {
+  a = a || ''; b = b || '';
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+// Parecido entre dos tokens de nombre (0..1): apodo / inicial / prefijo / edición.
+function tokenSim(a, b) {
+  const ca = canonTok(a), cb = canonTok(b);
+  if (ca === cb) return 1;
+  if (a === b) return 1;
+  if ((a.length === 1 && b.startsWith(a)) || (b.length === 1 && a.startsWith(b))) return 0.85; // "M." → "Maria"
+  const min = Math.min(a.length, b.length);
+  if (min >= 2 && (a.startsWith(b) || b.startsWith(a))) return 0.92; // Mari/Maria, Puri/Puri...
+  const maxLen = Math.max(a.length, b.length);
+  return 1 - lev(a, b) / maxLen;
+}
+
+// Score de parecido entre dos nombres ya tokenizados (0..1).
+function nameScore(inTokens, cTokens) {
+  if (!inTokens.length || !cTokens.length) return 0;
+  const short = inTokens.length <= cTokens.length ? inTokens : cTokens;
+  const long = inTokens.length <= cTokens.length ? cTokens : inTokens;
+  let sum = 0;
+  for (const st of short) {
+    let best = 0;
+    for (const lt of long) { const s = tokenSim(st, lt); if (s > best) best = s; }
+    sum += best;
+  }
+  const base = sum / short.length;                 // encaje de los tokens del nombre corto
+  const lenPenalty = short.length / long.length;   // penaliza sobra de tokens
+  return base * (0.6 + 0.4 * lenPenalty);
+}
+
+const FUZZY_MIN = 0.70;   // umbral de sugerencia
+const FUZZY_TOP = 4;      // máximo de candidatos por fila
 
 // buscarContactoId({ nombre, telefono, email })
 //   Devuelve TODOS los contactos que casen (puede haber varios: nombres
@@ -234,6 +299,11 @@ export const buscarContactoIdLote = webMethod(Permissions.Anyone, async (payload
       if (nk) { if (!porNombre.has(nk)) porNombre.set(nk, []); porNombre.get(nk).push(c); }
     }
 
+    // Tokens normalizados por contacto (para el cruce difuso).
+    const tokensList = todos.map((c) => ({
+      c, tokens: normNombre(c.nombreCompleto).split(' ').filter(Boolean)
+    })).filter((x) => x.tokens.length);
+
     // Cruce por fila.
     const resultados = entradas.map((e) => {
       const encontrados = new Map();
@@ -253,19 +323,38 @@ export const buscarContactoIdLote = webMethod(Permissions.Anyone, async (payload
         }
       }
       const matches = Array.from(encontrados.values());
+
       let estado = 'no_encontrado';
       if (matches.length === 1) estado = 'ok';
       else if (matches.length > 1) estado = 'ambiguo';
-      return { entrada: e.raw, nombre: e.nombre, telefono: e.telefono, email: e.email, estado, matches };
+
+      // Sin match exacto pero con nombre → SUGERENCIAS difusas (parecidos).
+      let sugerencias = [];
+      if (matches.length === 0 && e.nombre) {
+        const inTok = normNombre(e.nombre).split(' ').filter(Boolean);
+        if (inTok.length) {
+          const scored = [];
+          for (const x of tokensList) {
+            const sc = nameScore(inTok, x.tokens);
+            if (sc >= FUZZY_MIN) scored.push({ ...x.c, score: Math.round(sc * 100), coincidePor: 'sugerencia' });
+          }
+          scored.sort((a, b) => b.score - a.score);
+          sugerencias = scored.slice(0, FUZZY_TOP);
+          if (sugerencias.length) estado = 'sugerencia';
+        }
+      }
+
+      return { entrada: e.raw, nombre: e.nombre, telefono: e.telefono, email: e.email, estado, matches, sugerencias };
     });
 
     const resumen = {
       total: resultados.length,
       ok: resultados.filter(r => r.estado === 'ok').length,
       ambiguo: resultados.filter(r => r.estado === 'ambiguo').length,
+      sugerencia: resultados.filter(r => r.estado === 'sugerencia').length,
       no_encontrado: resultados.filter(r => r.estado === 'no_encontrado').length
     };
-    console.log(`${TAG} 📋 lote: ${resumen.total} entradas · ${resumen.ok} ok · ${resumen.ambiguo} ambiguos · ${resumen.no_encontrado} sin match · CRM=${todos.length}${truncado ? ' (TRUNCADO 20k)' : ''}`);
+    console.log(`${TAG} 📋 lote: ${resumen.total} · ${resumen.ok} ok · ${resumen.ambiguo} amb · ${resumen.sugerencia} sug · ${resumen.no_encontrado} sin · CRM=${todos.length}${truncado ? ' (TRUNC 20k)' : ''}`);
     return { ok: true, version: VERSION, truncado, totalContactosCRM: todos.length, resumen, resultados };
 
   } catch (e) {
