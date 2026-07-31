@@ -1,9 +1,15 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.69  ·  ESPECIALES: venta manual de PRIME/Bonos/Tarjetas
+ * VERSION: 1.1.70  ·  ESPECIALES: avisos amables dentro del modal
  * FECHA: 31 de julio de 2026
  * ---------------------------------------------------------------------
+ * v1.1.70 (31 jul 2026) — ESPECIALES · buen gusto en las respuestas. Los
+ *   avisos del modal (bloqueo por no-PRIME, bono ya activo, PRIME ya activa,
+ *   éxito) dejan de pintarse como toast negro al pie y se muestran DENTRO del
+ *   modal, con tono cálido y una salida útil (el bloqueo por PRIME ofrece un
+ *   botón "Dar de alta PRIME" que salta a esa pestaña). Validaciones de campo
+ *   (nombre, destinatario del regalo) con resaltado suave sin perder lo escrito.
  * v1.1.69 (31 jul 2026) — ESPECIALES. El botón AKIRA (zombi) pasa a ESPECIALES
  *   y abre un modal de venta manual de los tres productos comerciales; se
  *   elimina el botón Inicio (zombi). El modal reutiliza la búsqueda de clientes
@@ -1351,6 +1357,11 @@ button { font-family: inherit; cursor: pointer; }
 .esp-link { background: none; border: none; color: var(--ks-accent); font-size: 12px; font-weight: 600; cursor: pointer; padding: 6px 0; }
 .esp-gift { margin-top: 10px; }
 .esp-muted { font-size: 12px; color: #9ca3af; }
+.esp-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 11px; font-size: 12.5px; line-height: 1.5; margin-bottom: 12px; }
+.esp-notice.warn { background: #fbf4e6; border: 1px solid #ecd9ae; color: #7a5714; }
+.esp-notice.ok { background: #eef8f1; border: 1px solid #c4e4cd; color: #1f7a3d; }
+.esp-notice-act { flex-shrink: 0; background: var(--ks-accent); color: #fff; border: none; border-radius: 8px; padding: 8px 13px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.esp-notice-act:hover { filter: brightness(1.06); }
 .ks-automodel {
   border: 1px solid var(--ks-line); background: var(--ks-paper2); color: var(--ks-ink2);
   padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
@@ -6916,6 +6927,7 @@ button { font-family: inherit; cursor: pointer; }
       this._espRegalo = false;
       this._espMetodo = 'Efectivo';
       this._espEmitiendo = false;
+      this._espMsg = null;
       const root = this.shadowRoot;
       root.getElementById('espScrim')?.remove();
       const scrim = document.createElement('div');
@@ -6947,13 +6959,14 @@ button { font-family: inherit; cursor: pointer; }
           <button class="esp-link" id="espCliChange">Cambiar</button>
         </div>`;
       } else if (this._espNuevoAbierto) {
+        const d = this._espNvDraft || {};
         cliHTML = `<div class="esp-row2">
-            <input class="esp-input" id="espNvNombre" placeholder="Nombre *" autocomplete="off" />
-            <input class="esp-input" id="espNvApellido" placeholder="Apellido" autocomplete="off" />
+            <input class="esp-input" id="espNvNombre" placeholder="Nombre *" autocomplete="off" value="${esc(d.nombre || '')}" />
+            <input class="esp-input" id="espNvApellido" placeholder="Apellido" autocomplete="off" value="${esc(d.apellido || '')}" />
           </div>
           <div class="esp-row2" style="margin-top:8px;">
-            <input class="esp-input" id="espNvTel" placeholder="Teléfono" autocomplete="off" />
-            <input class="esp-input" id="espNvEmail" placeholder="Email" autocomplete="off" />
+            <input class="esp-input" id="espNvTel" placeholder="Teléfono" autocomplete="off" value="${esc(d.telefono || '')}" />
+            <input class="esp-input" id="espNvEmail" placeholder="Email" autocomplete="off" value="${esc(d.email || '')}" />
           </div>
           <div class="esp-row2" style="margin-top:8px;">
             <button class="esp-link" id="espNvCancel">Cancelar</button>
@@ -7026,6 +7039,7 @@ button { font-family: inherit; cursor: pointer; }
             ${prodHTML}
           </div>
           <div class="esp-sec"><span class="esp-eyebrow">Método de pago</span><div class="esp-pay">${payHTML}</div></div>
+          ${this._espMsg ? `<div class="esp-notice ${this._espMsg.tipo}"><span>${esc(this._espMsg.texto)}</span>${this._espMsg.accion ? `<button class="esp-notice-act" id="espMsgAct">${esc(this._espMsg.accion.label)}</button>` : ''}</div>` : ''}
           <button class="esp-emit" id="espEmit"${puede ? '' : ' disabled'}>${this._espEmitiendo ? 'Emitiendo…' : `Emitir y cobrar${precio > 0 ? ` · ${precio}€` : ''}`}</button>
         </div>
       </div>`;
@@ -7036,6 +7050,7 @@ button { font-family: inherit; cursor: pointer; }
       const scrim = this.shadowRoot.getElementById('espScrim');
       if (!scrim) return;
       const $ = (id) => scrim.querySelector('#' + id);
+      const clr = () => { this._espMsg = null; };
 
       $('espX') && $('espX').addEventListener('click', () => this._closeEspeciales());
 
@@ -7048,22 +7063,29 @@ button { font-family: inherit; cursor: pointer; }
           this._espBuscarTimer = setTimeout(() => this._sendToPage('espBuscarCliente', { query: q }), 250);
         });
       }
-      $('espCliNuevo') && $('espCliNuevo').addEventListener('click', () => { this._espNuevoAbierto = true; this._renderEsp(); });
-      $('espCliChange') && $('espCliChange').addEventListener('click', () => { this._espCliente = null; this._renderEsp(); });
-      $('espNvCancel') && $('espNvCancel').addEventListener('click', () => { this._espNuevoAbierto = false; this._renderEsp(); });
+      $('espCliNuevo') && $('espCliNuevo').addEventListener('click', () => { clr(); this._espNvDraft = {}; this._espNuevoAbierto = true; this._renderEsp(); });
+      $('espCliChange') && $('espCliChange').addEventListener('click', () => { clr(); this._espCliente = null; this._renderEsp(); });
+      $('espNvCancel') && $('espNvCancel').addEventListener('click', () => { clr(); this._espNuevoAbierto = false; this._renderEsp(); });
       $('espNvSave') && $('espNvSave').addEventListener('click', () => this._espGuardarNuevo());
 
       scrim.querySelectorAll('.esp-tab').forEach(b => b.addEventListener('click', () => {
-        this._espTab = b.getAttribute('data-tab'); this._renderEsp();
+        clr(); this._espTab = b.getAttribute('data-tab'); this._renderEsp();
       }));
 
-      $('espBonoSel') && $('espBonoSel').addEventListener('change', e => { this._espBonoIdx = parseInt(e.target.value, 10); this._renderEsp(); });
-      $('espCampSel') && $('espCampSel').addEventListener('change', e => { this._espCampIdx = parseInt(e.target.value, 10); this._renderEsp(); });
-      $('espRegalo') && $('espRegalo').addEventListener('change', e => { this._espRegalo = e.target.checked; this._renderEsp(); });
+      $('espBonoSel') && $('espBonoSel').addEventListener('change', e => { clr(); this._espBonoIdx = parseInt(e.target.value, 10); this._renderEsp(); });
+      $('espCampSel') && $('espCampSel').addEventListener('change', e => { clr(); this._espCampIdx = parseInt(e.target.value, 10); this._renderEsp(); });
+      $('espRegalo') && $('espRegalo').addEventListener('change', e => { clr(); this._espRegalo = e.target.checked; this._renderEsp(); });
 
       scrim.querySelectorAll('.esp-paybtn').forEach(b => b.addEventListener('click', () => {
         this._espMetodo = b.getAttribute('data-m'); this._renderEsp();
       }));
+
+      $('espMsgAct') && $('espMsgAct').addEventListener('click', () => {
+        const a = this._espMsg && this._espMsg.accion;
+        this._espMsg = null;
+        if (a && a.tipo === 'prime') this._espTab = 'prime';
+        this._renderEsp();
+      });
 
       $('espEmit') && $('espEmit').addEventListener('click', () => this._espEmitir());
     }
@@ -7095,28 +7117,32 @@ button { font-family: inherit; cursor: pointer; }
     _espGuardarNuevo() {
       const scrim = this.shadowRoot.getElementById('espScrim');
       if (!scrim) return;
-      const nombre = (scrim.querySelector('#espNvNombre')?.value || '').trim();
-      if (!nombre) { this._toast('Falta el nombre'); return; }
-      this._sendToPage('espCrearCliente', {
+      const elNom = scrim.querySelector('#espNvNombre');
+      const nombre = (elNom?.value || '').trim();
+      // Guardamos lo escrito por si la creación falla y hay que repintar el form.
+      this._espNvDraft = {
         nombre,
         apellido: (scrim.querySelector('#espNvApellido')?.value || '').trim(),
         telefono: (scrim.querySelector('#espNvTel')?.value || '').trim(),
         email: (scrim.querySelector('#espNvEmail')?.value || '').trim()
-      });
+      };
+      if (!nombre) { if (elNom) { elNom.style.borderColor = '#d9a54d'; elNom.focus(); } return; }
+      this._sendToPage('espCrearCliente', this._espNvDraft);
     }
 
     _onEspClienteCreado(data) {
       if (data && data.ok && data.cliente) {
+        this._espNvDraft = {};
         this._espSelectCliente(data.cliente);
-        this._toast('Cliente creado ✓');
       } else {
-        this._toast('Error: ' + (data?.error?.message || 'no se pudo crear el cliente'));
+        this._espMsg = { tipo: 'warn', texto: 'No se ha podido guardar el cliente. Revisa los datos e inténtalo de nuevo.' };
+        this._renderEsp();
       }
     }
 
     _onEspData(p) {
       this._espData = { config: p.config || null, servicios: p.servicios || [], campaigns: p.campaigns || [] };
-      if (this.shadowRoot.getElementById('espScrim')) this._renderEsp();
+      if (this.shadowRoot.getElementById('espScrim') && !this._espNuevoAbierto) this._renderEsp();
     }
 
     _espPrecioActual() {
@@ -7138,6 +7164,7 @@ button { font-family: inherit; cursor: pointer; }
 
     _espEmitir() {
       if (!this._espPuedeEmitir()) return;
+      this._espMsg = null;
       const cli = this._espCliente;
       const base = { contactId: cli.contactId, clientName: cli.nombre, buyerEmail: cli.email || '', buyerPhone: cli.telefono || '', metodoPago: this._espMetodo };
       const scrim = this.shadowRoot.getElementById('espScrim');
@@ -7155,10 +7182,15 @@ button { font-family: inherit; cursor: pointer; }
         const c = this._espData.campaigns[this._espCampIdx];
         const payload = Object.assign({}, base, { campaignId: c._id, isGift: this._espRegalo });
         if (this._espRegalo && scrim) {
-          payload.recipientName = (scrim.querySelector('#espRecNombre')?.value || '').trim();
-          payload.recipientEmail = (scrim.querySelector('#espRecEmail')?.value || '').trim();
+          const rn = scrim.querySelector('#espRecNombre'), re = scrim.querySelector('#espRecEmail');
+          payload.recipientName = (rn?.value || '').trim();
+          payload.recipientEmail = (re?.value || '').trim();
           payload.recipientMessage = (scrim.querySelector('#espRecMsg')?.value || '').trim();
-          if (!payload.recipientName || !payload.recipientEmail) { this._toast('Faltan datos del destinatario del regalo'); return; }
+          if (!payload.recipientName || !payload.recipientEmail) {
+            if (!payload.recipientName && rn) { rn.style.borderColor = '#d9a54d'; rn.focus(); }
+            if (!payload.recipientEmail && re) { re.style.borderColor = '#d9a54d'; if (payload.recipientName) re.focus(); }
+            return;
+          }
         }
         this._espEmitiendo = true; this._renderEsp();
         this._sendToPage('emitirTarjeta', { payload });
@@ -7167,14 +7199,30 @@ button { font-family: inherit; cursor: pointer; }
 
     _onEspEmitido(tipo, data) {
       this._espEmitiendo = false;
+      const nom = (this._espCliente && this._espCliente.nombre ? this._espCliente.nombre.split(/\s+/)[0] : 'el cliente');
       if (data && data.success) {
-        const nom = { bono: 'Bono', prime: 'PRIME', tarjeta: 'Tarjeta' }[tipo] || 'Producto';
-        this._toast(`${nom} emitido y cobrado ✓${data.code ? ' · ' + data.code : ''}`);
-        this._closeEspeciales();
-      } else {
+        const label = { bono: 'El bono', prime: 'La tarjeta PRIME', tarjeta: 'La tarjeta' }[tipo] || 'El producto';
+        this._espMsg = { tipo: 'ok', texto: `¡Listo! ${label} ya está activa para ${nom}.` };
         this._renderEsp();
-        this._toast('Error: ' + (data && (data.error || (data.needsPrime ? 'el cliente no es PRIME activo' : '')) || 'no se pudo emitir'));
+        clearTimeout(this._espCloseTimer);
+        this._espCloseTimer = setTimeout(() => this._closeEspeciales(), 1700);
+        return;
       }
+      if (data && data.needsPrime) {
+        this._espMsg = {
+          tipo: 'warn',
+          texto: `Los bonos son un detalle para socios del Club PRIME, y ${nom} todavía no forma parte. Puedes darle de alta la tarjeta PRIME y, ya dentro, ofrecerle el bono.`,
+          accion: { label: 'Dar de alta PRIME', tipo: 'prime' }
+        };
+      } else if (data && data.alreadyHasVoucher) {
+        const svc = (this._espData && this._espData.servicios[this._espBonoIdx] && this._espData.servicios[this._espBonoIdx].label) || 'ese servicio';
+        this._espMsg = { tipo: 'warn', texto: `${nom} ya tiene un bono en marcha de ${svc}. Cuando lo termine, podrás ofrecerle uno nuevo.` };
+      } else if (data && data.alreadyActive) {
+        this._espMsg = { tipo: 'warn', texto: `${nom} ya es socio del Club PRIME, no hace falta activarla de nuevo.` };
+      } else {
+        this._espMsg = { tipo: 'warn', texto: 'No se ha podido completar la venta. Inténtalo de nuevo en un momento.' };
+      }
+      this._renderEsp();
     }
   }
 
