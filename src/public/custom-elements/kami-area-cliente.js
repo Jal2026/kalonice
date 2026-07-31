@@ -1,11 +1,56 @@
 /* ============================================================================
  * kami-area-cliente.js
  * ----------------------------------------------------------------------------
- * VERSION: 1.2.0
- * FECHA:   1 de julio de 2026
+ * VERSION: 1.2.0-alt-noanteriores
+ * FECHA:   31 de julio de 2026
  *
  * Área de Cliente KAMISUITE — Custom Element con Shadow DOM.
  * Mismo patrón que <kami-reserva> del widget público. Tag: <kami-area-cliente>.
+ *
+ * v1.2.0-alt-noanteriores — Variante paralela a la línea principal v1.2.0.
+ *   OBJETIVO. Ocultar la sección "Servicios anteriores" para salones que no
+ *   quieran mostrar el historial al cliente en su Área. Solo se elimina la
+ *   VISUALIZACIÓN. El backend `clienteAreaLogic.web.js` sigue devolviendo
+ *   `data.anteriores[]` intacto y el page code sigue propagándolo — no se
+ *   tocan. Toda la lógica y estilos restantes se preservan tal cual.
+ *
+ *   CAMBIOS QUIRÚRGICOS respecto a v1.2.0 mainline:
+ *     1. Se elimina la entrada `{ id: 'anteriores', label: 'Servicios
+ *        anteriores', icon: 'clock' }` del array `SECCIONES`. Como el nav
+ *        lateral (`_sidenav`), el nav mobile (`_navmobile`), el router de
+ *        secciones (`section`) y el set `_abiertas` iteran `SECCIONES`, el
+ *        ítem desaparece automáticamente del índice y del cuerpo, y el
+ *        accordion mobile ya no lo abre.
+ *     2. Se elimina el método `sec_anteriores()` (renderizador de la sección).
+ *     3. Se elimina el estado `this._anterioresVisibles = 4` en `_initState`.
+ *     4. Se elimina el case `'verMasAnteriores'` del handler central de
+ *        clicks — ya no puede dispararse porque el botón que lo emitía vivía
+ *        dentro del bloque eliminado.
+ *
+ *   LO QUE SE MANTIENE INTACTO:
+ *     · Case `'repetirServicio'` del handler — sin origen desde el DOM
+ *       (`sec_anteriores` era el único emisor) pero se preserva para que la
+ *       reactivación futura de la sección sea reversión de una sola línea.
+ *     · Estilo `.more-row` en el CSS embebido (regla estética universal
+ *       reutilizable — no se toca sin permiso explícito).
+ *     · Comentario del contract de eventos en la cabecera de `emit()` que
+ *       documenta `repetirServicio` — el evento sigue existiendo aunque no
+ *       se emita.
+ *     · Comportamiento por defecto de `_setSecActiva`: la primera sección
+ *       del array (ahora `personal`) sigue siendo la activa inicial.
+ *
+ *   NO SE TOCA:
+ *     · Backend `clienteAreaLogic.web.js` (sigue devolviendo `anteriores[]`).
+ *     · Page code `pagecode_clienteArea.js` (sigue propagando `anteriores` y
+ *       manteniendo el listener `repetirServicio`).
+ *     · Cualquier otro flujo del Custom Element (skins, perfil, próximas,
+ *       cancelar, mover, notas, productos, expediente, Club/PRIME/Bonos/
+ *       Tarjetas, puntos).
+ *
+ *   DESPLIEGUE. Es una variante alternativa: no sustituye a v1.2.0 mainline
+ *   en el bundle canónico; se sube al Custom Element del salón concreto que
+ *   necesite ocultar el historial. Para volver a mostrar la sección basta
+ *   con volver a la v1.2.0 mainline (o al mainline posterior que esté vigente).
  *
  * v1.2.0 — Multi-tenant skins completos (7 pieles).
  *   - KR_SKINS embebido ahora tiene las 7 pieles del bundle canónico:
@@ -227,7 +272,7 @@ const SECCIONES = [
   // `_navmobile()` y `_setSecActiva()`.
   { id: 'puntos',     label: 'Club', icon: 'star' },
   { id: 'proximas',   label: 'Próximas citas',       icon: 'calendar' },
-  { id: 'anteriores', label: 'Servicios anteriores', icon: 'clock' },
+  // v1.2.0-alt-noanteriores — Sección 'anteriores' retirada. Ver cabecera.
   { id: 'notas',      label: 'Notas para el salón',  icon: 'note' },
   { id: 'productos',  label: 'Productos comprados',  icon: 'bag' },
   { id: 'expediente', label: 'Información adicional', icon: 'file' },
@@ -626,7 +671,7 @@ class KamiAreaCliente extends HTMLElement {
     this._draft = null;          // borrador de edición de perfil
     this._moverAbierto = null;   // id de cita con selector de mover abierto
     this._moverSel = {};         // { fecha, hora } selección temporal
-    this._anterioresVisibles = 4;
+    // v1.2.0-alt-noanteriores — `this._anterioresVisibles` retirado con la sección.
     this._notaDirty = false;
     this._activa = 'personal';
     this._narrow = false;
@@ -1524,26 +1569,16 @@ textarea.nota:focus{outline:none;border-color:var(--kr-accent);box-shadow:0 0 0 
   }
 
   /* ---------------- 3.4 SERVICIOS ANTERIORES ---------------- */
-  sec_anteriores() {
-    const all = this._data.anteriores || [];
-    if (!all.length) {
-      return `<div class="empty"><div class="glyph">✨</div><h3>Aún no hay servicios anteriores</h3>
-        <p>Tu historial de visitas aparecerá aquí después de tu primera cita.</p></div>`;
-    }
-    const vis = all.slice(0, this._anterioresVisibles);
-    const rows = vis.map(h => `<div class="row">
-      <div class="datebox"><div class="d">${new Date(h.fecha + 'T00:00:00').getDate()}</div><div class="m">${MESES[new Date(h.fecha + 'T00:00:00').getMonth()]}</div></div>
-      <div class="main">
-        <p class="ttl">${esc(h.servicios.join(' · '))}</p>
-        <div class="mt"><span>${fechaCorta(h.fecha)}</span><span>${esc(h.profesional)}</span></div>
-      </div>
-      <div class="price">${eur(h.importe)}</div>
-      <div class="actions"><button class="btn btn-soft btn-sm" data-act="repetirServicio" data-cat="${esc(h.categoria)}" data-id="${h.id}">${ic('repeat')} Repetir</button></div>
-    </div>`).join('');
-    const more = all.length > this._anterioresVisibles
-      ? `<div class="more-row"><button class="btn btn-ghost btn-sm" data-act="verMasAnteriores">Ver más visitas (${all.length - this._anterioresVisibles})</button></div>` : '';
-    return `<p class="sec-desc">Tu historial de visitas. Repite cualquier servicio en un toque — te llevamos al reservar con la categoría ya elegida.</p><div class="list">${rows}</div>${more}`;
-  }
+  // v1.2.0-alt-noanteriores — Método `sec_anteriores()` retirado.
+  //   El backend sigue devolviendo `data.anteriores[]` y el page code sigue
+  //   propagándolo, pero como 'anteriores' ya no está en `SECCIONES`, el
+  //   router `section(s)` no llama a este método (que ya no existe).
+  //   Para reactivar la sección basta con:
+  //     1) volver a añadir la entrada al array SECCIONES,
+  //     2) restaurar el bloque `sec_anteriores()` de v1.2.0 mainline,
+  //     3) restaurar el estado `this._anterioresVisibles = 4` en _initState,
+  //     4) restaurar el case 'verMasAnteriores' del handler.
+  //   El case 'repetirServicio' NO se retiró — sigue vivo por defensa.
 
   /* ---------------- 3.5 NOTAS PARA EL SALÓN ---------------- */
   sec_notas() {
@@ -1687,7 +1722,10 @@ textarea.nota:focus{outline:none;border-color:var(--kr-accent);box-shadow:0 0 0 
       case 'moverConfirm': this.confirmarMover(id); break;
       case 'cancelarConfirm': this.confirmarCancelar(id, btn); break;
 
-      case 'verMasAnteriores': this._anterioresVisibles += 4; this.repaintSection('anteriores'); break;
+      // v1.2.0-alt-noanteriores — `verMasAnteriores` retirado con la sección.
+      // `repetirServicio` se mantiene: sin origen actual desde el DOM (el bloque
+      // que lo emitía fue el eliminado), pero se preserva para que reactivar
+      // la sección sea reversión pura sin tocar el handler.
       case 'repetirServicio': this.emit('repetirServicio', { categoria: btn.dataset.cat, anteriorId: id }); this.toast('Repetimos servicio · te llevamos a reservar'); break;
       case 'repetirCompra': this.emit('repetirCompra', { productoId: id }); this.toast('Añadido al carrito'); break;
 
