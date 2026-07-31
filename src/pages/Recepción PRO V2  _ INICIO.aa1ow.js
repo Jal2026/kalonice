@@ -1,9 +1,20 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.31
-// FECHA: 31 de julio de 2026
+// VERSION: 1.0.32
+// FECHA: 1 de agosto de 2026
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
+//
+// v1.0.32: + APERTURA DE CAJA (fondo inicial del día). Imports abrirCaja
+//          y getFondoSugerido de cashRegisterLogic v1.1.0. Nuevos handlers:
+//            · handleCheckApertura — lee SalonConfig.arqueoActivo; si el
+//              módulo está activo y no hay caja hoy, responde
+//              'caja-fondo-sugerido' con el fondo sugerido (fondo fijo del
+//              salón / cierre de ayer / 0). Si no, 'apertura-estado'.
+//            · handleAbrirCaja — llama abrirCaja con firma automática del
+//              empleado logueado (recordedBy). Responde 'caja-abierta'.
+//          + 2 cases nuevos ('check-apertura-caja', 'caja-abrir') y entrada
+//          'caja-abrir' → 'apertura_caja' en LOG_EVENT_MAP.
 //
 // v1.0.31: + ESPECIALES. Enganche del modal de venta manual (PRIME / Bonos /
 //          Tarjetas) con especialesVentaLogic. Nuevos handlers:
@@ -399,13 +410,16 @@ import { cargarTodosContactos, crearContacto, editarContacto } from 'backend/rec
 import { emitirBonoManual, emitirPrimeManual, emitirTarjetaManual } from 'backend/especialesVentaLogic.web';
 import { getProductosConfig, listarServiciosConBono, listarPromoCampaigns } from 'backend/productosKamisuiteLogic.web';
 
-// Arqueo de caja: backend existente (gemelo en KALONICE). No se modifica.
+// Arqueo de caja: backend cashRegisterLogic. v1.1.0 añade getFondoSugerido
+// y expone abrirCaja para el flujo de APERTURA de caja (fondo inicial).
 import {
   calcularEfectivoEsperado,
   guardarArqueo,
   cerrarCaja,
   registrarMovimiento,
-  getCajaDia
+  getCajaDia,
+  getFondoSugerido,
+  abrirCaja
 } from 'backend/cashRegisterLogic.web';
 
 // v1.0.5 — Cierre del día (panel inferior). Backends existentes, NO modificados.
@@ -446,7 +460,7 @@ import {
 // existente en salonConfigLogic.web.js (Permissions.SiteMember). NO se toca.
 import { getSalonConfig } from 'backend/salonConfigLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.31]';
+const TAG = '[RecepcionProCMS v1.0.32]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -487,6 +501,8 @@ const LOG_EVENT_MAP = {
   'vender-productos-cita': 'cobro',
   // acceso a arqueo de caja
   'caja-calcular':         'acceso_arqueo',
+  // v1.0.32 — apertura de caja (fondo inicial del día)
+  'caja-abrir':            'apertura_caja',
   // acceso a informe / cierre del día
   'cierre-dia':            'acceso_informe'
 };
@@ -957,6 +973,55 @@ async function handleCajaMovimiento(msg) {
     const result = await registrarMovimiento({ fechaISO: msg.fechaISO, movementType: msg.movementType, amount: msg.amount, description: msg.description || '', recordedBy: msg.recordedBy || '', registerId: msg.registerId || '' });
     sendResponse('caja-movimiento-ok', result);
   } catch (e) { sendResponse('caja-movimiento-ok', { ok: false, error: e.message }); }
+}
+
+// =====================================================
+// APERTURA DE CAJA (fondo inicial del día)  v1.0.32
+//   El arqueo es un MÓDULO OPCIONAL. handleCheckApertura decide, leyendo
+//   SalonConfig.arqueoActivo, si el widget debe ofrecer la apertura:
+//     - arqueoActivo !== true            → 'apertura-estado' { activo:false }
+//     - activo pero ya hay caja hoy      → 'apertura-estado' { activo:true, hayCaja:true }
+//     - activo y sin caja hoy            → 'caja-fondo-sugerido' { fondoSugerido, origen, fechaOrigen }
+//   El flag se comprueba en el backend/page code; el widget solo reacciona.
+// =====================================================
+
+async function handleCheckApertura(msg) {
+  try {
+    const cfgRes = await getSalonConfig();
+    const arqueoActivo = !!(cfgRes && cfgRes.ok && cfgRes.config && cfgRes.config.arqueoActivo === true);
+    if (!arqueoActivo) { sendResponse('apertura-estado', { activo: false }); return; }
+
+    const caja = await getCajaDia({ fechaISO: msg.fechaISO });
+    if (caja && caja.registro) { sendResponse('apertura-estado', { activo: true, hayCaja: true }); return; }
+
+    const sug = await getFondoSugerido({ fechaISO: msg.fechaISO });
+    sendResponse('caja-fondo-sugerido', {
+      fechaISO: msg.fechaISO,
+      fondoSugerido: sug && sug.ok ? Number(sug.fondoSugerido || 0) : 0,
+      origen: sug && sug.origen ? sug.origen : 'cero',
+      fechaOrigen: sug && sug.fechaOrigen ? sug.fechaOrigen : ''
+    });
+  } catch (e) {
+    console.error(`${TAG} ❌ check-apertura-caja:`, e);
+    sendResponse('apertura-estado', { activo: false, error: e.message });
+  }
+}
+
+async function handleAbrirCaja(msg) {
+  try {
+    // Firma automática con el empleado logueado (patrón v1.0.22). Si no hay
+    // capa de acceso activa, cae al recordedBy que mande el widget (vacío ok).
+    const recordedBy = (_empleadoActivo && _empleadoActivo.staffName) || msg.recordedBy || '';
+    const result = await abrirCaja({
+      fechaISO: msg.fechaISO,
+      openingBalance: Number(msg.openingBalance || 0),
+      recordedBy
+    });
+    sendResponse('caja-abierta', result);
+  } catch (e) {
+    console.error(`${TAG} ❌ caja-abrir:`, e);
+    sendResponse('caja-abierta', { ok: false, error: e.message });
+  }
 }
 
 // =====================================================
@@ -1511,6 +1576,9 @@ $w.onReady(function () {
         case 'caja-guardar':     handleCajaGuardar(msg); break;
         case 'caja-cerrar':      handleCajaCerrar(msg); break;
         case 'caja-movimiento':  handleCajaMovimiento(msg); break;
+        // v1.0.32 — apertura de caja (fondo inicial del día)
+        case 'check-apertura-caja': handleCheckApertura(msg); break;
+        case 'caja-abrir':          handleAbrirCaja(msg); break;
         case 'cierre-dia':       handleCierreDia(msg); break;
         case 'get-settings':     handleGetSettings(); break;
         case 'save-settings':    handleSaveSettings(msg.settings); break;
