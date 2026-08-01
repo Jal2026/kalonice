@@ -42,7 +42,15 @@ import {
 
 import { listarCupones } from 'backend/couponsLogic.web';
 
-const TAG = '[Observatorio v1.1.0]';
+// v1.1.2 — editar emitidos + aviso de caducidad
+import {
+  actualizarVoucher,
+  actualizarPrimeMembership,
+  actualizarPromoCard,
+  prepararAvisoCaducidad
+} from 'backend/productosKamisuiteLogic.web';
+
+const TAG = '[Observatorio v1.1.2]';
 const WIDGET_ID = '#htmlObservatorioClientes';
 
 // ── Cache observatorio global ──
@@ -87,6 +95,12 @@ $w.onReady(function () {
         break;
       case 'updateContacto':
         await handleUpdateContacto(msg);
+        break;
+      case 'actualizarEvento':
+        await handleActualizarEvento(msg);
+        break;
+      case 'prepararAviso':
+        await handlePrepararAviso(msg);
         break;
       case 'refreshCupones':
         await handleRefreshCupones();
@@ -256,6 +270,45 @@ async function handleUpdateContacto(msg) {
   } catch (e) {
     console.error(`${TAG} ❌ updateContacto:`, e?.message);
     sendResponse('contactoActualizado', { contactId, ok: false, error: e?.message || 'Error' });
+  }
+}
+
+// v1.1.2 — Guardar edición del evento (bono/prime/tarjeta) → backend productos.
+async function handleActualizarEvento(msg) {
+  const p = (msg && msg.payload) || {};
+  const { tipo, _id, remainingUses, expirationDate } = p;
+  try {
+    let r;
+    if (tipo === 'voucher') r = await actualizarVoucher({ _id, remainingUses, expirationDate });
+    else if (tipo === 'prime') r = await actualizarPrimeMembership({ _id, expirationDate });
+    else if (tipo === 'promo') r = await actualizarPromoCard({ _id, expirationDate });
+    else { sendResponse('eventoActualizado', { ok: false, error: 'Tipo no válido' }); return; }
+
+    if (r && r.success) {
+      _cacheGlobal = null; _cacheGlobalTs = 0; // invalidar para que refreshGlobal traiga el cambio
+      sendResponse('eventoActualizado', { ok: true, tipo, _id });
+    } else {
+      sendResponse('eventoActualizado', { ok: false, error: (r && r.error) || 'No se pudo guardar' });
+    }
+  } catch (e) {
+    console.error(`${TAG} ❌ actualizarEvento:`, e?.message);
+    sendResponse('eventoActualizado', { ok: false, error: e?.message || 'Error' });
+  }
+}
+
+// v1.1.2 — Preparar el aviso de caducidad (texto + tel/email) → el widget abre wa.me/mailto.
+async function handlePrepararAviso(msg) {
+  const p = (msg && msg.payload) || {};
+  try {
+    const r = await prepararAvisoCaducidad({ tipo: p.tipo, _id: p._id });
+    if (r && r.ok) {
+      sendResponse('avisoPreparado', { ok: true, textFinal: r.textFinal, phone: r.phone, email: r.email, clientName: r.clientName });
+    } else {
+      sendResponse('avisoPreparado', { ok: false, error: (r && r.error) || 'No se pudo preparar el aviso' });
+    }
+  } catch (e) {
+    console.error(`${TAG} ❌ prepararAviso:`, e?.message);
+    sendResponse('avisoPreparado', { ok: false, error: e?.message || 'Error' });
   }
 }
 
