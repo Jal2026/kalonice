@@ -1,8 +1,51 @@
 // ═══════════════════════════════════════════════════════════════
-// paymentReservationsLogic.web.js  v1.3.0
+// paymentReservationsLogic.web.js  v1.3.2
 // KAMISUITE — CRUD PaymentReservations + verificación de contactIds
 // ═══════════════════════════════════════════════════════════════
 // CHANGELOG:
+//   v1.3.2 (1-ago-2026) — actualizarPaymentReservation ahora
+//     soporta editar 'desglosemetodopago' con regla cross-field:
+//     · Si campos.tipoPago === 'Mixto' y campos.desglosemetodopago
+//       viene vacío / ausente → SE RECHAZA. Cambiar a Mixto sin
+//       desglose fue exactamente el bug que producía cobros
+//       corruptos (v2.0.0 del widget no lo pedía).
+//     · Si campos.tipoPago viene y NO es 'Mixto' → se FUERZA
+//       desglosemetodopago = '' (limpia el desglose viejo al
+//       cambiar el método de cobro).
+//     · Si campos.tipoPago no viene pero campos.desglosemetodopago
+//       sí → se respeta el envío (edición aislada del desglose).
+//     Añadido 'desglosemetodopago' a la lista EDITABLES.
+//     Sin más cambios en el archivo (delete v1.3.1 intacto).
+//     Contrapartida en widget: edicionpagoswidget v2.1.0.
+//
+//   v1.3.1 (1-ago-2026) — eliminarPaymentReservation revierte el
+//     status de KamisuiteReservations a 'CONFIRMADA' cuando el
+//     cobro borrado corresponde a una cita interna (bookingId con
+//     prefijo 'KRI_'). Simetría con marcarPagadoReserva
+//     (recepcionProLogic v1.0.37): cobrar acopla status='PAGADO' +
+//     insert PaymentReservations; anular el cobro debe deshacer
+//     AMBAS escrituras. Cambio quirúrgico: 1 bloque nuevo dentro
+//     de eliminarPaymentReservation (antes del wixData.remove).
+//     Fallback seguro: si la reversión del status falla por
+//     cualquier motivo, el borrado del cobro SÍ se lleva a cabo
+//     (misma política que la rama interna de marcarPagadoReserva
+//     ante fallo de PaymentReservations). No aplica a cobros con
+//     otros prefijos (ESP_ especiales de venta manual, etc.) — no
+//     tienen contrapartida en KamisuiteReservations, se dejan
+//     intactos. Cero cambios en el resto de funciones del archivo,
+//     ni en el contrato del CRUD del Editor de Cobros: se añade un
+//     campo opcional 'reservaRevertida' al return de éxito, y el
+//     page code v2.0.0 lo ignora sin romperse.
+//     Impacto observable:
+//       · Recepción PRO al recargar el día pinta la cita naranja
+//         (is-pending) porque status pasa a 'CONFIRMADA'.
+//       · Informe del día: Rendimiento Productivo deja de contar
+//         la cita como cobrada (procesarRendimiento gate por
+//         status==='PAGADO'); Cierre Financiero ya no la incluía
+//         (query por fechaPago sobre la fila borrada).
+//       · Reconciliación deja de reportar "cita del día cobrada
+//         en otro día" (falso positivo).
+//
 //   v1.3.0 (7-may-2026) — añadida función eliminarPaymentReservation
 //     para que el cliente pueda borrar registros sin tocar el panel
 //     de Wix (panel reservado para Anthropic/admin). Se borra del
@@ -43,7 +86,8 @@ import { contacts } from 'wix-crm-backend';
 import wixData from 'wix-data';
 
 const COLLECTION = 'PaymentReservations';
-const TAG = '[PaymentReservations][v1.3.0]';
+const COLECCION_RESERVAS = 'KamisuiteReservations'; // v1.3.1 — reversión de status al borrar cobro KRI_
+const TAG = '[PaymentReservations][v1.3.2]';
 
 // Nombres concretos a loggear para debug (vacío = sin debug dirigido).
 // Se compara normalizado contra el nombreCliente del item.
@@ -91,7 +135,29 @@ export const listarPaymentReservations = webMethod(
 );
 
 // ───────────────────────────────────────────────────────────────
-// actualizarPaymentReservation(_id, campos)  [sin cambios]
+// actualizarPaymentReservation(_id, campos)  [v1.3.2 — soporte desglose Mixto]
+// ───────────────────────────────────────────────────────────────
+// Campos editables: importeTotal, tipoPago, descripcion,
+// nombreCliente, fechaPago, desglosemetodopago.
+//
+// Regla cross-field para el desglose (v1.3.2):
+//   · Si campos.tipoPago === 'Mixto' → campos.desglosemetodopago
+//     DEBE venir no vacío. Si viene vacío / ausente, se rechaza
+//     el update para no dejar cobros Mixto huérfanos.
+//   · Si campos.tipoPago viene y es distinto de 'Mixto' → se
+//     fuerza desglosemetodopago = '' (limpia el desglose previo
+//     al cambiar el método). Ignora lo que envíe el cliente en
+//     ese campo, incluso si envía JSON: los otros métodos no lo
+//     necesitan.
+//   · Si campos.tipoPago no viene (edición aislada de otros
+//     campos) → se respeta campos.desglosemetodopago tal cual.
+//
+// El formato canónico de desglosemetodopago es una string con
+//   JSON.stringify({Tarjeta:N, Efectivo:N, Bizum:N})
+// con solo las keys > 0. Es el mismo formato que emite el
+// _openMixto de Recepción PRO (recepcionProCMS_widget v1.1.61)
+// para garantizar que el chip "💳 Método de cobro" del modal de
+// cita pagada lea el desglose sin ninguna adaptación.
 // ───────────────────────────────────────────────────────────────
 export const actualizarPaymentReservation = webMethod(
   Permissions.Anyone,
@@ -102,10 +168,31 @@ export const actualizarPaymentReservation = webMethod(
         return { success: false, error: 'Registro no encontrado' };
       }
 
-      const EDITABLES = ['importeTotal', 'tipoPago', 'descripcion', 'nombreCliente', 'fechaPago'];
+      // v1.3.2 — regla cross-field aplicada sobre 'campos' ANTES de mapear.
+      // Muta la copia recibida; no toca el CMS aún.
+      const camposIn = { ...campos };
+      if (camposIn.tipoPago !== undefined) {
+        if (camposIn.tipoPago === 'Mixto') {
+          const desg = (camposIn.desglosemetodopago == null)
+            ? ''
+            : String(camposIn.desglosemetodopago);
+          if (!desg.trim()) {
+            return {
+              success: false,
+              error: 'Un cobro Mixto requiere desglose (Tarjeta/Efectivo/Bizum).'
+            };
+          }
+          camposIn.desglosemetodopago = desg;
+        } else {
+          // Cambio a método no-Mixto → limpiar desglose previo
+          camposIn.desglosemetodopago = '';
+        }
+      }
+
+      const EDITABLES = ['importeTotal', 'tipoPago', 'descripcion', 'nombreCliente', 'fechaPago', 'desglosemetodopago'];
       for (const campo of EDITABLES) {
-        if (campos[campo] !== undefined) {
-          item[campo] = campos[campo];
+        if (camposIn[campo] !== undefined) {
+          item[campo] = camposIn[campo];
         }
       }
 
@@ -149,11 +236,54 @@ export const eliminarPaymentReservation = webMethod(
       const nombreLog = item.nombreCliente || '(sin nombre)';
       const importeLog = item.importeTotal || 0;
 
+      // ─── v1.3.1 — REVERTIR status de KamisuiteReservations ─────────
+      // Simetría con marcarPagadoReserva (recepcionProLogic v1.0.37):
+      // cobrar escribe DOS cosas acopladas (status='PAGADO' + insert
+      // PaymentReservations). Anular el cobro debe deshacer AMBAS.
+      //
+      // Solo aplica a cobros de citas internas (bookingId con prefijo
+      // 'KRI_'). Los cobros con otros prefijos (ESP_ especiales/venta
+      // manual, etc.) NO tienen contraparte en KamisuiteReservations —
+      // se dejan tal cual y esta rama es no-op.
+      //
+      // Prefijo 'KRI_' = 4 chars → slice(4) para extraer el reservaId.
+      // Confirmado en cierreLogicExtendido v1.1.3 (fix slice) y en
+      // recepcionProLogic v1.0.16 (PREFIJO_PAGO='KRI_').
+      //
+      // Fallback seguro: si algo falla al revertir el status (get,
+      // update, red...), el borrado del cobro SÍ se lleva a cabo.
+      // Misma política que la rama interna de marcarPagadoReserva ante
+      // fallo de PaymentReservations: no bloqueamos la operación
+      // principal por un accesorio. Se registra warning en logs.
+      let reservaRevertida = null;
+      try {
+        const bookingId = String(item.bookingId || '');
+        if (bookingId.startsWith('KRI_')) {
+          const reservaId = bookingId.slice(4);
+          if (reservaId) {
+            const reserva = await wixData.get(COLECCION_RESERVAS, reservaId, { suppressAuth: true });
+            if (reserva && reserva.status === 'PAGADO') {
+              // READ-MERGE-UPDATE: registro completo ya leído
+              reserva.status = 'CONFIRMADA';
+              await wixData.update(COLECCION_RESERVAS, reserva, { suppressAuth: true });
+              reservaRevertida = reservaId;
+              console.log(`${TAG} ↩️ KamisuiteReservations ${reservaId} → CONFIRMADA (status revertido)`);
+            } else if (reserva) {
+              console.log(`${TAG} ℹ️ KamisuiteReservations ${reservaId} no está en PAGADO (status='${reserva.status || ''}'), no se revierte`);
+            } else {
+              console.warn(`${TAG} ⚠️ KamisuiteReservations ${reservaId} no encontrada, no se revierte status`);
+            }
+          }
+        }
+      } catch (revErr) {
+        console.warn(`${TAG} ⚠️ Error revirtiendo status KamisuiteReservations: ${revErr.message}`);
+      }
+
       await wixData.remove(COLLECTION, _id, { suppressAuth: true });
 
-      console.log(`${TAG} 🗑️ Eliminada fila ${_id} | "${nombreLog}" | ${importeLog}€`);
+      console.log(`${TAG} 🗑️ Eliminada fila ${_id} | "${nombreLog}" | ${importeLog}€${reservaRevertida ? ` | reserva ${reservaRevertida} → CONFIRMADA` : ''}`);
 
-      return { success: true, deletedId: _id };
+      return { success: true, deletedId: _id, reservaRevertida };
     } catch (err) {
       console.error(`${TAG} Error eliminar:`, err);
       return { success: false, error: err.message };
@@ -432,7 +562,7 @@ export const exportarTodoJSON = webMethod(
         exportedAtLocal: ahora.toLocaleString('es-ES', { timeZone: 'Europe/Madrid' }),
         collection: COLLECTION,
         total: allItems.length,
-        version: '1.3.0'
+        version: '1.3.2'
       };
 
       console.log(`${TAG} exportarTodoJSON — ${allItems.length} registros`);
