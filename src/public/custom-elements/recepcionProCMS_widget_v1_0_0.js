@@ -1,9 +1,18 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.71  ·  APERTURA DE CAJA: fondo inicial del día
+ * VERSION: 1.1.72  ·  FONDO INICIAL editable en el arqueo
  * FECHA: 1 de agosto de 2026
  * ---------------------------------------------------------------------
+ * v1.1.72 (1 ago 2026) — FONDO INICIAL editable directamente en el
+ *   cuadro del arqueo (🏦). El "Fondo inicial" deja de ser texto fijo:
+ *   si la caja no está cerrada, es un input con botón "Guardar" que
+ *   escribe openingBalance del día (mensaje 'caja-set-fondo' → backend
+ *   setOpeningBalance v1.1.1, exista o no la caja). El "Efectivo
+ *   esperado" se recalcula al instante. Sin campos nuevos en el CMS,
+ *   sin depender de qué día sea ni de ningún toggle. Cambio aislado a
+ *   la línea del Fondo inicial en _renderCajaBody + 1 handler de
+ *   respuesta. Todo lo demás intacto.
  * v1.1.71 (1 ago 2026) — APERTURA DE CAJA (fondo inicial del día). El
  *   arqueo es un módulo OPCIONAL: cuando el salón tiene SalonConfig.
  *   arqueoActivo=true, al abrir Recepción PRO por la mañana aparece un
@@ -1231,7 +1240,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.71]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.72]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2901,6 +2910,15 @@ button { font-family: inherit; cursor: pointer; }
           break;
         case 'apertura-estado':
           // Informativo: módulo inactivo, o ya hay caja hoy. Nada que pintar.
+          break;
+        // v1.1.72 — fondo inicial guardado desde el arqueo
+        case 'caja-fondo-guardado':
+          if (p && p.ok) {
+            this._toast(`Fondo inicial guardado: ${Number((p.registro && p.registro.openingBalance) || 0)}€`);
+            this._cajaRefresh();
+          } else {
+            this._toast(`No se pudo guardar el fondo${p && p.error ? ': ' + p.error : ''}`);
+          }
           break;
         default: break;
       }
@@ -6143,7 +6161,13 @@ button { font-family: inherit; cursor: pointer; }
 
       body.innerHTML = `
         <div class="ks-modal-items">
-          <div class="ks-modal-item"><span class="ks-item-label">Fondo inicial</span><span class="ks-item-price">${Number(d.fondoInicial || 0)}€</span></div>
+          <div class="ks-modal-item"><span class="ks-item-label">Fondo inicial</span>${cerrada
+            ? `<span class="ks-item-price">${Number(d.fondoInicial || 0)}€</span>`
+            : `<span class="ks-item-price" style="display:flex;align-items:center;gap:6px">
+                <input id="cajaFondo" type="number" min="0" step="0.01" value="${Number(d.fondoInicial || 0) || ''}" placeholder="0" style="width:72px;text-align:right;border:1px solid var(--ks-line);border-radius:6px;padding:3px 6px;font:inherit;color:var(--ks-ink)">
+                <span>€</span>
+                <button id="cajaFondoSave" style="border:0;background:var(--ks-accent);color:#2a230f;border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer">Guardar</button>
+              </span>`}</div>
           <div class="ks-modal-item"><span class="ks-item-label">Cobros en efectivo</span><span class="ks-item-price">${Number(d.cobrosEfectivo || 0)}€</span></div>
           ${d.entradas ? `<div class="ks-modal-item"><span class="ks-item-label">+ Entradas manuales</span><span class="ks-item-price">${d.entradas}€</span></div>` : ''}
           ${d.salidas ? `<div class="ks-modal-item is-compl"><span class="ks-item-label">− Salidas</span><span class="ks-item-price">${d.salidas}€</span></div>` : ''}
@@ -6180,6 +6204,11 @@ button { font-family: inherit; cursor: pointer; }
         body.querySelector('#movEntry')?.addEventListener('click', () => this._cajaMovimiento('entry'));
         body.querySelector('#movExit')?.addEventListener('click', () => this._cajaMovimiento('exit'));
         body.querySelector('#movWithdraw')?.addEventListener('click', () => this._cajaMovimiento('withdrawal'));
+        // v1.1.72 — Fondo inicial editable: guardar openingBalance del día.
+        body.querySelector('#cajaFondoSave')?.addEventListener('click', () => {
+          const v = parseFloat(body.querySelector('#cajaFondo')?.value) || 0;
+          this._sendToPage('caja-set-fondo', { fechaISO: this._fecha, openingBalance: v });
+        });
         body.querySelector('#cajaGuardar')?.addEventListener('click', () => {
           this._sendToPage('caja-guardar', { fechaISO: this._fecha, countedCash: this._cajaContado, differenceNote: this._cajaNota, countBreakdown: '', closedBy: '' });
         });
