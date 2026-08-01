@@ -1,0 +1,2157 @@
+<!DOCTYPE html>
+<!--
+  =====================================================
+  KAMISUITE — Widget: Observatorio Clientes (uso interno)
+  =====================================================
+  VERSION: 1.1.0
+  FECHA:   23 de julio de 2026
+  ARCHIVO: widget_observatorioClientes.html
+
+  CHANGELOG
+    v1.1.0 (23-Jul-2026) — REESCRITO con eje de negocio.
+      · Al arrancar → dashboard comercial del salón. NO buscador de
+        clientes.
+      · Cabecera: 4 KPIs macro (valor emitido vigente, valor pendiente
+        canje, PRIME activas, items caducan 30d).
+      · Secciones globales: Resumen, PRIME, Bonos, Tarjetas, Regalos,
+        Reservas próximas, Cupones, Clientes (búsqueda puntual).
+      · Cada sección lista EVENTOS del salón con cliente como
+        contexto (nombre + email en la fila).
+      · Sub-tabs por estado dentro de cada sección.
+      · Click en cualquier fila → drill-down modal con datos del
+        cliente y botón editar.
+      · Editor de contacto (v1.0.0) integrado en el modal drill-down.
+
+    v1.0.0 (23-Jul-2026) — Versión inicial (mal orientada, descartada).
+
+  PROPÓSITO
+    Observatorio comercial del salón. La vista principal es AGREGADA
+    por tipo de producto. El cliente es contexto del evento, no eje.
+  =====================================================
+-->
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Observatorio Comercial</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   TOKENS KR_SKINS — copia literal del bundle público v2.0.15
+   ═══════════════════════════════════════════════════════════════ */
+:root {
+  --kr-bg:            oklch(98.6% 0.003 250);
+  --kr-surface:       oklch(100% 0 0);
+  --kr-surface-2:     oklch(97.4% 0.004 250);
+  --kr-inset:         oklch(96.2% 0.005 252);
+  --kr-line:          oklch(91% 0.006 252);
+  --kr-line-2:        oklch(84% 0.008 252);
+  --kr-ink:           oklch(30% 0.013 258);
+  --kr-ink-2:         oklch(48% 0.011 258);
+  --kr-ink-3:         oklch(64% 0.009 258);
+  --kr-accent:        oklch(40% 0.022 258);
+  --kr-accent-2:      oklch(33% 0.024 258);
+  --kr-accent-ink:    oklch(98.5% 0.003 250);
+  --kr-accent-soft:   oklch(93.5% 0.012 256);
+  --kr-accent-line:   oklch(62% 0.02 256);
+  --kr-focus:         oklch(58% 0.13 256);
+  --kr-danger:        oklch(55% 0.18 25);
+  --kr-danger-soft:   oklch(95% 0.035 28);
+  --kr-warning:       oklch(70% 0.15 68);
+  --kr-warning-soft:  oklch(95% 0.045 74);
+  --kr-orange:        oklch(64% 0.15 50);
+  --kr-orange-2:      oklch(57% 0.155 47);
+  --kr-orange-soft:   oklch(96% 0.03 62);
+  --kr-green-soft:    oklch(94% 0.05 152);
+  --kr-green:         oklch(53% 0.115 153);
+  --kr-green-ink:     oklch(40% 0.09 155);
+
+  --kr-font:          "Bai Jamjuree", ui-sans-serif, system-ui, sans-serif;
+  --kr-radius:        10px;
+  --kr-radius-sm:     max(4px, calc(var(--kr-radius) - 5px));
+  --kr-radius-lg:     calc(var(--kr-radius) + 6px);
+  --kr-radius-pill:   999px;
+  --kr-control-h:     38px;
+  --kr-shadow-1:      0 1px 2px oklch(40% 0.02 258 / .05);
+  --kr-shadow-2:      0 14px 40px -18px oklch(40% 0.03 258 / .28);
+  --kr-shadow-3:      0 24px 60px -20px oklch(40% 0.05 258 / .35);
+  --kr-dur:           170ms;
+  --kr-ease:          cubic-bezier(.2,.7,.2,1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--kr-bg);
+  color: var(--kr-ink);
+  font-family: var(--kr-font);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, select, textarea { font-family: inherit; color: inherit; }
+img { display: block; max-width: 100%; }
+
+/* ═══════════════════════════════════════════════════════════════
+   LAYOUT
+   ═══════════════════════════════════════════════════════════════ */
+.oc-app { min-height: 100vh; max-width: 1400px; margin: 0 auto; padding: 14px 16px 40px; }
+
+.oc-boot {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  min-height: 60vh; gap: 16px;
+}
+.oc-boot__spinner {
+  width: 42px; height: 42px; border-radius: 50%;
+  border: 3px solid var(--kr-line);
+  border-top-color: var(--kr-accent);
+  animation: oc-spin 0.8s linear infinite;
+}
+@keyframes oc-spin { to { transform: rotate(360deg); } }
+.oc-boot__msg { color: var(--kr-ink-2); font-size: 0.8rem; }
+.oc-boot--err .oc-boot__spinner { display: none; }
+.oc-boot--err .oc-boot__msg { color: var(--kr-danger); font-weight: 500; }
+
+/* ── Header ── */
+.oc-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.oc-head__brand { flex: 1; min-width: 0; }
+.oc-head__title {
+  font-size: 1.15rem; font-weight: 700;
+  letter-spacing: -0.02em; line-height: 1.15;
+  color: var(--kr-ink);
+}
+.oc-head__sub {
+  font-size: 0.62rem;
+  color: var(--kr-ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 1px;
+}
+
+.oc-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 34px; padding: 0 12px;
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+  color: var(--kr-ink);
+  font-size: 0.74rem;
+  font-weight: 500;
+  transition: background var(--kr-dur), border-color var(--kr-dur);
+  white-space: nowrap;
+}
+.oc-btn:hover { background: var(--kr-surface-2); border-color: var(--kr-line-2); }
+.oc-btn:active { transform: translateY(1px); }
+.oc-btn--primary { background: var(--kr-accent); color: var(--kr-accent-ink); border-color: var(--kr-accent); }
+.oc-btn--primary:hover { background: var(--kr-accent-2); border-color: var(--kr-accent-2); }
+.oc-btn--icon { width: 34px; padding: 0; justify-content: center; }
+.oc-btn--sm { height: 28px; padding: 0 10px; font-size: 0.7rem; }
+.oc-btn--ghost { background: transparent; border-color: transparent; color: var(--kr-ink-2); }
+.oc-btn--ghost:hover { background: var(--kr-inset); color: var(--kr-ink); }
+
+/* ═══════════════════════════════════════════════════════════════
+   KPIs MACRO (fila superior)
+   ═══════════════════════════════════════════════════════════════ */
+.oc-kpis-macro {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.oc-kpi-macro {
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+  padding: 12px 14px;
+  box-shadow: var(--kr-shadow-1);
+  position: relative;
+  overflow: hidden;
+}
+.oc-kpi-macro__label {
+  font-size: 0.62rem;
+  color: var(--kr-ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+.oc-kpi-macro__value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--kr-ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin-top: 4px;
+}
+.oc-kpi-macro__hint {
+  font-size: 0.66rem;
+  color: var(--kr-ink-3);
+  margin-top: 4px;
+}
+.oc-kpi-macro--accent { background: linear-gradient(135deg, var(--kr-accent-soft), var(--kr-surface)); }
+.oc-kpi-macro--warn { background: linear-gradient(135deg, var(--kr-warning-soft), var(--kr-surface)); }
+.oc-kpi-macro--warn .oc-kpi-macro__value { color: var(--kr-orange-2); }
+.oc-kpi-macro--danger { background: linear-gradient(135deg, var(--kr-danger-soft), var(--kr-surface)); }
+.oc-kpi-macro--danger .oc-kpi-macro__value { color: var(--kr-danger); }
+
+/* ═══════════════════════════════════════════════════════════════
+   NAV DE SECCIONES
+   ═══════════════════════════════════════════════════════════════ */
+.oc-nav {
+  display: flex;
+  gap: 2px;
+  background: var(--kr-inset);
+  border-radius: var(--kr-radius);
+  padding: 3px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+.oc-nav::-webkit-scrollbar { display: none; }
+.oc-nav__btn {
+  flex-shrink: 0;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: calc(var(--kr-radius) - 2px);
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--kr-ink-2);
+  white-space: nowrap;
+  transition: all var(--kr-dur);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.oc-nav__btn.is-sel {
+  background: var(--kr-surface);
+  color: var(--kr-ink);
+  box-shadow: var(--kr-shadow-1);
+  font-weight: 600;
+}
+.oc-nav__btn:hover:not(.is-sel) { color: var(--kr-ink); }
+.oc-nav__count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 18px; padding: 0 5px;
+  border-radius: 999px;
+  background: var(--kr-line);
+  color: var(--kr-ink-2);
+  font-size: 10px;
+  font-weight: 700;
+}
+.oc-nav__btn.is-sel .oc-nav__count { background: var(--kr-accent-soft); color: var(--kr-accent-2); }
+
+/* ═══════════════════════════════════════════════════════════════
+   PANEL SECCIÓN
+   ═══════════════════════════════════════════════════════════════ */
+.oc-section {
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+  padding: 16px;
+  box-shadow: var(--kr-shadow-1);
+  min-height: 50vh;
+}
+.oc-section__head {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--kr-line);
+}
+.oc-section__title {
+  flex: 1;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--kr-ink);
+  letter-spacing: -0.01em;
+}
+.oc-section__note {
+  font-size: 0.68rem;
+  color: var(--kr-ink-3);
+  padding: 8px 12px;
+  background: var(--kr-inset);
+  border-radius: var(--kr-radius-sm);
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+/* Sub-tabs por estado */
+.oc-subtabs {
+  display: flex; gap: 2px;
+  background: var(--kr-inset);
+  border-radius: var(--kr-radius);
+  padding: 3px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+.oc-subtabs::-webkit-scrollbar { display: none; }
+.oc-subtab {
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: calc(var(--kr-radius) - 2px);
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--kr-ink-2);
+  white-space: nowrap;
+  transition: all var(--kr-dur);
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.oc-subtab.is-sel { background: var(--kr-surface); color: var(--kr-ink); box-shadow: var(--kr-shadow-1); font-weight: 600; }
+.oc-subtab__count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 16px; padding: 0 4px;
+  border-radius: 999px;
+  background: var(--kr-line);
+  color: var(--kr-ink-2);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   LISTAS DE EVENTOS
+   ═══════════════════════════════════════════════════════════════ */
+.oc-list { display: flex; flex-direction: column; gap: 6px; }
+.oc-empty-list {
+  padding: 30px 16px; text-align: center;
+  color: var(--kr-ink-3);
+  background: var(--kr-surface-2);
+  border-radius: var(--kr-radius);
+  border: 1px dashed var(--kr-line);
+  font-size: 0.74rem;
+}
+
+/* Row de evento — CLICKABLE. La info principal es el evento, el
+   cliente aparece como contexto en la meta line. */
+.oc-row {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+  transition: border-color var(--kr-dur), background var(--kr-dur), transform var(--kr-dur);
+  cursor: pointer;
+  text-align: left;
+  align-items: center;
+}
+.oc-row:hover {
+  border-color: var(--kr-accent-line);
+  background: var(--kr-surface-2);
+}
+.oc-row:active { transform: scale(0.998); }
+
+.oc-row__icon {
+  width: 40px; height: 40px;
+  border-radius: var(--kr-radius-sm);
+  background: var(--kr-inset);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--kr-accent);
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.oc-row__main { min-width: 0; }
+.oc-row__title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--kr-ink);
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  line-height: 1.3;
+}
+.oc-row__cliente {
+  font-size: 0.72rem;
+  color: var(--kr-ink-2);
+  margin-top: 3px;
+  display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap;
+}
+.oc-row__cliente strong { font-weight: 600; color: var(--kr-ink); }
+.oc-row__cliente-meta {
+  color: var(--kr-ink-3);
+  font-size: 0.68rem;
+}
+.oc-row__meta-line {
+  font-size: 0.68rem;
+  color: var(--kr-ink-3);
+  margin-top: 3px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.oc-row__meta-line span { display: inline-flex; align-items: center; gap: 3px; }
+
+.oc-row__side {
+  text-align: right;
+  display: flex; flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.oc-row__amount {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--kr-ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.oc-row__code {
+  font-size: 0.65rem;
+  color: var(--kr-ink-3);
+  font-family: 'Courier New', ui-monospace, monospace;
+  letter-spacing: 0.02em;
+}
+
+/* Chip status */
+.oc-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: var(--kr-radius-pill);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: var(--kr-inset);
+  color: var(--kr-ink-2);
+}
+.oc-chip--ok { background: var(--kr-green-soft); color: var(--kr-green-ink); }
+.oc-chip--warn { background: var(--kr-warning-soft); color: color-mix(in oklab, var(--kr-warning) 60%, var(--kr-ink)); }
+.oc-chip--danger { background: var(--kr-danger-soft); color: var(--kr-danger); }
+.oc-chip--info { background: var(--kr-accent-soft); color: var(--kr-accent); }
+.oc-chip--orange { background: var(--kr-orange-soft); color: var(--kr-orange-2); }
+.oc-chip--pill-caduca {
+  background: var(--kr-orange-soft);
+  color: var(--kr-orange-2);
+  padding: 1px 7px;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: var(--kr-radius-pill);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RESUMEN — grid de cards por sección
+   ═══════════════════════════════════════════════════════════════ */
+.oc-resumen {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+.oc-resumen-card {
+  background: var(--kr-surface-2);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+  padding: 14px;
+  transition: border-color var(--kr-dur), transform var(--kr-dur);
+  cursor: pointer;
+  text-align: left;
+  display: flex; flex-direction: column;
+  gap: 10px;
+}
+.oc-resumen-card:hover {
+  border-color: var(--kr-accent-line);
+  transform: translateY(-1px);
+}
+.oc-resumen-card__head {
+  display: flex; align-items: baseline; gap: 8px;
+}
+.oc-resumen-card__title {
+  flex: 1;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--kr-ink);
+  letter-spacing: -0.01em;
+}
+.oc-resumen-card__count {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--kr-accent);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.oc-resumen-card__body {
+  display: flex; flex-direction: column;
+  gap: 4px;
+}
+.oc-resumen-card__prev {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  background: var(--kr-surface);
+  border-radius: var(--kr-radius-sm);
+  font-size: 0.7rem;
+}
+.oc-resumen-card__prev-title {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--kr-ink);
+  font-weight: 500;
+}
+.oc-resumen-card__prev-meta {
+  color: var(--kr-ink-3);
+  font-size: 0.65rem;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.oc-resumen-card__empty {
+  padding: 8px;
+  text-align: center;
+  color: var(--kr-ink-3);
+  font-size: 0.7rem;
+  font-style: italic;
+}
+.oc-resumen-card__foot {
+  padding-top: 6px;
+  border-top: 1px solid var(--kr-line);
+  font-size: 0.66rem;
+  color: var(--kr-ink-3);
+  text-align: right;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   BUSCADOR (para sección Clientes)
+   ═══════════════════════════════════════════════════════════════ */
+.oc-search { position: relative; margin-bottom: 10px; }
+.oc-search input {
+  width: 100%;
+  height: var(--kr-control-h);
+  padding: 0 14px 0 38px;
+  background: var(--kr-inset);
+  border: 1px solid transparent;
+  border-radius: var(--kr-radius);
+  font-size: 0.8125rem;
+  transition: background var(--kr-dur), border-color var(--kr-dur);
+}
+.oc-search input:focus { outline: none; background: var(--kr-surface); border-color: var(--kr-focus); }
+.oc-search__icon {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  color: var(--kr-ink-3); pointer-events: none;
+}
+.oc-search-count { font-size: 0.68rem; color: var(--kr-ink-3); padding: 0 2px; margin-bottom: 8px; }
+
+.oc-c-row {
+  display: flex; align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--kr-radius-sm);
+  cursor: pointer;
+  transition: background var(--kr-dur);
+  text-align: left; width: 100%;
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  margin-bottom: 4px;
+}
+.oc-c-row:hover { background: var(--kr-surface-2); border-color: var(--kr-line-2); }
+.oc-c-row__avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--kr-accent-soft), var(--kr-inset));
+  color: var(--kr-accent);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700;
+  flex-shrink: 0;
+}
+.oc-c-row__main { flex: 1; min-width: 0; }
+.oc-c-row__name { font-size: 0.8rem; font-weight: 600; color: var(--kr-ink); }
+.oc-c-row__sub { font-size: 0.68rem; color: var(--kr-ink-3); margin-top: 1px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   Filtros de cupones y cupones cards
+   ═══════════════════════════════════════════════════════════════ */
+.oc-select {
+  height: 32px;
+  padding: 0 30px 0 12px;
+  background: var(--kr-inset);
+  border: 1px solid transparent;
+  border-radius: var(--kr-radius);
+  font-size: 0.72rem;
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5l5 5 5-5'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  min-width: 110px;
+  transition: background var(--kr-dur), border-color var(--kr-dur);
+}
+.oc-select:focus { outline: none; background-color: var(--kr-surface); border-color: var(--kr-focus); }
+.oc-filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+.oc-filters__spacer { flex: 1; }
+
+.oc-cupon {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px;
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+}
+.oc-cupon__main { flex: 1; min-width: 0; }
+.oc-cupon__code { font-size: 0.8rem; font-weight: 700; color: var(--kr-ink); font-family: 'Courier New', ui-monospace, monospace; }
+.oc-cupon__name { font-size: 0.72rem; color: var(--kr-ink-2); margin-top: 2px; }
+.oc-cupon__meta { font-size: 0.68rem; color: var(--kr-ink-3); margin-top: 4px; display: flex; gap: 8px; flex-wrap: wrap; }
+.oc-cupon__value {
+  font-size: 0.95rem; font-weight: 700; color: var(--kr-accent);
+  font-variant-numeric: tabular-nums; flex-shrink: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MODAL DRILL-DOWN CLIENTE
+   ═══════════════════════════════════════════════════════════════ */
+.oc-modal-overlay {
+  position: fixed; inset: 0;
+  background: color-mix(in oklab, var(--kr-ink) 55%, transparent);
+  display: none;
+  align-items: center; justify-content: center;
+  z-index: 9999;
+  padding: 20px;
+  animation: oc-fade-in 200ms var(--kr-ease);
+}
+.oc-modal-overlay.is-open { display: flex; }
+@keyframes oc-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+.oc-modal {
+  background: var(--kr-surface);
+  border-radius: var(--kr-radius-lg);
+  box-shadow: var(--kr-shadow-3);
+  max-width: 560px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 22px;
+  animation: oc-slide-up 250ms var(--kr-ease);
+}
+@keyframes oc-slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.oc-modal__head {
+  display: flex; align-items: center; gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--kr-line);
+  margin-bottom: 14px;
+}
+.oc-modal__avatar {
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--kr-accent-soft), var(--kr-inset));
+  color: var(--kr-accent);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: 700;
+  flex-shrink: 0; overflow: hidden;
+}
+.oc-modal__avatar img { width: 100%; height: 100%; object-fit: cover; }
+.oc-modal__id { flex: 1; min-width: 0; }
+.oc-modal__id-name {
+  font-size: 1.05rem; font-weight: 700; color: var(--kr-ink);
+  letter-spacing: -0.01em; line-height: 1.2;
+}
+.oc-modal__id-meta {
+  display: flex; flex-wrap: wrap; gap: 3px 12px;
+  margin-top: 3px;
+  font-size: 0.7rem;
+  color: var(--kr-ink-3);
+}
+.oc-modal__close {
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  color: var(--kr-ink-3);
+  transition: all var(--kr-dur);
+  flex-shrink: 0;
+}
+.oc-modal__close:hover { background: var(--kr-inset); color: var(--kr-ink); }
+
+/* Resumen tabular del cliente */
+.oc-modal__resumen {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.oc-modal__resumen-item {
+  background: var(--kr-inset);
+  border-radius: var(--kr-radius-sm);
+  padding: 8px 10px;
+  text-align: center;
+}
+.oc-modal__resumen-value {
+  font-size: 1rem; font-weight: 700; color: var(--kr-ink);
+  font-variant-numeric: tabular-nums; line-height: 1;
+}
+.oc-modal__resumen-label {
+  font-size: 0.6rem; color: var(--kr-ink-3);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  margin-top: 3px; font-weight: 600;
+}
+
+/* Detalle del evento seleccionado */
+.oc-modal__event {
+  background: var(--kr-surface-2);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+  padding: 12px;
+  margin-bottom: 14px;
+}
+.oc-modal__event-title {
+  font-size: 0.7rem;
+  color: var(--kr-ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.oc-modal__event-body {
+  display: flex; align-items: center; gap: 10px;
+}
+.oc-modal__event-icon {
+  width: 36px; height: 36px;
+  border-radius: var(--kr-radius-sm);
+  background: var(--kr-surface);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; color: var(--kr-accent);
+  flex-shrink: 0;
+}
+.oc-modal__event-info { flex: 1; min-width: 0; }
+.oc-modal__event-heading {
+  font-size: 0.82rem; font-weight: 600; color: var(--kr-ink);
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+}
+.oc-modal__event-meta {
+  font-size: 0.68rem; color: var(--kr-ink-3);
+  margin-top: 3px;
+  display: flex; gap: 8px; flex-wrap: wrap;
+}
+.oc-modal__event-amount {
+  font-size: 0.9rem; font-weight: 700;
+  color: var(--kr-ink);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.oc-modal__actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--kr-line);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MODAL EDICIÓN CONTACTO
+   ═══════════════════════════════════════════════════════════════ */
+.oc-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
+  margin-top: 4px;
+}
+.oc-form__group { display: flex; flex-direction: column; gap: 4px; }
+.oc-form__group--full { grid-column: 1 / -1; }
+.oc-form__label {
+  font-size: 0.7rem;
+  color: var(--kr-ink-2);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.oc-form__input, .oc-form__select {
+  height: var(--kr-control-h);
+  padding: 0 12px;
+  background: var(--kr-inset);
+  border: 1px solid transparent;
+  border-radius: var(--kr-radius);
+  font-size: 0.8125rem;
+  color: var(--kr-ink);
+  transition: background var(--kr-dur), border-color var(--kr-dur);
+}
+.oc-form__input:focus, .oc-form__select:focus { outline: none; background: var(--kr-surface); border-color: var(--kr-focus); }
+.oc-form__select {
+  padding: 0 30px 0 12px;
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5l5 5 5-5'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-color: var(--kr-inset);
+}
+.oc-modal__error {
+  padding: 8px 12px;
+  border-radius: var(--kr-radius);
+  background: var(--kr-danger-soft);
+  color: var(--kr-danger);
+  font-size: 0.74rem;
+  font-weight: 500;
+  margin-bottom: 10px;
+  display: none;
+}
+.oc-modal__error.is-visible { display: block; }
+
+/* Toast */
+.oc-toast {
+  position: fixed; bottom: 24px; left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 18px;
+  background: var(--kr-ink); color: var(--kr-surface);
+  border-radius: var(--kr-radius);
+  font-size: 0.74rem; font-weight: 500;
+  box-shadow: var(--kr-shadow-2);
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--kr-dur), transform var(--kr-dur);
+  z-index: 10000;
+}
+.oc-toast.is-visible { opacity: 1; transform: translateX(-50%) translateY(-4px); }
+.oc-toast--ok { background: var(--kr-green); color: white; }
+.oc-toast--err { background: var(--kr-danger); color: white; }
+
+/* Responsive */
+@media (max-width: 899px) {
+  .oc-app { padding: 10px 12px 32px; }
+  .oc-kpis-macro { grid-template-columns: repeat(2, 1fr); }
+  .oc-form { grid-template-columns: 1fr; }
+  .oc-resumen { grid-template-columns: 1fr; }
+  .oc-row { grid-template-columns: 32px 1fr auto; padding: 10px; }
+  .oc-row__icon { width: 32px; height: 32px; font-size: 15px; }
+}
+</style>
+</head>
+<body>
+
+<div class="oc-app" id="ocApp">
+
+  <!-- BOOT -->
+  <div class="oc-boot" id="ocBoot">
+    <div class="oc-boot__spinner"></div>
+    <div class="oc-boot__msg" id="ocBootMsg">Cargando observatorio comercial…</div>
+  </div>
+
+  <!-- VISTA PRINCIPAL -->
+  <div id="ocMain" style="display:none">
+
+    <!-- Header -->
+    <div class="oc-head">
+      <div class="oc-head__brand">
+        <div class="oc-head__title">Observatorio Comercial</div>
+        <div class="oc-head__sub" id="ocBrand">KAMISUITE</div>
+      </div>
+      <button class="oc-btn oc-btn--icon" id="ocBtnRefresh" title="Refrescar">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      </button>
+    </div>
+
+    <!-- KPIs macro -->
+    <div class="oc-kpis-macro" id="ocKpisMacro"></div>
+
+    <!-- Nav secciones -->
+    <div class="oc-nav" id="ocNav"></div>
+
+    <!-- Panel sección -->
+    <section class="oc-section">
+      <div id="ocSectionBody"></div>
+    </section>
+
+  </div>
+
+</div>
+
+<!-- MODAL DRILL-DOWN CLIENTE + EDICIÓN -->
+<div class="oc-modal-overlay" id="ocModalCliente">
+  <div class="oc-modal">
+    <div id="ocModalClienteBody"></div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="oc-toast" id="ocToast"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   KR_SKINS
+   ═══════════════════════════════════════════════════════════════ */
+const KR_SKINS = {
+  niebla: { tokens: {} },
+  arena: { tokens: {
+    "--kr-bg":"oklch(97.5% 0.014 78)","--kr-surface":"oklch(99.5% 0.006 78)",
+    "--kr-surface-2":"oklch(96% 0.018 80)","--kr-inset":"oklch(94% 0.024 80)",
+    "--kr-line":"oklch(88.5% 0.028 82)","--kr-line-2":"oklch(78% 0.036 84)",
+    "--kr-ink":"oklch(28% 0.028 60)","--kr-ink-2":"oklch(46% 0.026 62)",
+    "--kr-ink-3":"oklch(63% 0.024 66)","--kr-accent":"oklch(46% 0.11 60)",
+    "--kr-accent-2":"oklch(38% 0.105 58)","--kr-accent-soft":"oklch(93% 0.04 68)",
+    "--kr-focus":"oklch(56% 0.12 60)","--kr-radius":"8px"
+  }},
+  grafito: { tokens: {
+    "--kr-bg":"oklch(98% 0 0)","--kr-surface":"oklch(100% 0 0)",
+    "--kr-surface-2":"oklch(96.4% 0 0)","--kr-inset":"oklch(94.5% 0 0)",
+    "--kr-line":"oklch(89% 0 0)","--kr-line-2":"oklch(78% 0 0)",
+    "--kr-ink":"oklch(20% 0 0)","--kr-ink-2":"oklch(42% 0 0)",
+    "--kr-ink-3":"oklch(62% 0 0)","--kr-accent":"oklch(22% 0 0)",
+    "--kr-accent-2":"oklch(12% 0 0)","--kr-accent-ink":"oklch(99% 0 0)",
+    "--kr-accent-soft":"oklch(94.5% 0 0)","--kr-focus":"oklch(50% 0 0)","--kr-radius":"6px"
+  }},
+  lumiere: { tokens: {
+    "--kr-bg":"oklch(98.2% 0.012 88)","--kr-surface":"oklch(99.6% 0.008 88)",
+    "--kr-surface-2":"oklch(96.6% 0.016 86)","--kr-inset":"oklch(95% 0.02 84)",
+    "--kr-line":"oklch(90% 0.022 82)","--kr-line-2":"oklch(80% 0.03 80)",
+    "--kr-ink":"oklch(26% 0.012 70)","--kr-ink-2":"oklch(45% 0.014 72)",
+    "--kr-ink-3":"oklch(62% 0.018 76)","--kr-accent":"oklch(56% 0.085 78)",
+    "--kr-accent-2":"oklch(47% 0.08 74)","--kr-accent-soft":"oklch(93% 0.035 84)",
+    "--kr-focus":"oklch(58% 0.085 78)","--kr-radius":"4px"
+  }},
+  botanica: { tokens: {
+    "--kr-bg":"oklch(98.6% 0.01 150)","--kr-surface":"oklch(99.8% 0.006 150)",
+    "--kr-surface-2":"oklch(97% 0.016 152)","--kr-inset":"oklch(95.4% 0.02 152)",
+    "--kr-line":"oklch(90% 0.022 154)","--kr-line-2":"oklch(81% 0.03 156)",
+    "--kr-ink":"oklch(28% 0.025 160)","--kr-ink-2":"oklch(46% 0.022 158)",
+    "--kr-ink-3":"oklch(63% 0.02 156)","--kr-accent":"oklch(48% 0.09 156)",
+    "--kr-accent-2":"oklch(40% 0.085 158)","--kr-accent-soft":"oklch(93% 0.03 152)",
+    "--kr-focus":"oklch(56% 0.1 156)","--kr-radius":"16px"
+  }},
+  aurora: { tokens: {
+    "--kr-bg":"oklch(98.7% 0.006 320)","--kr-surface":"oklch(100% 0 0)",
+    "--kr-surface-2":"oklch(97.4% 0.01 322)","--kr-inset":"oklch(96% 0.014 326)",
+    "--kr-line":"oklch(91% 0.016 330)","--kr-line-2":"oklch(82% 0.024 336)",
+    "--kr-ink":"oklch(27% 0.03 326)","--kr-ink-2":"oklch(46% 0.026 330)",
+    "--kr-ink-3":"oklch(64% 0.022 334)","--kr-accent":"oklch(56% 0.16 350)",
+    "--kr-accent-2":"oklch(48% 0.17 352)","--kr-accent-soft":"oklch(94% 0.04 348)",
+    "--kr-focus":"oklch(58% 0.16 350)","--kr-radius":"12px",
+    "--kr-font":'"Instrument Sans", ui-sans-serif, system-ui, sans-serif'
+  }},
+  oceano: { tokens: {
+    "--kr-bg":"oklch(98.4% 0.012 232)","--kr-surface":"oklch(99.7% 0.007 232)",
+    "--kr-surface-2":"oklch(97% 0.018 233)","--kr-inset":"oklch(95.2% 0.024 233)",
+    "--kr-line":"oklch(90% 0.028 234)","--kr-line-2":"oklch(80.5% 0.042 236)",
+    "--kr-ink":"oklch(28% 0.045 250)","--kr-ink-2":"oklch(46% 0.038 248)",
+    "--kr-ink-3":"oklch(63% 0.032 244)","--kr-accent":"oklch(50% 0.13 244)",
+    "--kr-accent-2":"oklch(42% 0.14 246)","--kr-accent-ink":"oklch(99% 0.015 233)",
+    "--kr-accent-soft":"oklch(93% 0.038 234)","--kr-focus":"oklch(58% 0.14 244)","--kr-radius":"12px"
+  }}
+};
+
+function applySkin(name) {
+  const skin = KR_SKINS[name] || KR_SKINS.niebla;
+  const root = document.documentElement;
+  const all = new Set();
+  Object.values(KR_SKINS).forEach(s => Object.keys(s.tokens || {}).forEach(k => all.add(k)));
+  all.forEach(k => root.style.removeProperty(k));
+  Object.entries(skin.tokens || {}).forEach(([k, v]) => root.style.setProperty(k, v));
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STATE
+   ═══════════════════════════════════════════════════════════════ */
+const TAG = '[Observatorio v1.1.0]';
+
+const state = {
+  data: null,             // payload completo del backend
+  activeSection: 'resumen',  // 'resumen'|'prime'|'bonos'|'tarjetas'|'regalos'|'reservas'|'cupones'|'clientes'
+  activeSubtab: null,     // depende de sección
+
+  // Modal drill-down
+  modalCliente: {
+    open: false,
+    contactId: null,
+    detalle: null,          // detalle completo (getDetalleCliente)
+    loading: false,
+    eventoContext: null,    // el evento desde el que se abrió (opcional)
+    modo: 'view'            // 'view' | 'edit'
+  },
+
+  cupFiltros: { estado: '', tipo: '' },
+  searchClientes: ''
+};
+
+let searchDebounce = null;
+let toastTimer = null;
+let bootstrapReceived = false;
+let readyRetryTimer = null;
+
+/* ═══════════════════════════════════════════════════════════════
+   HELPERS
+   ═══════════════════════════════════════════════════════════════ */
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function norm(s) { return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+function initials(nombre, apellido) {
+  const a = String(nombre || '').trim().charAt(0);
+  const b = String(apellido || '').trim().charAt(0);
+  return ((a + b).toUpperCase()) || '·';
+}
+function fmtEur(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '—';
+  if (Math.abs(v - Math.round(v)) < 0.005) return `${Math.round(v)}€`;
+  return `${v.toFixed(2).replace('.', ',')}€`;
+}
+function fmtEurAbrev(n) {
+  const v = Number(n) || 0;
+  if (v >= 10000) return `${Math.round(v / 1000)}k€`;
+  return fmtEur(v);
+}
+function fmtDate(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: 'Europe/Madrid' });
+  } catch (_) { return ''; }
+}
+function fmtDateLong(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Madrid' });
+  } catch (_) { return ''; }
+}
+function fmtDateHora(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const f = d.toLocaleDateString('es-ES', { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'Europe/Madrid' });
+    const h = d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid' });
+    return `${f} · ${h}`;
+  } catch (_) { return ''; }
+}
+function fmtDur(min) {
+  const m = Number(min) || 0;
+  if (m <= 0) return '';
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60), r = m % 60;
+  if (r === 0) return `${h}h`;
+  return `${h}h ${r}min`;
+}
+function diasHasta(iso) {
+  if (!iso) return null;
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    return Math.ceil((d.getTime() - Date.now()) / 86400000);
+  } catch (_) { return null; }
+}
+function pillCaduca(iso) {
+  const d = diasHasta(iso);
+  if (d === null) return '';
+  if (d < 0) return `<span class="oc-chip oc-chip--warn">Caducado</span>`;
+  if (d <= 7) return `<span class="oc-chip--pill-caduca">Caduca en ${d}d</span>`;
+  if (d <= 30) return `<span class="oc-chip--pill-caduca">Caduca en ${d}d</span>`;
+  return '';
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   COMUNICACIÓN CON PAGE CODE
+   ═══════════════════════════════════════════════════════════════ */
+function send(type, data = {}) {
+  try { window.parent.postMessage({ type, ...data, ts: Date.now() }, '*'); }
+  catch (e) { console.warn(TAG, 'send failed:', e.message); }
+}
+
+function startReadyLoop() {
+  send('ready');
+  readyRetryTimer = setInterval(() => {
+    if (bootstrapReceived) { clearInterval(readyRetryTimer); return; }
+    send('ready');
+  }, 700);
+}
+
+window.addEventListener('message', (event) => {
+  const msg = event && event.data;
+  if (!msg || typeof msg !== 'object' || !msg.type) return;
+  switch (msg.type) {
+    case 'observatorioGlobal':      handleGlobal(msg); break;
+    case 'observatorioGlobalError': handleGlobalError(msg); break;
+    case 'detalleCliente':          handleDetalle(msg); break;
+    case 'detalleClienteError':     handleDetalleError(msg); break;
+    case 'contactoActualizado':     handleContactoActualizado(msg); break;
+    case 'cuponesActualizados':     handleCuponesActualizados(msg); break;
+  }
+});
+
+function handleGlobal(msg) {
+  bootstrapReceived = true;
+  state.data = {
+    salonConfig:      msg.salonConfig || {},
+    kpisSalon:        msg.kpisSalon || {},
+    prime:            msg.prime || { activas: [], vencidas: [], canceladas: [], pendientes: [] },
+    bonos:            msg.bonos || { activos: [], agotados: [], caducados: [], cancelados: [], pendientes: [] },
+    tarjetas:         msg.tarjetas || { emitidas: [], canjeadas: [], caducadas: [], canceladas: [], pendientes: [] },
+    regalos:          msg.regalos || { emitidas: [], canjeadas: [], caducadas: [], canceladas: [], pendientes: [] },
+    reservasProximas: msg.reservasProximas || [],
+    cupones:          msg.cupones || [],
+    contactos:        msg.contactos || []
+  };
+  applySkin(state.data.salonConfig.widgetSkin || 'niebla');
+  if (Array.isArray(msg.warnings) && msg.warnings.length) {
+    console.warn(TAG, 'warnings:', msg.warnings.join(' | '));
+  }
+  renderApp();
+}
+
+function handleGlobalError(msg) {
+  const boot = document.getElementById('ocBoot');
+  boot.classList.add('oc-boot--err');
+  document.getElementById('ocBootMsg').textContent = 'Error cargando el observatorio: ' + (msg.error || 'desconocido') + '. Refresca la página.';
+}
+
+function handleDetalle(msg) {
+  if (msg.contactId !== state.modalCliente.contactId) return;
+  state.modalCliente.detalle = {
+    contacto: msg.contacto,
+    kpis: msg.kpis,
+    reservasProximas: msg.reservasProximas || [],
+    prime: msg.prime || { vigente: null, historico: [] },
+    bonos: msg.bonos || { vigentes: [], noVigentes: [] },
+    tarjetas: msg.tarjetas || { vigentes: [], noVigentes: [] },
+    regalosVendidos: msg.regalosVendidos || []
+  };
+  state.modalCliente.loading = false;
+  renderModalCliente();
+}
+
+function handleDetalleError(msg) {
+  if (msg.contactId !== state.modalCliente.contactId) return;
+  state.modalCliente.loading = false;
+  const body = document.getElementById('ocModalClienteBody');
+  body.innerHTML = `<div class="oc-empty-list">Error cargando ficha del cliente: ${esc(msg.error || '')}</div>`;
+}
+
+function handleContactoActualizado(msg) {
+  const btn = document.querySelector('#ocModalSave');
+  if (btn) btn.textContent = 'Guardar';
+
+  if (!msg.ok) {
+    const err = document.getElementById('ocModalError');
+    if (err) {
+      err.textContent = msg.error || 'Error guardando cambios';
+      err.classList.add('is-visible');
+    }
+    return;
+  }
+
+  // Actualizar contacto en cache local
+  if (msg.contacto) {
+    const c = msg.contacto;
+    // en modal
+    if (state.modalCliente.detalle) state.modalCliente.detalle.contacto = c;
+    // en contactos globales
+    const idx = state.data.contactos.findIndex(x => x.contactId === c.contactId);
+    if (idx >= 0) {
+      state.data.contactos[idx] = {
+        ...state.data.contactos[idx],
+        nombre: c.nombre || state.data.contactos[idx].nombre,
+        apellido: c.apellido || state.data.contactos[idx].apellido,
+        nombreCompleto: c.nombreCompleto || [c.nombre, c.apellido].filter(Boolean).join(' ').trim(),
+        email: c.email || state.data.contactos[idx].email,
+        telefono: c.telefono || state.data.contactos[idx].telefono
+      };
+    }
+    // Actualizar nombre en todos los eventos globales de ese contactId
+    actualizarClienteEnEventos(c.contactId, c.nombreCompleto || [c.nombre, c.apellido].filter(Boolean).join(' ').trim(), c.email, c.telefono);
+  }
+
+  state.modalCliente.modo = 'view';
+  renderModalCliente();
+  showToast(msg.sinCambios ? 'Sin cambios' : 'Cambios guardados', 'ok');
+
+  // Re-render sección si la vista actual muestra ese cliente
+  renderSection();
+}
+
+function actualizarClienteEnEventos(cid, nombre, email, telefono) {
+  const patch = (arr, idField) => {
+    for (const it of (arr || [])) {
+      if (it[idField] === cid) {
+        it._clienteNombre = nombre;
+        it._clienteEmail = email;
+        it._clienteTelefono = telefono;
+      }
+    }
+  };
+  const d = state.data;
+  patch(d.prime.activas, 'contactId'); patch(d.prime.vencidas, 'contactId');
+  patch(d.prime.canceladas, 'contactId'); patch(d.prime.pendientes, 'contactId');
+  patch(d.bonos.activos, 'contactId'); patch(d.bonos.agotados, 'contactId');
+  patch(d.bonos.caducados, 'contactId'); patch(d.bonos.cancelados, 'contactId'); patch(d.bonos.pendientes, 'contactId');
+  patch(d.tarjetas.emitidas, 'buyerContactId'); patch(d.tarjetas.canjeadas, 'buyerContactId');
+  patch(d.tarjetas.caducadas, 'buyerContactId'); patch(d.tarjetas.canceladas, 'buyerContactId'); patch(d.tarjetas.pendientes, 'buyerContactId');
+  patch(d.regalos.emitidas, 'buyerContactId'); patch(d.regalos.canjeadas, 'buyerContactId');
+  patch(d.regalos.caducadas, 'buyerContactId'); patch(d.regalos.canceladas, 'buyerContactId'); patch(d.regalos.pendientes, 'buyerContactId');
+  patch(d.reservasProximas, 'contactId');
+}
+
+function handleCuponesActualizados(msg) {
+  if (msg.ok) {
+    state.data.cupones = msg.cupones || [];
+    if (state.activeSection === 'cupones') renderSection();
+    showToast('Cupones actualizados', 'ok');
+  } else {
+    showToast(msg.error || 'Error refrescando cupones', 'err');
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RENDER
+   ═══════════════════════════════════════════════════════════════ */
+function renderApp() {
+  document.getElementById('ocBoot').style.display = 'none';
+  document.getElementById('ocMain').style.display = '';
+  document.getElementById('ocBrand').textContent = state.data.salonConfig.brandName || 'KAMISUITE';
+  renderKpisMacro();
+  renderNav();
+  renderSection();
+}
+
+function renderKpisMacro() {
+  const k = state.data.kpisSalon || {};
+  document.getElementById('ocKpisMacro').innerHTML = `
+    <div class="oc-kpi-macro oc-kpi-macro--accent">
+      <div class="oc-kpi-macro__label">Valor vigente emitido</div>
+      <div class="oc-kpi-macro__value">${fmtEurAbrev(k.valorEmitidoVigente)}</div>
+      <div class="oc-kpi-macro__hint">PRIME + Bonos + Tarjetas + Regalos activos</div>
+    </div>
+    <div class="oc-kpi-macro">
+      <div class="oc-kpi-macro__label">Pendiente de canje</div>
+      <div class="oc-kpi-macro__value">${fmtEurAbrev(k.valorPendienteCanje)}</div>
+      <div class="oc-kpi-macro__hint">Deuda del salón en servicios prepagados</div>
+    </div>
+    <div class="oc-kpi-macro">
+      <div class="oc-kpi-macro__label">PRIME activas</div>
+      <div class="oc-kpi-macro__value">${k.primeActivasCount || 0}</div>
+      <div class="oc-kpi-macro__hint">Membresías vigentes ahora</div>
+    </div>
+    <div class="oc-kpi-macro ${(k.itemsCaducan30d || 0) > 0 ? 'oc-kpi-macro--warn' : ''}">
+      <div class="oc-kpi-macro__label">Caducan en 30 días</div>
+      <div class="oc-kpi-macro__value">${k.itemsCaducan30d || 0}</div>
+      <div class="oc-kpi-macro__hint">Productos que expiran pronto</div>
+    </div>
+  `;
+}
+
+function renderNav() {
+  const d = state.data;
+  const items = [
+    { id: 'resumen',   label: '📊 Resumen',        count: null },
+    { id: 'prime',     label: '💎 PRIME',          count: d.prime.activas.length + d.prime.vencidas.length + d.prime.canceladas.length + d.prime.pendientes.length },
+    { id: 'bonos',     label: '🎟 Bonos',          count: d.bonos.activos.length + d.bonos.agotados.length + d.bonos.caducados.length + d.bonos.cancelados.length + d.bonos.pendientes.length },
+    { id: 'tarjetas',  label: '🎫 Tarjetas',       count: d.tarjetas.emitidas.length + d.tarjetas.canjeadas.length + d.tarjetas.caducadas.length + d.tarjetas.canceladas.length + d.tarjetas.pendientes.length },
+    { id: 'regalos',   label: '🎁 Regalos',        count: d.regalos.emitidas.length + d.regalos.canjeadas.length + d.regalos.caducadas.length + d.regalos.canceladas.length + d.regalos.pendientes.length },
+    { id: 'reservas',  label: '📅 Reservas',       count: d.reservasProximas.length },
+    { id: 'cupones',   label: '🏷 Cupones',        count: d.cupones.length },
+    { id: 'clientes',  label: '👥 Clientes',       count: null }
+  ];
+  document.getElementById('ocNav').innerHTML = items.map(it => `
+    <button class="oc-nav__btn${it.id === state.activeSection ? ' is-sel' : ''}" data-sec="${it.id}">
+      ${it.label}${it.count !== null ? ` <span class="oc-nav__count">${it.count}</span>` : ''}
+    </button>
+  `).join('');
+
+  document.querySelectorAll('.oc-nav__btn').forEach(b => {
+    b.addEventListener('click', () => {
+      state.activeSection = b.getAttribute('data-sec');
+      state.activeSubtab = null;
+      renderNav();
+      renderSection();
+    });
+  });
+}
+
+function renderSection() {
+  const body = document.getElementById('ocSectionBody');
+  switch (state.activeSection) {
+    case 'resumen':   body.innerHTML = renderSectionResumen(); break;
+    case 'prime':     body.innerHTML = renderSectionPrime(); wireSubtabs(); break;
+    case 'bonos':     body.innerHTML = renderSectionBonos(); wireSubtabs(); break;
+    case 'tarjetas':  body.innerHTML = renderSectionTarjetas(); wireSubtabs(); break;
+    case 'regalos':   body.innerHTML = renderSectionRegalos(); wireSubtabs(); break;
+    case 'reservas':  body.innerHTML = renderSectionReservas(); break;
+    case 'cupones':   body.innerHTML = renderSectionCupones(); wireCupones(); break;
+    case 'clientes':  body.innerHTML = renderSectionClientes(); wireClientes(); break;
+  }
+  wireRowClicks();
+  wireResumenCards();
+}
+
+function wireSubtabs() {
+  document.querySelectorAll('.oc-subtab').forEach(t => {
+    t.addEventListener('click', () => {
+      state.activeSubtab = t.getAttribute('data-sub');
+      renderSection();
+    });
+  });
+}
+
+function wireRowClicks() {
+  document.querySelectorAll('.oc-row[data-cid]').forEach(el => {
+    el.addEventListener('click', () => {
+      const cid = el.getAttribute('data-cid');
+      const eventoTipo = el.getAttribute('data-event-tipo') || null;
+      const eventoId = el.getAttribute('data-event-id') || null;
+      abrirDrilldown(cid, eventoTipo, eventoId);
+    });
+  });
+}
+
+function wireResumenCards() {
+  document.querySelectorAll('.oc-resumen-card[data-goto]').forEach(el => {
+    el.addEventListener('click', () => {
+      state.activeSection = el.getAttribute('data-goto');
+      state.activeSubtab = null;
+      renderNav();
+      renderSection();
+    });
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECCIÓN: RESUMEN
+   ═══════════════════════════════════════════════════════════════ */
+function renderSectionResumen() {
+  const d = state.data;
+  const cardsHtml = [
+    resumenCard('prime', '💎 PRIME activas', d.prime.activas.length, d.prime.activas.slice(0, 3), 'vencer'),
+    resumenCard('bonos', '🎟 Bonos activos', d.bonos.activos.length, d.bonos.activos.slice(0, 3), 'vencer'),
+    resumenCard('tarjetas', '🎫 Tarjetas emitidas', d.tarjetas.emitidas.length, d.tarjetas.emitidas.slice(0, 3), 'vencer'),
+    resumenCard('regalos', '🎁 Regalos emitidos', d.regalos.emitidas.length, d.regalos.emitidas.slice(0, 3), 'vencer'),
+    resumenCard('reservas', '📅 Reservas próximas', d.reservasProximas.length, d.reservasProximas.slice(0, 3), 'fecha'),
+    resumenCard('cupones', '🏷 Cupones', d.cupones.length, d.cupones.filter(c => c.active !== false).slice(0, 3), 'cupon')
+  ].join('');
+
+  return `
+    <div class="oc-section__head">
+      <div class="oc-section__title">Resumen del salón</div>
+    </div>
+    <div class="oc-section__note">
+      Vista rápida de lo que hay vigente y lo que vence pronto. Pulsa cualquier tarjeta para ir a la sección completa.
+    </div>
+    <div class="oc-resumen">${cardsHtml}</div>
+  `;
+}
+
+function resumenCard(gotoId, title, count, top, tipo) {
+  let previews = '';
+  if (!top || top.length === 0) {
+    previews = `<div class="oc-resumen-card__empty">Sin registros vigentes.</div>`;
+  } else {
+    previews = top.map(it => {
+      let titulo = '', meta = '';
+      if (tipo === 'vencer') {
+        titulo = it.serviceLabel || it.code || (it._clienteNombre || 'Sin nombre');
+        meta = it.expirationDate ? fmtDate(it.expirationDate) : '—';
+      } else if (tipo === 'fecha') {
+        titulo = `${it._clienteNombre || 'Cliente'} · ${it.title || 'Reserva'}`;
+        meta = fmtDate(it.fechaReserva);
+      } else if (tipo === 'cupon') {
+        titulo = it.code || '—';
+        meta = it.tipo === 'percent' ? `${it.valorDescuento || 0}%` : `${it.valorDescuento || 0}€`;
+      }
+      return `
+        <div class="oc-resumen-card__prev">
+          <div class="oc-resumen-card__prev-title">${esc(titulo)}</div>
+          <div class="oc-resumen-card__prev-meta">${esc(meta)}</div>
+        </div>`;
+    }).join('');
+  }
+
+  return `
+    <div class="oc-resumen-card" data-goto="${gotoId}">
+      <div class="oc-resumen-card__head">
+        <div class="oc-resumen-card__title">${esc(title)}</div>
+        <div class="oc-resumen-card__count">${count}</div>
+      </div>
+      <div class="oc-resumen-card__body">${previews}</div>
+      <div class="oc-resumen-card__foot">Ver todo →</div>
+    </div>
+  `;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECCIÓN: PRIME
+   ═══════════════════════════════════════════════════════════════ */
+function renderSectionPrime() {
+  const p = state.data.prime;
+  const sub = state.activeSubtab || 'activas';
+  const buckets = {
+    activas:    { label: 'Activas',    list: p.activas },
+    vencidas:   { label: 'Vencidas',   list: p.vencidas },
+    canceladas: { label: 'Canceladas', list: p.canceladas },
+    pendientes: { label: 'Pendientes', list: p.pendientes }
+  };
+  const list = buckets[sub].list;
+
+  return `
+    <div class="oc-section__head">
+      <div class="oc-section__title">💎 Tarjeta PRIME</div>
+    </div>
+    <div class="oc-section__note">
+      Membresías del club emitidas por el salón. Ordenadas por fecha de vencimiento ascendente.
+    </div>
+    ${renderSubtabs(sub, buckets)}
+    ${list.length === 0
+      ? `<div class="oc-empty-list">Sin PRIME ${buckets[sub].label.toLowerCase()}.</div>`
+      : `<div class="oc-list">${list.map(renderRowPrime).join('')}</div>`}
+  `;
+}
+
+function renderRowPrime(p) {
+  const emitida = fmtDate(p.issueDate);
+  const vence = fmtDate(p.expirationDate);
+  const cliente = p._clienteNombre || p.buyerName || '(sin cliente asociado)';
+  const email = p._clienteEmail || p.buyerEmail || '';
+  return `
+    <button class="oc-row" data-cid="${esc(p.contactId)}" data-event-tipo="prime" data-event-id="${esc(p._id)}">
+      <div class="oc-row__icon">💎</div>
+      <div class="oc-row__main">
+        <div class="oc-row__title">
+          Tarjeta PRIME
+          ${chipPrime(p.status, p.expirationDate)}
+          ${pillCaduca(p.expirationDate)}
+        </div>
+        <div class="oc-row__cliente">
+          <strong>${esc(cliente)}</strong>
+          ${email ? `<span class="oc-row__cliente-meta">${esc(email)}</span>` : ''}
+        </div>
+        <div class="oc-row__meta-line">
+          ${emitida ? `<span>Emitida ${esc(emitida)}</span>` : ''}
+          ${vence ? `<span>Vence ${esc(vence)}</span>` : ''}
+          ${p.paymentMethod ? `<span>💳 ${esc(p.paymentMethod)}</span>` : ''}
+        </div>
+      </div>
+      <div class="oc-row__side">
+        <div class="oc-row__amount">${fmtEur(p.paidPrice)}</div>
+        <div class="oc-row__code">${esc(p.code || '—')}</div>
+      </div>
+    </button>
+  `;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECCIÓN: BONOS
+   ═══════════════════════════════════════════════════════════════ */
+function renderSectionBonos() {
+  const b = state.data.bonos;
+  const sub = state.activeSubtab || 'activos';
+  const buckets = {
+    activos:    { label: 'Activos',    list: b.activos },
+    agotados:   { label: 'Agotados',   list: b.agotados },
+    caducados:  { label: 'Caducados',  list: b.caducados },
+    cancelados: { label: 'Cancelados', list: b.cancelados },
+    pendientes: { label: 'Pendientes', list: b.pendientes }
+  };
+  const list = buckets[sub].list;
+
+  return `
+    <div class="oc-section__head">
+      <div class="oc-section__title">🎟 Bonos</div>
+    </div>
+    <div class="oc-section__note">
+      Paquetes de sesiones prepagadas. Los activos representan servicios que el salón debe entregar.
+    </div>
+    ${renderSubtabs(sub, buckets)}
+    ${list.length === 0
+      ? `<div class="oc-empty-list">Sin bonos ${buckets[sub].label.toLowerCase()}.</div>`
+      : `<div class="oc-list">${list.map(renderRowBono).join('')}</div>`}
+  `;
+}
+
+function renderRowBono(v) {
+  const emitido = fmtDate(v.issueDate);
+  const vence = fmtDate(v.expirationDate);
+  const cliente = v._clienteNombre || '(sin cliente asociado)';
+  const email = v._clienteEmail || '';
+  return `
+    <button class="oc-row" data-cid="${esc(v.contactId)}" data-event-tipo="bono" data-event-id="${esc(v._id)}">
+      <div class="oc-row__icon">🎟</div>
+      <div class="oc-row__main">
+        <div class="oc-row__title">
+          ${esc(v.serviceLabel || 'Bono')}
+          ${chipBono(v.status, v.remainingUses, v.expirationDate)}
+          ${pillCaduca(v.expirationDate)}
+        </div>
+        <div class="oc-row__cliente">
+          <strong>${esc(cliente)}</strong>
+          ${email ? `<span class="oc-row__cliente-meta">${esc(email)}</span>` : ''}
+        </div>
+        <div class="oc-row__meta-line">
+          <span>${v.remainingUses}/${v.totalUses} usos</span>
+          ${emitido ? `<span>Emitido ${esc(emitido)}</span>` : ''}
+          ${vence ? `<span>Vence ${esc(vence)}</span>` : ''}
+        </div>
+      </div>
+      <div class="oc-row__side">
+        <div class="oc-row__amount">${fmtEur(v.paidPrice)}</div>
+        <div class="oc-row__code">${esc(v.code || '—')}</div>
+      </div>
+    </button>
+  `;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECCIÓN: TARJETAS PROMOCIONALES (isGift=false)
+   ═══════════════════════════════════════════════════════════════ */
+function renderSectionTarjetas() {
+  const t = state.data.tarjetas;
+  const sub = state.activeSubtab || 'emitidas';
+  const buckets = {
+    emitidas:   { label: 'Emitidas',   list: t.emitidas },
+    canjeadas:  { label: 'Canjeadas',  list: t.canjeadas },
+    caducadas:  { label: 'Caducadas',  list: t.caducadas },
+    canceladas: { label: 'Canceladas', list: t.canceladas },
+    pendientes: { label: 'Pendientes', list: t.pendientes }
+  };
+  const list = buckets[sub].list;
+
+  return `
+    <div class="oc-section__head">
+      <div class="oc-section__title">🎫 Tarjetas promocionales</div>
+    </div>
+    <div class="oc-section__note">
+      Tarjetas compradas por el cliente para uso propio. Deuda pendiente en servicios.
+    </div>
+    ${renderSubtabs(sub, buckets)}
+    ${list.length === 0
+      ? `<div class="oc-empty-list">Sin tarjetas ${buckets[sub].label.toLowerCase()}.</div>`
+      : `<div class="oc-list">${list.map(t => renderRowTarjeta(t, false)).join('')}</div>`}
+  `;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECCIÓN: REGALOS (isGift=true)
+   ═══════════════════════════════════════════════════════════════ */
+function renderSectionRegalos() {
+  const r = state.data.regalos;
+  const sub = state.activeSubtab || 'emitidas';
+  const buckets = {
+    emitidas:   { label: 'Emitidas',   list: r.emitidas },
+    canjeadas:  { label: 'Canjeadas',  list: r.canjeadas },
+    caducadas:  { label: 'Caducadas',  list: r.caducadas },
+    canceladas: { label: 'Canceladas', list: r.canceladas },
+    pendientes: { label: 'Pendientes', list: r.pendientes }
+  };
+  const list = buckets[sub].list;
+
+  return `
+    <div class="oc-section__head">
+      <div class="oc-section__title">🎁 Tarjetas regalo</div>
+    </div>
+    <div class="oc-section__note">
+      Tarjetas compradas para regalar a terceros. El comprador y el beneficiario suelen ser distintos.
+    </div>
+    ${renderSubtabs(sub, buckets)}
+    ${list.length === 0
+      ? `<div class="oc-empty-list">Sin regalos ${buckets[sub].label.toLowerCase()}.</div>`
+      : `<div class="oc-list">${list.map(t => renderRowTarjeta(t, true)).join('')}</div>`}
+  `;
+}
+
+function renderRowTarjeta(t, esRegalo) {
+  const emitida = fmtDate(t.issueDate);
+  const vence = fmtDate(t.expirationDate);
+  const cliente = t._clienteNombre || t.buyerName || '(sin cliente asociado)';
+  const email = t._clienteEmail || t.buyerEmail || '';
+  const icon = esRegalo ? '🎁' : '🎫';
+
+  const clienteLine = esRegalo
+    ? `<div class="oc-row__cliente">
+        <strong>${esc(cliente)}</strong>
+        <span class="oc-row__cliente-meta">→ regala a <strong style="color:var(--kr-ink)">${esc(t.recipientName || '?')}</strong></span>
+      </div>`
+    : `<div class="oc-row__cliente">
+        <strong>${esc(cliente)}</strong>
+        ${email ? `<span class="oc-row__cliente-meta">${esc(email)}</span>` : ''}
+      </div>`;
+
+  return `
+    <button class="oc-row" data-cid="${esc(t.buyerContactId)}" data-event-tipo="${esRegalo ? 'regalo' : 'tarjeta'}" data-event-id="${esc(t._id)}">
+      <div class="oc-row__icon">${icon}</div>
+      <div class="oc-row__main">
+        <div class="oc-row__title">
+          ${esc(t.serviceLabel || (esRegalo ? 'Tarjeta regalo' : 'Tarjeta promocional'))}
+          ${chipTarjeta(t.status, t.expirationDate)}
+          ${pillCaduca(t.expirationDate)}
+        </div>
+        ${clienteLine}
+        <div class="oc-row__meta-line">
+          ${emitida ? `<span>Emitida ${esc(emitida)}</span>` : ''}
+          ${vence ? `<span>Vence ${esc(vence)}</span>` : ''}
+          ${t.redeemDate ? `<span>Canjeada ${esc(fmtDate(t.redeemDate))}</span>` : ''}
+        </div>
+      </div>
+      <div class="oc-row__side">
+        <div class="oc-row__amount">${fmtEur(t.paidPrice)}</div>
+        <div class="oc-row__code">${esc(t.code || '—')}</div>
+      </div>
+    </button>
+  `;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECCIÓN: RESERVAS PRÓXIMAS
+   ═══════════════════════════════════════════════════════════════ */
+function renderSectionReservas() {
+  const list = state.data.reservasProximas;
+
+  return `
+    <div class="oc-section__head">
+      <div class="oc-section__title">📅 Reservas próximas (60 días)</div>
+    </div>
+    <div class="oc-section__note">
+      Agenda comercial del salón. Ordenadas cronológicamente.
+    </div>
+    ${list.length === 0
+      ? `<div class="oc-empty-list">Sin reservas en los próximos 60 días.</div>`
+      : `<div class="oc-list">${list.map(renderRowReserva).join('')}</div>`}
+  `;
+}
+
+function renderRowReserva(r) {
+  const cliente = r._clienteNombre || '(sin cliente)';
+  const email = r._clienteEmail || '';
+  return `
+    <button class="oc-row" data-cid="${esc(r.contactId)}" data-event-tipo="reserva" data-event-id="${esc(r._id)}">
+      <div class="oc-row__icon">📅</div>
+      <div class="oc-row__main">
+        <div class="oc-row__title">
+          ${esc(r.title || 'Reserva')}
+          ${r.origenRecepcion ? '<span class="oc-chip">RECEPCIÓN</span>' : '<span class="oc-chip oc-chip--info">ONLINE</span>'}
+        </div>
+        <div class="oc-row__cliente">
+          <strong>${esc(cliente)}</strong>
+          ${email ? `<span class="oc-row__cliente-meta">${esc(email)}</span>` : ''}
+        </div>
+        <div class="oc-row__meta-line">
+          <span>🕒 ${esc(fmtDateHora(r.fechaReserva))}</span>
+          ${r.staffName ? `<span>👤 ${esc(r.staffName)}</span>` : ''}
+          ${r.duracionTotal ? `<span>⏱ ${esc(fmtDur(r.duracionTotal))}</span>` : ''}
+        </div>
+      </div>
+      <div class="oc-row__side">
+        <div class="oc-row__amount">${r.precioTotal ? fmtEur(r.precioTotal) : '—'}</div>
+      </div>
+    </button>
+  `;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECCIÓN: CUPONES
+   ═══════════════════════════════════════════════════════════════ */
+function renderSectionCupones() {
+  const cupones = filtrarCupones(state.data.cupones);
+  return `
+    <div class="oc-section__head">
+      <div class="oc-section__title">🏷 Cupones del salón</div>
+      <button class="oc-btn oc-btn--sm" id="ocBtnRefreshCupones">Actualizar</button>
+    </div>
+    <div class="oc-section__note">
+      Cupones de Wix Marketing. Se canjean en el checkout del sitio.
+      El contador de usos es global — Wix no rastrea qué cliente los usa.
+    </div>
+    <div class="oc-filters">
+      <select class="oc-select" id="ocCupEstado">
+        <option value="">Todos los estados</option>
+        <option value="activos">Activos</option>
+        <option value="inactivos">Inactivos</option>
+        <option value="expirados">Expirados</option>
+        <option value="sin_fin">Sin fecha final</option>
+      </select>
+      <select class="oc-select" id="ocCupTipo">
+        <option value="">Todos los tipos</option>
+        <option value="percent">Porcentaje</option>
+        <option value="money">Importe fijo</option>
+      </select>
+      <div class="oc-filters__spacer"></div>
+      <div class="oc-search-count">${cupones.length} de ${state.data.cupones.length}</div>
+    </div>
+    ${cupones.length === 0
+      ? `<div class="oc-empty-list">Sin cupones con los filtros aplicados.</div>`
+      : `<div class="oc-list">${cupones.map(renderCupon).join('')}</div>`}
+  `;
+}
+
+function wireCupones() {
+  const s1 = document.getElementById('ocCupEstado');
+  const s2 = document.getElementById('ocCupTipo');
+  const rf = document.getElementById('ocBtnRefreshCupones');
+  if (s1) { s1.value = state.cupFiltros.estado; s1.addEventListener('change', e => { state.cupFiltros.estado = e.target.value; renderSection(); }); }
+  if (s2) { s2.value = state.cupFiltros.tipo;   s2.addEventListener('change', e => { state.cupFiltros.tipo = e.target.value; renderSection(); }); }
+  if (rf) rf.addEventListener('click', () => { send('refreshCupones'); showToast('Actualizando cupones…'); });
+}
+
+function filtrarCupones(list) {
+  const { estado, tipo } = state.cupFiltros;
+  const nowMs = Date.now();
+  return (list || []).filter(c => {
+    if (tipo && c.tipo !== tipo) return false;
+    if (estado === 'activos' && c.active === false) return false;
+    if (estado === 'inactivos' && c.active !== false) return false;
+    if (estado === 'expirados') {
+      const e = c.expirationTime ? new Date(c.expirationTime).getTime() : NaN;
+      if (isNaN(e) || e >= nowMs) return false;
+    }
+    if (estado === 'sin_fin' && c.expirationTime) return false;
+    return true;
+  });
+}
+
+function renderCupon(c) {
+  const nowMs = Date.now();
+  const expMs = c.expirationTime ? new Date(c.expirationTime).getTime() : NaN;
+  const caducado = !isNaN(expMs) && expMs < nowMs;
+  const chip = caducado
+    ? '<span class="oc-chip oc-chip--warn">EXPIRADO</span>'
+    : (c.active === false ? '<span class="oc-chip">INACTIVO</span>' : '<span class="oc-chip oc-chip--ok">ACTIVO</span>');
+  const desc = c.tipo === 'percent' ? `${c.valorDescuento || 0}%` : `${c.valorDescuento || 0}€`;
+  const usos = `${c.numberOfUsages || 0}${c.usageLimit ? '/' + c.usageLimit : ''}`;
+  const fechas = `${c.startTime ? fmtDate(c.startTime) : '—'} → ${c.expirationTime ? fmtDate(c.expirationTime) : 'sin fin'}`;
+  return `
+    <div class="oc-cupon">
+      <div class="oc-cupon__main">
+        <div class="oc-cupon__code">${esc(c.code || '—')}</div>
+        <div class="oc-cupon__name">${esc(c.name || '')} ${chip}</div>
+        <div class="oc-cupon__meta">
+          <span>📅 ${esc(fechas)}</span>
+          <span>🎯 Usos ${esc(usos)}</span>
+          ${c.minimumSubtotal != null ? `<span>Mín. ${esc(c.minimumSubtotal)}€</span>` : ''}
+        </div>
+      </div>
+      <div class="oc-cupon__value">${esc(desc)}</div>
+    </div>
+  `;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECCIÓN: CLIENTES (búsqueda puntual)
+   ═══════════════════════════════════════════════════════════════ */
+function renderSectionClientes() {
+  const q = norm(state.searchClientes);
+  let list = state.data.contactos;
+  if (q) {
+    list = list.filter(c => {
+      const hay = norm(c.nombreCompleto) + ' ' + norm(c.email) + ' ' + String(c.telefono || '').replace(/[\s\-\(\)]/g, '');
+      const qClean = q.replace(/[\s\-\(\)]/g, '');
+      return hay.includes(q) || hay.includes(qClean);
+    });
+  }
+  const CAP = 200;
+  const visibles = list.slice(0, CAP);
+
+  return `
+    <div class="oc-section__head">
+      <div class="oc-section__title">👥 Buscador de clientes</div>
+    </div>
+    <div class="oc-section__note">
+      Para consultas puntuales de un cliente. Pulsa cualquier fila para abrir su ficha.
+    </div>
+    <div class="oc-search">
+      <span class="oc-search__icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      </span>
+      <input type="text" id="ocSearchClientesInput" placeholder="Buscar por nombre, email o teléfono…" autocomplete="off" value="${esc(state.searchClientes)}">
+    </div>
+    <div class="oc-search-count">
+      ${q ? `${visibles.length} de ${state.data.contactos.length}` : `${state.data.contactos.length} clientes en CRM`}
+    </div>
+    ${visibles.length === 0
+      ? `<div class="oc-empty-list">${q ? 'Sin coincidencias.' : 'No hay clientes.'}</div>`
+      : visibles.map(c => `
+          <button class="oc-c-row" data-cid="${esc(c.contactId)}">
+            <div class="oc-c-row__avatar">${esc(initials(c.nombre, c.apellido))}</div>
+            <div class="oc-c-row__main">
+              <div class="oc-c-row__name">${esc(c.nombreCompleto || '(sin nombre)')}</div>
+              ${c.email || c.telefono ? `<div class="oc-c-row__sub">${esc(c.email || c.telefono)}</div>` : ''}
+            </div>
+          </button>
+        `).join('')}
+    ${list.length > CAP ? `<div class="oc-empty-list" style="margin-top:6px">Refina la búsqueda para ver los ${list.length - CAP} restantes.</div>` : ''}
+  `;
+}
+
+function wireClientes() {
+  const inp = document.getElementById('ocSearchClientesInput');
+  if (inp) {
+    inp.addEventListener('input', (e) => {
+      if (searchDebounce) clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(() => {
+        state.searchClientes = e.target.value;
+        renderSection();
+      }, 180);
+    });
+    setTimeout(() => inp.focus(), 50);
+  }
+  document.querySelectorAll('.oc-c-row[data-cid]').forEach(el => {
+    el.addEventListener('click', () => abrirDrilldown(el.getAttribute('data-cid'), null, null));
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SUB-TABS
+   ═══════════════════════════════════════════════════════════════ */
+function renderSubtabs(current, buckets) {
+  return `<div class="oc-subtabs">${Object.entries(buckets).map(([id, b]) => `
+    <button class="oc-subtab${id === current ? ' is-sel' : ''}" data-sub="${id}">
+      ${b.label} <span class="oc-subtab__count">${b.list.length}</span>
+    </button>`).join('')}</div>`;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CHIPS
+   ═══════════════════════════════════════════════════════════════ */
+function chipPrime(status, exp) {
+  const caducada = exp && new Date(exp).getTime() < Date.now();
+  if (status === 'ACTIVA' && !caducada) return '<span class="oc-chip oc-chip--ok">ACTIVA</span>';
+  if (status === 'ACTIVA' && caducada) return '<span class="oc-chip oc-chip--warn">VENCIDA</span>';
+  if (status === 'VENCIDA') return '<span class="oc-chip oc-chip--warn">VENCIDA</span>';
+  if (status === 'CANCELADA') return '<span class="oc-chip oc-chip--danger">CANCELADA</span>';
+  if (status === 'PENDING') return '<span class="oc-chip oc-chip--orange">PENDIENTE</span>';
+  return `<span class="oc-chip">${esc(status || '—')}</span>`;
+}
+function chipBono(status, rem, exp) {
+  const caducado = exp && new Date(exp).getTime() < Date.now();
+  if (status === 'ACTIVO' && rem > 0 && !caducado) return '<span class="oc-chip oc-chip--ok">ACTIVO</span>';
+  if (status === 'AGOTADO' || (status === 'ACTIVO' && rem <= 0)) return '<span class="oc-chip">AGOTADO</span>';
+  if (status === 'CADUCADO' || caducado) return '<span class="oc-chip oc-chip--warn">CADUCADO</span>';
+  if (status === 'CANCELADO') return '<span class="oc-chip oc-chip--danger">CANCELADO</span>';
+  if (status === 'PENDING') return '<span class="oc-chip oc-chip--orange">PENDIENTE</span>';
+  return `<span class="oc-chip">${esc(status || '—')}</span>`;
+}
+function chipTarjeta(status, exp) {
+  const caducada = exp && new Date(exp).getTime() < Date.now();
+  if (status === 'EMITIDA' && !caducada) return '<span class="oc-chip oc-chip--ok">EMITIDA</span>';
+  if (status === 'EMITIDA' && caducada) return '<span class="oc-chip oc-chip--warn">CADUCADA</span>';
+  if (status === 'CADUCADA') return '<span class="oc-chip oc-chip--warn">CADUCADA</span>';
+  if (status === 'CANJEADA') return '<span class="oc-chip oc-chip--info">CANJEADA</span>';
+  if (status === 'CANCELADA') return '<span class="oc-chip oc-chip--danger">CANCELADA</span>';
+  if (status === 'PENDING') return '<span class="oc-chip oc-chip--orange">PENDIENTE</span>';
+  return `<span class="oc-chip">${esc(status || '—')}</span>`;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MODAL DRILL-DOWN CLIENTE
+   ═══════════════════════════════════════════════════════════════ */
+function abrirDrilldown(contactId, eventoTipo, eventoId) {
+  if (!contactId) {
+    showToast('Este evento no tiene cliente asociado', 'err');
+    return;
+  }
+  // Buscar evento contexto si aplica
+  let eventoContext = null;
+  if (eventoTipo && eventoId) eventoContext = buscarEvento(eventoTipo, eventoId);
+
+  state.modalCliente = {
+    open: true,
+    contactId,
+    detalle: null,
+    loading: true,
+    eventoContext,
+    modo: 'view'
+  };
+  document.getElementById('ocModalCliente').classList.add('is-open');
+  renderModalCliente();
+  send('getDetalleCliente', { contactId });
+}
+
+function buscarEvento(tipo, id) {
+  const d = state.data;
+  const buscar = (arrs, campoId = '_id') => {
+    for (const arr of arrs) {
+      const found = (arr || []).find(x => x[campoId] === id);
+      if (found) return found;
+    }
+    return null;
+  };
+  switch (tipo) {
+    case 'prime':    return buscar([d.prime.activas, d.prime.vencidas, d.prime.canceladas, d.prime.pendientes]);
+    case 'bono':     return buscar([d.bonos.activos, d.bonos.agotados, d.bonos.caducados, d.bonos.cancelados, d.bonos.pendientes]);
+    case 'tarjeta':  return buscar([d.tarjetas.emitidas, d.tarjetas.canjeadas, d.tarjetas.caducadas, d.tarjetas.canceladas, d.tarjetas.pendientes]);
+    case 'regalo':   return buscar([d.regalos.emitidas, d.regalos.canjeadas, d.regalos.caducadas, d.regalos.canceladas, d.regalos.pendientes]);
+    case 'reserva':  return buscar([d.reservasProximas]);
+  }
+  return null;
+}
+
+function cerrarModalCliente() {
+  state.modalCliente.open = false;
+  state.modalCliente.contactId = null;
+  state.modalCliente.detalle = null;
+  state.modalCliente.eventoContext = null;
+  state.modalCliente.modo = 'view';
+  document.getElementById('ocModalCliente').classList.remove('is-open');
+}
+
+function renderModalCliente() {
+  const body = document.getElementById('ocModalClienteBody');
+  const mc = state.modalCliente;
+
+  // Cliente de la lista global (fallback mientras carga detalle)
+  const cLite = state.data.contactos.find(x => x.contactId === mc.contactId) || {};
+  const cDetalle = mc.detalle?.contacto || null;
+  const c = cDetalle || {
+    contactId: mc.contactId,
+    nombre: cLite.nombre || '',
+    apellido: cLite.apellido || '',
+    nombreCompleto: cLite.nombreCompleto || '',
+    email: cLite.email || '',
+    telefono: cLite.telefono || '',
+    foto: '',
+    sexo: '',
+    dni: '',
+    fechaNacimiento: ''
+  };
+
+  const nombreCompleto = c.nombreCompleto || [c.nombre, c.apellido].filter(Boolean).join(' ').trim() || '(sin nombre)';
+
+  if (mc.modo === 'edit') {
+    body.innerHTML = renderModalEditForm(c);
+    wireModalEdit(c);
+    return;
+  }
+
+  // Modo VIEW: cabecera cliente + datos + resumen productos + evento contexto + acciones
+  const avatar = c.foto
+    ? `<img src="${esc(c.foto)}" alt="" onerror="this.style.display='none'">`
+    : esc(initials(c.nombre, c.apellido));
+
+  const metaChunks = [];
+  if (c.email) metaChunks.push(`<span>✉ ${esc(c.email)}</span>`);
+  if (c.telefono) metaChunks.push(`<span>📞 ${esc(c.telefono)}</span>`);
+  if (c.fechaNacimiento) metaChunks.push(`<span>🎂 ${esc(fmtDateLong(c.fechaNacimiento))}</span>`);
+  if (c.dni) metaChunks.push(`<span>🆔 ${esc(c.dni)}</span>`);
+
+  let eventoHtml = '';
+  if (mc.eventoContext) {
+    eventoHtml = renderEventoContext(mc.eventoContext);
+  }
+
+  let resumenHtml = '';
+  if (mc.detalle) {
+    const d = mc.detalle;
+    const primeCount = d.prime.historico ? d.prime.historico.length : 0;
+    const bonosVigCount = d.bonos.vigentes ? d.bonos.vigentes.length : 0;
+    const tarVigCount = d.tarjetas.vigentes ? d.tarjetas.vigentes.length : 0;
+    const regalosCount = d.regalosVendidos ? d.regalosVendidos.length : 0;
+    const resProxCount = d.reservasProximas ? d.reservasProximas.length : 0;
+
+    resumenHtml = `
+      <div class="oc-modal__resumen">
+        <div class="oc-modal__resumen-item">
+          <div class="oc-modal__resumen-value">${resProxCount}</div>
+          <div class="oc-modal__resumen-label">Reservas próx.</div>
+        </div>
+        <div class="oc-modal__resumen-item">
+          <div class="oc-modal__resumen-value">${primeCount}</div>
+          <div class="oc-modal__resumen-label">PRIMEs</div>
+        </div>
+        <div class="oc-modal__resumen-item">
+          <div class="oc-modal__resumen-value">${bonosVigCount}</div>
+          <div class="oc-modal__resumen-label">Bonos activos</div>
+        </div>
+        <div class="oc-modal__resumen-item">
+          <div class="oc-modal__resumen-value">${tarVigCount}</div>
+          <div class="oc-modal__resumen-label">Tarjetas activ.</div>
+        </div>
+        <div class="oc-modal__resumen-item">
+          <div class="oc-modal__resumen-value">${regalosCount}</div>
+          <div class="oc-modal__resumen-label">Regalos vend.</div>
+        </div>
+      </div>
+    `;
+  } else if (mc.loading) {
+    resumenHtml = `<div class="oc-empty-list" style="margin-bottom:14px">Cargando resumen del cliente…</div>`;
+  }
+
+  body.innerHTML = `
+    <div class="oc-modal__head">
+      <div class="oc-modal__avatar">${avatar}</div>
+      <div class="oc-modal__id">
+        <div class="oc-modal__id-name">${esc(nombreCompleto)}</div>
+        <div class="oc-modal__id-meta">${metaChunks.join('') || '<span>Sin datos de contacto</span>'}</div>
+      </div>
+      <button class="oc-modal__close" id="ocModalClose" title="Cerrar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    ${eventoHtml}
+    ${resumenHtml}
+    <div class="oc-modal__actions">
+      <button class="oc-btn oc-btn--ghost" id="ocModalCloseBottom">Cerrar</button>
+      <button class="oc-btn oc-btn--primary" id="ocModalEditar">✎ Editar contacto</button>
+    </div>
+  `;
+
+  document.getElementById('ocModalClose').addEventListener('click', cerrarModalCliente);
+  document.getElementById('ocModalCloseBottom').addEventListener('click', cerrarModalCliente);
+  document.getElementById('ocModalEditar').addEventListener('click', () => {
+    state.modalCliente.modo = 'edit';
+    renderModalCliente();
+  });
+}
+
+function renderEventoContext(ev) {
+  // Detectar tipo por campos presentes
+  let icon = '📌', heading = 'Evento', meta = '', amount = '';
+  if (ev.title && ev.fechaReserva) {
+    icon = '📅';
+    heading = `${esc(ev.title)} ${ev.origenRecepcion ? '<span class="oc-chip">RECEPCIÓN</span>' : '<span class="oc-chip oc-chip--info">ONLINE</span>'}`;
+    meta = fmtDateHora(ev.fechaReserva) + (ev.staffName ? ' · ' + ev.staffName : '');
+    amount = ev.precioTotal ? fmtEur(ev.precioTotal) : '';
+  } else if (ev.isGift !== undefined) {
+    icon = ev.isGift ? '🎁' : '🎫';
+    heading = `${esc(ev.serviceLabel || (ev.isGift ? 'Tarjeta regalo' : 'Tarjeta promocional'))} ${chipTarjeta(ev.status, ev.expirationDate)}`;
+    meta = `Emitida ${fmtDate(ev.issueDate)}${ev.expirationDate ? ' · Vence ' + fmtDate(ev.expirationDate) : ''}${ev.isGift && ev.recipientName ? ' · Para: ' + esc(ev.recipientName) : ''}`;
+    amount = fmtEur(ev.paidPrice);
+  } else if (ev.totalUses !== undefined) {
+    icon = '🎟';
+    heading = `${esc(ev.serviceLabel || 'Bono')} ${chipBono(ev.status, ev.remainingUses, ev.expirationDate)}`;
+    meta = `${ev.remainingUses}/${ev.totalUses} usos · Emitido ${fmtDate(ev.issueDate)}${ev.expirationDate ? ' · Vence ' + fmtDate(ev.expirationDate) : ''}`;
+    amount = fmtEur(ev.paidPrice);
+  } else {
+    // PRIME
+    icon = '💎';
+    heading = `Tarjeta PRIME ${chipPrime(ev.status, ev.expirationDate)}`;
+    meta = `Emitida ${fmtDate(ev.issueDate)}${ev.expirationDate ? ' · Vence ' + fmtDate(ev.expirationDate) : ''}`;
+    amount = fmtEur(ev.paidPrice);
+  }
+  return `
+    <div class="oc-modal__event">
+      <div class="oc-modal__event-title">Evento seleccionado</div>
+      <div class="oc-modal__event-body">
+        <div class="oc-modal__event-icon">${icon}</div>
+        <div class="oc-modal__event-info">
+          <div class="oc-modal__event-heading">${heading}</div>
+          <div class="oc-modal__event-meta">${esc(meta)}</div>
+        </div>
+        ${amount ? `<div class="oc-modal__event-amount">${amount}</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function renderModalEditForm(c) {
+  return `
+    <div class="oc-modal__head">
+      <div class="oc-modal__avatar">${esc(initials(c.nombre, c.apellido))}</div>
+      <div class="oc-modal__id">
+        <div class="oc-modal__id-name">Editar contacto</div>
+        <div class="oc-modal__id-meta"><span>${esc(c.nombreCompleto || '(sin nombre)')}</span></div>
+      </div>
+      <button class="oc-modal__close" id="ocModalCloseEdit" title="Cerrar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="oc-modal__error" id="ocModalError"></div>
+    <div class="oc-form">
+      <div class="oc-form__group">
+        <label class="oc-form__label">Nombre</label>
+        <input type="text" class="oc-form__input" id="ocFieldNombre" value="${esc(c.nombre || '')}" autocomplete="off">
+      </div>
+      <div class="oc-form__group">
+        <label class="oc-form__label">Apellido</label>
+        <input type="text" class="oc-form__input" id="ocFieldApellido" value="${esc(c.apellido || '')}" autocomplete="off">
+      </div>
+      <div class="oc-form__group oc-form__group--full">
+        <label class="oc-form__label">Email</label>
+        <input type="email" class="oc-form__input" id="ocFieldEmail" value="${esc(c.email || '')}" autocomplete="off">
+      </div>
+      <div class="oc-form__group">
+        <label class="oc-form__label">Teléfono</label>
+        <input type="tel" class="oc-form__input" id="ocFieldTelefono" value="${esc(c.telefono || '')}" autocomplete="off">
+      </div>
+      <div class="oc-form__group">
+        <label class="oc-form__label">Sexo</label>
+        <select class="oc-form__select" id="ocFieldSexo">
+          <option value="">— sin especificar —</option>
+          <option value="F"${c.sexo === 'F' ? ' selected' : ''}>Femenino</option>
+          <option value="M"${c.sexo === 'M' ? ' selected' : ''}>Masculino</option>
+          <option value="X"${c.sexo === 'X' ? ' selected' : ''}>Otro</option>
+        </select>
+      </div>
+      <div class="oc-form__group">
+        <label class="oc-form__label">DNI / NIF</label>
+        <input type="text" class="oc-form__input" id="ocFieldDni" value="${esc(c.dni || '')}" autocomplete="off">
+      </div>
+      <div class="oc-form__group">
+        <label class="oc-form__label">Fecha nacimiento</label>
+        <input type="date" class="oc-form__input" id="ocFieldFechaNac" value="${esc(c.fechaNacimiento || '')}" autocomplete="off">
+      </div>
+    </div>
+    <div class="oc-modal__actions">
+      <button class="oc-btn oc-btn--ghost" id="ocModalCancelEdit">Cancelar</button>
+      <button class="oc-btn oc-btn--primary" id="ocModalSave">Guardar</button>
+    </div>
+  `;
+}
+
+function wireModalEdit(cActual) {
+  document.getElementById('ocModalCloseEdit').addEventListener('click', cerrarModalCliente);
+  document.getElementById('ocModalCancelEdit').addEventListener('click', () => {
+    state.modalCliente.modo = 'view';
+    renderModalCliente();
+  });
+  document.getElementById('ocModalSave').addEventListener('click', () => guardarEdit(cActual));
+}
+
+function guardarEdit(cActual) {
+  const cid = state.modalCliente.contactId;
+  if (!cid) return;
+
+  const nombre = document.getElementById('ocFieldNombre').value.trim();
+  const apellido = document.getElementById('ocFieldApellido').value.trim();
+  const email = document.getElementById('ocFieldEmail').value.trim();
+  const telefono = document.getElementById('ocFieldTelefono').value.trim();
+  const sexo = document.getElementById('ocFieldSexo').value;
+  const dni = document.getElementById('ocFieldDni').value.trim();
+  const fechaNacimiento = document.getElementById('ocFieldFechaNac').value;
+
+  const cambios = {};
+  if (nombre !== (cActual.nombre || '')) cambios.nombre = nombre;
+  if (apellido !== (cActual.apellido || '')) cambios.apellido = apellido;
+  if (email && email !== (cActual.email || '')) cambios.email = email;
+  if (telefono && telefono !== (cActual.telefono || '')) cambios.telefono = telefono;
+  if (sexo !== (cActual.sexo || '')) cambios.sexo = sexo;
+  if (dni !== (cActual.dni || '')) cambios.dni = dni;
+  if (fechaNacimiento !== (cActual.fechaNacimiento || '')) cambios.fechaNacimiento = fechaNacimiento;
+
+  if (Object.keys(cambios).length === 0) {
+    state.modalCliente.modo = 'view';
+    renderModalCliente();
+    showToast('Sin cambios');
+    return;
+  }
+
+  const err = document.getElementById('ocModalError');
+  if (err) err.classList.remove('is-visible');
+  document.getElementById('ocModalSave').textContent = 'Guardando…';
+  send('updateContacto', { contactId: cid, cambios });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TOAST
+   ═══════════════════════════════════════════════════════════════ */
+function showToast(msg, kind) {
+  const el = document.getElementById('ocToast');
+  el.className = 'oc-toast is-visible' + (kind === 'ok' ? ' oc-toast--ok' : (kind === 'err' ? ' oc-toast--err' : ''));
+  el.textContent = msg;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('is-visible'), 2600);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ARRANQUE
+   ═══════════════════════════════════════════════════════════════ */
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('ocBtnRefresh').addEventListener('click', () => {
+    bootstrapReceived = false;
+    send('refreshGlobal');
+    showToast('Actualizando…');
+    startReadyLoop();
+  });
+
+  // Cerrar modal con ESC o click fuera
+  document.getElementById('ocModalCliente').addEventListener('click', (e) => {
+    if (e.target.id === 'ocModalCliente') cerrarModalCliente();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.modalCliente.open) cerrarModalCliente();
+  });
+
+  startReadyLoop();
+});
+</script>
+</body>
+</html>
