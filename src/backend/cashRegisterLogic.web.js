@@ -1,12 +1,34 @@
 // =====================================================
-// BACKEND cashRegisterLogic.web.js — Arqueo de Caja KAMISUITE v1.0.0
+// BACKEND cashRegisterLogic.web.js — Arqueo de Caja KAMISUITE v1.1.0
 // =====================================================
-// FECHA: 11 Mayo 2026
-// VERSION: 1.0.0
+// FECHA: 1 Ago 2026
+// VERSION: 1.1.0
+//
+// CHANGELOG
+//   v1.1.0 · 1 Ago 2026 · Apertura de caja profesional
+//     - NEW getFondoSugerido({ fechaISO }) — devuelve el fondo inicial
+//       SUGERIDO para abrir la caja del día, con cascada de fallback:
+//         1) SalonConfig.fondoCajaFijo > 0  → origen 'fondoFijo'
+//         2) countedCash del último CashRegister status='closed'
+//            estrictamente anterior a fechaISO → origen 'cierreAyer'
+//         3) countedCash|expectedCash del último CashRegister anterior
+//            (cualquier status) con valor > 0 → origen 'esperadoAyer'
+//         4) 0 → origen 'cero'
+//       Solo LECTURA. No crea ni modifica nada. La usa el page code de
+//       Recepción PRO para pre-rellenar el modal de apertura.
+//     - abrirCaja NO se toca (ya recibía openingBalance + recordedBy).
+//       Sigue siendo la única función que escribe openingBalance.
+//     - Sin cambios en calcularEfectivoEsperado, guardarArqueo,
+//       cerrarCaja, registrarMovimiento ni el resto: el arqueo ya
+//       consumía registro.openingBalance del día, así que el fondo
+//       fijado por abrirCaja fluye a todo el pipeline sin tocar nada más.
+//
+//   v1.0.0 · 11 Mayo 2026 · Creación inicial
 //
 // Colecciones CMS:
 //   CashRegister  — Un registro por día (apertura → cierre)
 //   CashMovements — N movimientos manuales por día
+//   SalonConfig   — (solo lectura en v1.1.0) fondoCajaFijo
 //
 // Field IDs confirmados con Lector CMS (11 Mayo 2026):
 //
@@ -33,10 +55,11 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CashRegister v1.0.0]';
+const TAG = '[CashRegister v1.1.0]';
 const COL_REGISTER = 'CashRegister';
 const COL_MOVEMENTS = 'CashMovements';
 const COL_PAGOS = 'PaymentReservations';
+const COL_SALON_CONFIG = 'SalonConfig';   // v1.1.0 — solo lectura (fondoCajaFijo)
 
 // ═══════════════════════════════════════════════════════
 // HELPER: Obtener inicio y fin del día como Date
@@ -72,6 +95,92 @@ export const getCajaDia = webMethod(
     } catch (error) {
       console.error(`${TAG} ❌ getCajaDia:`, error);
       return { ok: false, error: error.message };
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════
+// getFondoSugerido — Fondo inicial SUGERIDO para abrir el día
+//   Solo lectura. No crea ni modifica nada. Cascada de fallback:
+//     1) SalonConfig.fondoCajaFijo > 0        → 'fondoFijo'
+//     2) countedCash del último CashRegister 'closed' anterior
+//                                              → 'cierreAyer'
+//     3) countedCash|expectedCash del último CashRegister anterior
+//        (cualquier status) con valor > 0      → 'esperadoAyer'
+//     4) 0                                      → 'cero'
+//   Devuelve { ok, fondoSugerido, origen, fechaOrigen }
+// ═══════════════════════════════════════════════════════
+
+export const getFondoSugerido = webMethod(
+  Permissions.SiteMember,
+  async ({ fechaISO }) => {
+    try {
+      console.log(`${TAG} 💡 getFondoSugerido: ${fechaISO}`);
+
+      // Inicio del día objetivo: cualquier registro estrictamente ANTERIOR
+      // a este instante cuenta como "día previo".
+      const inicioHoy = new Date(`${fechaISO}T00:00:00.000`);
+
+      // ── Prioridad 1: fondo fijo configurado en SalonConfig ──
+      try {
+        const cfgRes = await wixData.query(COL_SALON_CONFIG)
+          .limit(1)
+          .find({ suppressAuth: true });
+        const cfg = cfgRes.items.length > 0 ? cfgRes.items[0] : null;
+        const fijo = Number(cfg?.fondoCajaFijo || 0);
+        if (fijo > 0) {
+          return { ok: true, fondoSugerido: Math.round(fijo * 100) / 100, origen: 'fondoFijo', fechaOrigen: '' };
+        }
+      } catch (e) {
+        // Si SalonConfig no está accesible, seguimos con el arrastre.
+        console.warn(`${TAG} ⚠️ SalonConfig no leído en getFondoSugerido:`, e.message);
+      }
+
+      // ── Prioridad 2: último CashRegister CERRADO anterior a hoy ──
+      const cerradoRes = await wixData.query(COL_REGISTER)
+        .lt('registerDate', inicioHoy)
+        .eq('status', 'closed')
+        .descending('registerDate')
+        .limit(1)
+        .find({ suppressAuth: true });
+
+      if (cerradoRes.items.length > 0) {
+        const reg = cerradoRes.items[0];
+        const contado = Number(reg.countedCash || 0);
+        if (contado > 0) {
+          const fechaOrigen = reg.registerDate
+            ? new Date(reg.registerDate).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' })
+            : '';
+          return { ok: true, fondoSugerido: Math.round(contado * 100) / 100, origen: 'cierreAyer', fechaOrigen };
+        }
+      }
+
+      // ── Prioridad 3: último CashRegister anterior (cualquier status) ──
+      const previoRes = await wixData.query(COL_REGISTER)
+        .lt('registerDate', inicioHoy)
+        .descending('registerDate')
+        .limit(1)
+        .find({ suppressAuth: true });
+
+      if (previoRes.items.length > 0) {
+        const reg = previoRes.items[0];
+        const contado = Number(reg.countedCash || 0);
+        const esperado = Number(reg.expectedCash || 0);
+        const valor = contado > 0 ? contado : esperado;
+        if (valor > 0) {
+          const fechaOrigen = reg.registerDate
+            ? new Date(reg.registerDate).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' })
+            : '';
+          return { ok: true, fondoSugerido: Math.round(valor * 100) / 100, origen: 'esperadoAyer', fechaOrigen };
+        }
+      }
+
+      // ── Prioridad 4: sin historial ──
+      return { ok: true, fondoSugerido: 0, origen: 'cero', fechaOrigen: '' };
+    } catch (error) {
+      console.error(`${TAG} ❌ getFondoSugerido:`, error);
+      // Nunca rompe la apertura: si algo falla, sugerimos 0.
+      return { ok: true, fondoSugerido: 0, origen: 'cero', fechaOrigen: '', error: error.message };
     }
   }
 );
