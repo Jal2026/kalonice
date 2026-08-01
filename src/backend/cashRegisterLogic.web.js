@@ -2,9 +2,15 @@
 // BACKEND cashRegisterLogic.web.js — Arqueo de Caja KAMISUITE v1.1.0
 // =====================================================
 // FECHA: 1 Ago 2026
-// VERSION: 1.1.2
+// VERSION: 1.1.3
 //
 // CHANGELOG
+//   v1.1.3 · 1 Ago 2026 · LIMPIEZA — getFondoSugerido deja de leer
+//     SalonConfig.fondoCajaFijo (enfoque descartado; causaba el error
+//     'does not have permissions to read on SalonConfig'). Fondo sugerido
+//     apoyado SOLO en el arrastre del cash de ayer. Quitada la constante
+//     COL_SALON_CONFIG. Sin cambios en el arrastre ni en
+//     setOpeningBalance/abrirCaja/calcularEfectivoEsperado.
 //   v1.1.2 · 1 Ago 2026 · Arrastre automático del cash del día anterior
 //     - calcularEfectivoEsperado: si el registro del día NO tiene un
 //       openingBalance forzado (> 0), arrastra el efectivo contado del
@@ -68,11 +74,10 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CashRegister v1.1.2]';
+const TAG = '[CashRegister v1.1.3]';
 const COL_REGISTER = 'CashRegister';
 const COL_MOVEMENTS = 'CashMovements';
 const COL_PAGOS = 'PaymentReservations';
-const COL_SALON_CONFIG = 'SalonConfig';   // v1.1.0 — solo lectura (fondoCajaFijo)
 
 // ═══════════════════════════════════════════════════════
 // HELPER: Obtener inicio y fin del día como Date
@@ -115,12 +120,12 @@ export const getCajaDia = webMethod(
 // ═══════════════════════════════════════════════════════
 // getFondoSugerido — Fondo inicial SUGERIDO para abrir el día
 //   Solo lectura. No crea ni modifica nada. Cascada de fallback:
-//     1) SalonConfig.fondoCajaFijo > 0        → 'fondoFijo'
-//     2) countedCash del último CashRegister 'closed' anterior
+//     1) countedCash del último CashRegister 'closed' anterior
 //                                              → 'cierreAyer'
-//     3) countedCash|expectedCash del último CashRegister anterior
+//     2) countedCash|expectedCash del último CashRegister anterior
 //        (cualquier status) con valor > 0      → 'esperadoAyer'
-//     4) 0                                      → 'cero'
+//     3) 0                                      → 'cero'
+//   (v1.1.3: eliminada la prioridad 'fondoFijo' de SalonConfig.)
 //   Devuelve { ok, fondoSugerido, origen, fechaOrigen }
 // ═══════════════════════════════════════════════════════
 
@@ -134,20 +139,10 @@ export const getFondoSugerido = webMethod(
       // a este instante cuenta como "día previo".
       const inicioHoy = new Date(`${fechaISO}T00:00:00.000`);
 
-      // ── Prioridad 1: fondo fijo configurado en SalonConfig ──
-      try {
-        const cfgRes = await wixData.query(COL_SALON_CONFIG)
-          .limit(1)
-          .find({ suppressAuth: true });
-        const cfg = cfgRes.items.length > 0 ? cfgRes.items[0] : null;
-        const fijo = Number(cfg?.fondoCajaFijo || 0);
-        if (fijo > 0) {
-          return { ok: true, fondoSugerido: Math.round(fijo * 100) / 100, origen: 'fondoFijo', fechaOrigen: '' };
-        }
-      } catch (e) {
-        // Si SalonConfig no está accesible, seguimos con el arrastre.
-        console.warn(`${TAG} ⚠️ SalonConfig no leído en getFondoSugerido:`, e.message);
-      }
+      // (v1.1.3) Prioridad 'fondo fijo' (SalonConfig.fondoCajaFijo) ELIMINADA:
+      // era del enfoque descartado del arqueo y provocaba el error
+      // 'does not have permissions to read on SalonConfig'. El fondo sugerido
+      // se apoya SOLO en el arrastre del cash de ayer + 'Forzar fondo inicial'.
 
       // ── Prioridad 2: último CashRegister CERRADO anterior a hoy ──
       const cerradoRes = await wixData.query(COL_REGISTER)
