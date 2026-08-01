@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE — Backend: Observatorio Clientes (uso interno)
 // =====================================================
-// VERSION: 1.1.0
+// VERSION: 1.1.1
 // FECHA:   23 de julio de 2026
 // ARCHIVO: backend/observatorioClientesLogic.web.js
 //
@@ -361,7 +361,8 @@ export const getObservatorioGlobal = webMethod(
       let salonConfig = {
         brandName: '', phone: '', address: '',
         widgetSkin: 'niebla', promotionsPageSlug: '', siteUrl: '',
-        primeImage: ''
+        primeImage: '',
+        textVoucherAlert: '', textPrimeAlert: '', textCardAlert: ''
       };
       if (rConfig.status === 'fulfilled') {
         const c = (rConfig.value.items || [])[0] || {};
@@ -371,6 +372,9 @@ export const getObservatorioGlobal = webMethod(
         salonConfig.widgetSkin = c.widgetSkin || 'niebla';
         salonConfig.promotionsPageSlug = c.promotionsPageSlug || '';
         salonConfig.siteUrl = c.siteUrl || '';
+        salonConfig.textVoucherAlert = c.textVoucherAlert || '';
+        salonConfig.textPrimeAlert = c.textPrimeAlert || '';
+        salonConfig.textCardAlert = c.textCardAlert || '';
       } else {
         warnings.push('salonConfig:' + (rConfig.reason?.message || 'error'));
       }
