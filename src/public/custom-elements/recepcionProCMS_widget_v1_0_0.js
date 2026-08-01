@@ -1,9 +1,17 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.73  ·  FONDO INICIAL arrastra ayer + Forzar
+ * VERSION: 1.1.74  ·  Evidencia "Arqueo guardado" bajo el botón
  * FECHA: 1 de agosto de 2026
  * ---------------------------------------------------------------------
+ * v1.1.74 (1 ago 2026) — Evidencia persistente "✓ Arqueo guardado"
+ *   debajo del botón Guardar arqueo. Antes solo había un toast fugaz y
+ *   el botón quedaba activo, sin señal de que el guardado había ido
+ *   bien. Ahora, cuando el registro del día está en status 'saved', se
+ *   pinta bajo el botón "✓ Arqueo guardado · dif X€" en verde. Como se
+ *   basa en el estado del registro, sobrevive al refresco (no es
+ *   fugaz). El botón sigue activo a propósito (permite re-guardar tras
+ *   cambiar el conteo). Cambio aislado a _renderCajaBody.
  * v1.1.73 (1 ago 2026) — FONDO INICIAL arrastra el cash de ayer +
  *   "Forzar fondo inicial". El "Fondo inicial" del arqueo ya no es un
  *   input: es texto que muestra el fondo del día, que el backend
@@ -1249,7 +1257,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.73]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.74]';
 
   // ─── helpers ───
   function esc(s) {
@@ -6160,6 +6168,7 @@ button { font-family: inherit; cursor: pointer; }
       const d = this._cajaData || {};
       if (d.error) { body.innerHTML = `<div class="ks-empty">Error: ${esc(d.error)}</div>`; return; }
       const cerrada = d.registro && d.registro.status === 'closed';
+      const guardado = d.registro && d.registro.status === 'saved';
       const st = this.shadowRoot.getElementById('cajaStatus');
       if (st) { st.textContent = cerrada ? 'Cerrada' : (d.registro?.status === 'saved' ? 'Guardada' : 'Abierta'); st.className = 'ks-modal-status ' + (cerrada ? 'paid' : 'pending'); }
 
@@ -6191,7 +6200,8 @@ button { font-family: inherit; cursor: pointer; }
         <div class="ks-modal-pays" style="margin-top:10px">
           <button class="ks-pay pay-tarjeta" id="cajaGuardar" style="flex:1">Guardar arqueo</button>
           ${this._cajaModo === 'cierre' ? `<button class="ks-pay pay-efectivo" id="cajaCerrar" style="flex:1">🔒 Cerrar día</button>` : ''}
-        </div>`}
+        </div>
+        ${guardado ? `<div style="text-align:center;margin-top:8px;font-size:12px;font-weight:800;color:oklch(0.5 0.14 150)">✓ Arqueo guardado${d.registro && d.registro.difference != null ? ` · dif ${Number(d.registro.difference)}€` : ''}</div>` : ''}`}
         ${movimientos.length ? `<div class="ks-modal-items" style="border-top:1px solid var(--ks-line2);margin-top:8px"><div class="ks-eyebrow" style="padding:6px 0">Movimientos del día</div>${movimientos.map(m => `<div class="ks-modal-item"><span class="ks-item-label">${esc(this._movLabel(m.movementType))} · ${esc(m.description || '')}</span><span class="ks-item-price">${Number(m.amount || 0)}€</span></div>`).join('')}</div>` : ''}
         <div class="ks-modal-foot"><span></span><button class="ks-modal-close" id="cajaClose">Cerrar</button></div>`;
 
