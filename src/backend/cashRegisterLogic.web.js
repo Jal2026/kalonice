@@ -2,9 +2,15 @@
 // BACKEND cashRegisterLogic.web.js — Arqueo de Caja KAMISUITE v1.1.0
 // =====================================================
 // FECHA: 1 Ago 2026
-// VERSION: 1.1.0
+// VERSION: 1.1.1
 //
 // CHANGELOG
+//   v1.1.1 · 1 Ago 2026 · setOpeningBalance — fondo inicial editable
+//     - NEW setOpeningBalance({ fechaISO, openingBalance }): fija el
+//       fondo del día EXISTA o no la caja (crea, o READ-MERGE-UPDATE si
+//       ya existe; rechaza si está cerrada). Vía directa desde el arqueo.
+//       Usa el campo openingBalance ya existente en CashRegister. No
+//       añade campos nuevos. abrirCaja/getFondoSugerido sin cambios.
 //   v1.1.0 · 1 Ago 2026 · Apertura de caja profesional
 //     - NEW getFondoSugerido({ fechaISO }) — devuelve el fondo inicial
 //       SUGERIDO para abrir la caja del día, con cascada de fallback:
@@ -55,7 +61,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CashRegister v1.1.0]';
+const TAG = '[CashRegister v1.1.1]';
 const COL_REGISTER = 'CashRegister';
 const COL_MOVEMENTS = 'CashMovements';
 const COL_PAGOS = 'PaymentReservations';
@@ -231,6 +237,70 @@ export const abrirCaja = webMethod(
       return { ok: true, registro: inserted, yaExistia: false };
     } catch (error) {
       console.error(`${TAG} ❌ abrirCaja:`, error);
+      return { ok: false, error: error.message };
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════
+// setOpeningBalance — Fija el fondo inicial del día EXISTA o no la caja
+//   A diferencia de abrirCaja (que solo CREA y no toca una caja ya
+//   existente), esta función:
+//     - Si el registro del día existe y NO está cerrado → READ-MERGE-
+//       UPDATE: cambia solo openingBalance.
+//     - Si no existe → lo crea con ese fondo (mismos defaults que abrirCaja).
+//     - Si existe pero está cerrado → rechaza (caja cerrada no se edita).
+//   Es la vía directa para poner/cambiar el fondo desde el arqueo.
+// ═══════════════════════════════════════════════════════
+
+export const setOpeningBalance = webMethod(
+  Permissions.SiteMember,
+  async ({ fechaISO, openingBalance }) => {
+    try {
+      const fondo = Number(openingBalance) || 0;
+      console.log(`${TAG} 💰 setOpeningBalance: ${fechaISO} | fondo=${fondo}€`);
+
+      const { start, end } = _dayRange(fechaISO);
+      const res = await wixData.query(COL_REGISTER)
+        .ge('registerDate', start)
+        .le('registerDate', end)
+        .limit(1)
+        .find({ suppressAuth: true });
+
+      if (res.items.length > 0) {
+        const registro = res.items[0];
+        if (registro.status === 'closed') {
+          return { ok: false, error: 'La caja de este día ya está cerrada' };
+        }
+        // READ-MERGE-UPDATE: solo se toca openingBalance.
+        registro.openingBalance = fondo;
+        const updated = await wixData.update(COL_REGISTER, registro, { suppressAuth: true });
+        console.log(`${TAG} ✅ Fondo actualizado: ${updated._id} → ${fondo}€`);
+        return { ok: true, registro: updated, creado: false };
+      }
+
+      // No existe: crear el registro del día con el fondo (defaults de abrirCaja).
+      const nuevo = {
+        registerDate: new Date(`${fechaISO}T08:00:00.000`),
+        openingBalance: fondo,
+        cashPaymentsTotal: 0,
+        manualEntriesTotal: 0,
+        manualExitsTotal: 0,
+        withdrawalsTotal: 0,
+        expectedCash: 0,
+        countedCash: 0,
+        difference: 0,
+        differenceNote: '',
+        status: 'open',
+        closedBy: '',
+        closedAt: null,
+        countBreakdown: ''
+      };
+      const inserted = await wixData.insert(COL_REGISTER, nuevo, { suppressAuth: true });
+      console.log(`${TAG} ✅ Registro creado con fondo: ${inserted._id} → ${fondo}€`);
+      return { ok: true, registro: inserted, creado: true };
+    } catch (error) {
+      console.error(`${TAG} ❌ setOpeningBalance:`, error);
       return { ok: false, error: error.message };
     }
   }
