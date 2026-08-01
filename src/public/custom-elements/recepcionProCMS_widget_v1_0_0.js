@@ -1,9 +1,18 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.72  ·  FONDO INICIAL editable en el arqueo
+ * VERSION: 1.1.73  ·  FONDO INICIAL arrastra ayer + Forzar
  * FECHA: 1 de agosto de 2026
  * ---------------------------------------------------------------------
+ * v1.1.73 (1 ago 2026) — FONDO INICIAL arrastra el cash de ayer +
+ *   "Forzar fondo inicial". El "Fondo inicial" del arqueo ya no es un
+ *   input: es texto que muestra el fondo del día, que el backend
+ *   (v1.1.2) rellena arrastrando el efectivo contado del cierre
+ *   anterior. Debajo, una fila "Forzar fondo inicial" con input + botón
+ *   "Forzar" permite sobrescribir ese valor cuando el arranque real es
+ *   distinto (el placeholder muestra el fondo actual). Con el campo
+ *   vacío no fuerza nada. Mensaje/handler 'caja-set-fondo' sin cambios;
+ *   solo cambia el texto (Forzar) y el toast.
  * v1.1.72 (1 ago 2026) — FONDO INICIAL editable directamente en el
  *   cuadro del arqueo (🏦). El "Fondo inicial" deja de ser texto fijo:
  *   si la caja no está cerrada, es un input con botón "Guardar" que
@@ -1240,7 +1249,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.72]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.73]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2911,13 +2920,13 @@ button { font-family: inherit; cursor: pointer; }
         case 'apertura-estado':
           // Informativo: módulo inactivo, o ya hay caja hoy. Nada que pintar.
           break;
-        // v1.1.72 — fondo inicial guardado desde el arqueo
+        // v1.1.73 — fondo inicial forzado desde el arqueo
         case 'caja-fondo-guardado':
           if (p && p.ok) {
-            this._toast(`Fondo inicial guardado: ${Number((p.registro && p.registro.openingBalance) || 0)}€`);
+            this._toast(`Fondo inicial forzado: ${Number((p.registro && p.registro.openingBalance) || 0)}€`);
             this._cajaRefresh();
           } else {
-            this._toast(`No se pudo guardar el fondo${p && p.error ? ': ' + p.error : ''}`);
+            this._toast(`No se pudo forzar el fondo${p && p.error ? ': ' + p.error : ''}`);
           }
           break;
         default: break;
@@ -6161,13 +6170,8 @@ button { font-family: inherit; cursor: pointer; }
 
       body.innerHTML = `
         <div class="ks-modal-items">
-          <div class="ks-modal-item"><span class="ks-item-label">Fondo inicial</span>${cerrada
-            ? `<span class="ks-item-price">${Number(d.fondoInicial || 0)}€</span>`
-            : `<span class="ks-item-price" style="display:flex;align-items:center;gap:6px">
-                <input id="cajaFondo" type="number" min="0" step="0.01" value="${Number(d.fondoInicial || 0) || ''}" placeholder="0" style="width:72px;text-align:right;border:1px solid var(--ks-line);border-radius:6px;padding:3px 6px;font:inherit;color:var(--ks-ink)">
-                <span>€</span>
-                <button id="cajaFondoSave" style="border:0;background:var(--ks-accent);color:#2a230f;border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer">Guardar</button>
-              </span>`}</div>
+          <div class="ks-modal-item"><span class="ks-item-label">Fondo inicial</span><span class="ks-item-price">${Number(d.fondoInicial || 0)}€</span></div>
+          ${cerrada ? '' : `<div class="ks-disc-row" style="margin:2px 0 6px"><span class="ks-disc-lbl" style="font-size:11px;color:var(--ks-ink2)">Forzar fondo inicial</span><div class="ks-disc-input" style="display:flex;align-items:center;gap:6px"><input id="cajaFondo" type="number" min="0" step="0.01" value="" placeholder="${Number(d.fondoInicial || 0)}" style="width:72px;text-align:right;border:1px solid var(--ks-line);border-radius:6px;padding:3px 6px;font:inherit;color:var(--ks-ink)"><span>€</span><button id="cajaFondoSave" style="border:0;background:var(--ks-accent);color:#2a230f;border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer">Forzar</button></div></div>`}
           <div class="ks-modal-item"><span class="ks-item-label">Cobros en efectivo</span><span class="ks-item-price">${Number(d.cobrosEfectivo || 0)}€</span></div>
           ${d.entradas ? `<div class="ks-modal-item"><span class="ks-item-label">+ Entradas manuales</span><span class="ks-item-price">${d.entradas}€</span></div>` : ''}
           ${d.salidas ? `<div class="ks-modal-item is-compl"><span class="ks-item-label">− Salidas</span><span class="ks-item-price">${d.salidas}€</span></div>` : ''}
@@ -6204,9 +6208,12 @@ button { font-family: inherit; cursor: pointer; }
         body.querySelector('#movEntry')?.addEventListener('click', () => this._cajaMovimiento('entry'));
         body.querySelector('#movExit')?.addEventListener('click', () => this._cajaMovimiento('exit'));
         body.querySelector('#movWithdraw')?.addEventListener('click', () => this._cajaMovimiento('withdrawal'));
-        // v1.1.72 — Fondo inicial editable: guardar openingBalance del día.
+        // v1.1.73 — Forzar fondo inicial: sobrescribe openingBalance del día.
+        // Con el campo vacío no hace nada (evita forzar 0 por accidente).
         body.querySelector('#cajaFondoSave')?.addEventListener('click', () => {
-          const v = parseFloat(body.querySelector('#cajaFondo')?.value) || 0;
+          const raw = body.querySelector('#cajaFondo')?.value;
+          if (raw === '' || raw == null) { this._toast('Escribe un importe para forzar el fondo'); return; }
+          const v = parseFloat(raw) || 0;
           this._sendToPage('caja-set-fondo', { fechaISO: this._fecha, openingBalance: v });
         });
         body.querySelector('#cajaGuardar')?.addEventListener('click', () => {
