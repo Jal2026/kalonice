@@ -1,9 +1,15 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.32
+// VERSION: 1.0.33
 // FECHA: 1 de agosto de 2026
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
+//
+// v1.0.33: + Fondo inicial EDITABLE desde el arqueo. Import
+//          setOpeningBalance de cashRegisterLogic v1.1.1. Handler
+//          handleCajaSetFondo (mensaje 'caja-set-fondo' → responde
+//          'caja-fondo-guardado'). Fija openingBalance del día exista o
+//          no la caja. Sin campos nuevos en el CMS. + 1 case.
 //
 // v1.0.32: + APERTURA DE CAJA (fondo inicial del día). Imports abrirCaja
 //          y getFondoSugerido de cashRegisterLogic v1.1.0. Nuevos handlers:
@@ -419,7 +425,8 @@ import {
   registrarMovimiento,
   getCajaDia,
   getFondoSugerido,
-  abrirCaja
+  abrirCaja,
+  setOpeningBalance
 } from 'backend/cashRegisterLogic.web';
 
 // v1.0.5 — Cierre del día (panel inferior). Backends existentes, NO modificados.
@@ -460,7 +467,7 @@ import {
 // existente en salonConfigLogic.web.js (Permissions.SiteMember). NO se toca.
 import { getSalonConfig } from 'backend/salonConfigLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.32]';
+const TAG = '[RecepcionProCMS v1.0.33]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -1024,6 +1031,22 @@ async function handleAbrirCaja(msg) {
   }
 }
 
+// v1.0.33 — Fija el fondo inicial del día desde el arqueo (exista o no la
+// caja). Usa setOpeningBalance (openingBalance de CashRegister). Sin campos
+// nuevos en el CMS.
+async function handleCajaSetFondo(msg) {
+  try {
+    const result = await setOpeningBalance({
+      fechaISO: msg.fechaISO,
+      openingBalance: Number(msg.openingBalance || 0)
+    });
+    sendResponse('caja-fondo-guardado', result);
+  } catch (e) {
+    console.error(`${TAG} ❌ caja-set-fondo:`, e);
+    sendResponse('caja-fondo-guardado', { ok: false, error: e.message });
+  }
+}
+
 // =====================================================
 // CIERRE DEL DÍA (panel inferior consultable)  v1.0.5
 //   Llama en paralelo a:
@@ -1579,6 +1602,8 @@ $w.onReady(function () {
         // v1.0.32 — apertura de caja (fondo inicial del día)
         case 'check-apertura-caja': handleCheckApertura(msg); break;
         case 'caja-abrir':          handleAbrirCaja(msg); break;
+        // v1.0.33 — fijar fondo inicial editable desde el arqueo
+        case 'caja-set-fondo':      handleCajaSetFondo(msg); break;
         case 'cierre-dia':       handleCierreDia(msg); break;
         case 'get-settings':     handleGetSettings(); break;
         case 'save-settings':    handleSaveSettings(msg.settings); break;
