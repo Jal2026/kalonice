@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KAMISUITE — PaymentReservations</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ═══════════════════════════════════════════════════
+       KAMISUITE — PaymentReservations Editor v2.0.0
+       v2.0.0: SIMPLIFICACIÓN CRUD PURO. Eliminado todo el
+               diagnóstico CRM (botones Contact IDs, resolución
+               de CIDs reales, exportación JSON, columnas CID,
+               filtro Estado CID, bloque CID del modal). Fuente
+               única: PaymentReservations. Diseño intacto.
+       v1.3.0: botón borrar registro + botón refrescar lista
+       v1.2.1: backend con matching estricto (sin partial naive)
+       v1.2.0: dos columnas Contact ID (CMS / CRM real)
+       ═══════════════════════════════════════════════════ */
+    :root {
+      --bg: #0f1117; --surface: #181b23; --surface2: #1e222c; --surface3: #252a36;
+      --border: rgba(255,255,255,.08); --border-hover: rgba(255,255,255,.18);
+      --text: #e8e9ed; --text-secondary: rgba(255,255,255,.65); --muted: rgba(255,255,255,.40);
+      --accent: #c9a44a; --accent-dim: rgba(201,164,74,.15);
+      --green: #36c06a; --green-dim: rgba(54,192,106,.12);
+      --red: #e85454; --red-dim: rgba(232,84,84,.12);
+      --orange: #e89e54; --orange-dim: rgba(232,158,84,.12);
+      --blue: #4a9ec9; --blue-dim: rgba(74,158,201,.12);
+      --purple: #9b59b6; --purple-dim: rgba(155,89,182,.12);
+      --radius: 10px; --radius-sm: 6px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "Bai Jamjuree", sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 12px 14px; }
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .header-brand { font-size: 12px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); }
+    .header-version { font-size: 10px; color: var(--muted); letter-spacing: .5px; }
+
+    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    .search-box { flex: 1; min-width: 180px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: inherit; font-size: 12px; padding: 8px 10px 8px 32px; outline: none; transition: border-color .2s; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='rgba(255,255,255,.35)' stroke-width='2'%3E%3Ccircle cx='6' cy='6' r='4.5'/%3E%3Cline x1='9.5' y1='9.5' x2='13' y2='13'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: 10px center; }
+    .search-box:focus { border-color: var(--accent); }
+    .search-box::placeholder { color: var(--muted); }
+    .filter-select { background: var(--surface2); border: 1px solid var(--border); color: var(--text-secondary); border-radius: var(--radius-sm); padding: 7px 28px 7px 10px; font-family: inherit; font-weight: 500; font-size: 11px; cursor: pointer; outline: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,.3)'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; transition: border-color .2s; }
+    .filter-select:focus { border-color: var(--accent); }
+    .filter-date { background: var(--surface2); border: 1px solid var(--border); color: var(--text-secondary); border-radius: var(--radius-sm); padding: 7px 10px; font-family: inherit; font-size: 11px; outline: none; transition: border-color .2s; color-scheme: dark; }
+    .filter-date:focus { border-color: var(--accent); }
+    .counter { font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .3px; white-space: nowrap; margin-left: auto; }
+    .counter strong { color: var(--accent); }
+    .btn-clear-filters { background: var(--surface3); border: 1px solid var(--border); color: var(--text-secondary); border-radius: var(--radius-sm); padding: 7px 12px; font-family: inherit; font-weight: 600; font-size: 11px; cursor: pointer; transition: all .2s; }
+    .btn-clear-filters:hover { background: var(--red-dim); border-color: var(--red); color: var(--red); }
+    .btn-refresh { background: var(--surface3); border: 1px solid var(--border); color: var(--text-secondary); border-radius: var(--radius-sm); padding: 7px 12px; font-family: inherit; font-weight: 600; font-size: 11px; cursor: pointer; transition: all .2s; display: inline-flex; align-items: center; gap: 6px; }
+    .btn-refresh:hover { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+    .btn-refresh:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-refresh.refreshing svg { animation: spin 1s linear infinite; }
+
+    .summary-bar { display: flex; gap: 16px; margin-bottom: 10px; padding: 10px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+    .summary-item { display: flex; flex-direction: column; gap: 2px; }
+    .summary-label { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+    .summary-value { font-size: 16px; font-weight: 700; color: var(--accent); }
+    .summary-value.total { color: var(--green); }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    thead th { background: var(--surface2); color: var(--muted); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 2; cursor: pointer; user-select: none; transition: color .15s; white-space: nowrap; }
+    thead th:hover { color: var(--accent); }
+    thead th.sorted { color: var(--accent); }
+    thead th .sort-arrow { font-size: 8px; margin-left: 4px; opacity: .4; }
+    thead th.sorted .sort-arrow { opacity: 1; }
+    tbody tr { border-bottom: 1px solid var(--border); transition: background .12s; cursor: pointer; }
+    tbody tr:hover { background: var(--surface2); }
+    tbody tr:last-child { border-bottom: none; }
+    /* animación de fila recién borrada (fade-out antes de desaparecer) */
+    tbody tr.row-deleting { opacity: .35; background: rgba(232, 84, 84, .15); pointer-events: none; }
+    td { padding: 9px 12px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+    td.col-nombre { color: var(--text); font-weight: 600; }
+    td.col-importe { color: var(--accent); font-weight: 700; text-align: right; }
+    td.col-descripcion { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 250px; color: var(--text-secondary); }
+
+    .badge-pago { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; padding: 2px 7px; border-radius: 3px; }
+    .badge-tarjeta { background: var(--blue-dim); color: var(--blue); }
+    .badge-efectivo { background: var(--green-dim); color: var(--green); }
+    .badge-mixto { background: var(--purple-dim); color: var(--purple); }
+    .badge-bizum { background: var(--accent-dim); color: var(--accent); }
+    .badge-otro { background: var(--surface3); color: var(--text-secondary); }
+
+    .pagination { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 10px; }
+    .page-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--text-secondary); border-radius: var(--radius-sm); padding: 6px 11px; font-family: inherit; font-weight: 600; font-size: 11px; cursor: pointer; transition: all .15s; }
+    .page-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .page-btn.active { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+    .page-btn:disabled { opacity: .3; cursor: not-allowed; }
+    .page-info { font-size: 11px; color: var(--muted); margin: 0 8px; }
+
+    .loading { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 60px 20px; color: var(--muted); font-size: 13px; }
+    .spinner { width: 28px; height: 28px; border: 2.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-msg { background: var(--red-dim); border: 1px solid rgba(232,84,84,.25); border-radius: var(--radius); padding: 16px 20px; color: var(--red); font-size: 12px; font-weight: 500; }
+    .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 13px; }
+
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.7); z-index: 1000; align-items: center; justify-content: center; }
+    .modal-overlay.open { display: flex; }
+    .modal { background: var(--surface); border: 1px solid var(--border-hover); border-radius: var(--radius); width: 90%; max-width: 520px; max-height: 90vh; overflow-y: auto; box-shadow: 0 8px 32px rgba(0,0,0,.5); }
+    .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+    .modal-title { font-size: 14px; font-weight: 700; color: var(--accent); }
+    .modal-close { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: all .15s; }
+    .modal-close:hover { color: var(--text); background: var(--surface3); }
+    .modal-body { padding: 20px; }
+    .form-group { margin-bottom: 14px; }
+    .form-label { display: block; font-size: 10px; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; text-transform: uppercase; letter-spacing: .5px; }
+    .form-label .edit-icon { color: var(--accent); font-size: 9px; margin-left: 4px; }
+    .form-input, .form-select { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: inherit; font-size: 13px; padding: 10px 12px; outline: none; transition: border-color .2s; }
+    .form-input:focus, .form-select:focus { border-color: var(--accent); }
+    .form-input::placeholder { color: var(--muted); }
+    .form-select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,.3)'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .readonly-section { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+    .readonly-title { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 12px; }
+    .readonly-field { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.04); }
+    .readonly-field:last-child { border-bottom: none; }
+    .readonly-key { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; }
+    .readonly-val { font-size: 11px; color: var(--text-secondary); font-weight: 500; max-width: 280px; text-align: right; word-break: break-all; }
+
+    .modal-footer { display: flex; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--border); align-items: center; }
+    .btn { padding: 10px 16px; border-radius: var(--radius-sm); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s; border: none; }
+    .btn-cancel { background: var(--surface3); color: var(--text-secondary); flex: 1; }
+    .btn-cancel:hover { background: var(--surface2); color: var(--text); }
+    .btn-save { background: var(--accent); color: var(--bg); flex: 1; }
+    .btn-save:hover { opacity: .9; }
+    .btn-save:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-delete { background: transparent; color: var(--red); border: 1px solid rgba(232,84,84,.4); padding: 10px 14px; display: inline-flex; align-items: center; gap: 6px; }
+    .btn-delete:hover { background: var(--red-dim); border-color: var(--red); }
+    .btn-delete:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-delete.confirming { background: var(--red); color: var(--bg); border-color: var(--red); animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .75; } }
+
+    .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(60px); background: var(--surface3); border: 1px solid var(--border-hover); color: var(--text); font-family: inherit; font-size: 12px; font-weight: 600; padding: 10px 20px; border-radius: var(--radius); opacity: 0; transition: all .3s ease; pointer-events: none; z-index: 2000; }
+    .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+    .toast.success { border-color: var(--green); color: var(--green); }
+    .toast.error { border-color: var(--red); color: var(--red); }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="header-brand">KAMISUITE · PaymentReservations</span>
+    <span class="header-version">v2.0.0</span>
+  </div>
+
+  <div class="toolbar" id="toolbar" style="display:none;">
+    <input type="text" class="search-box" id="searchBox" placeholder="Buscar cliente o descripción...">
+    <select class="filter-select" id="filterTipoPago">
+      <option value="">Tipo de pago</option>
+      <option value="Tarjeta">Tarjeta</option>
+      <option value="Efectivo">Efectivo</option>
+      <option value="Bizum">Bizum</option>
+      <option value="Mixto">Mixto</option>
+    </select>
+    <select class="filter-select" id="filterStaff"><option value="">Staff</option></select>
+    <input type="date" class="filter-date" id="filterDesde" title="Desde">
+    <input type="date" class="filter-date" id="filterHasta" title="Hasta">
+    <button class="btn-clear-filters" id="btnClear">✕ Limpiar</button>
+    <button class="btn-refresh" id="btnRefresh" title="Recargar lista desde el CMS">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="14,3 14,7 10,7"/>
+        <path d="M2 12a6 6 0 0 0 11 2"/>
+        <polyline points="2,13 2,9 6,9"/>
+        <path d="M14 4a6 6 0 0 0-11-2"/>
+      </svg>
+      Refrescar
+    </button>
+    <span class="counter" id="counter"></span>
+  </div>
+
+  <div class="summary-bar" id="summaryBar" style="display:none;">
+    <div class="summary-item"><span class="summary-label">Registros</span><span class="summary-value" id="sumRegistros">0</span></div>
+    <div class="summary-item"><span class="summary-label">Importe total</span><span class="summary-value total" id="sumImporte">0 €</span></div>
+  </div>
+
+  <div id="content"><div class="loading"><div class="spinner"></div><span>Cargando registros…</span></div></div>
+  <div class="pagination" id="pagination" style="display:none;"></div>
+
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title">Editar Registro</span>
+        <button class="modal-close" id="btnModalClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="editId">
+        <div class="form-group">
+          <label class="form-label">Nombre cliente <span class="edit-icon">✎</span></label>
+          <input type="text" class="form-input" id="editNombre" placeholder="Nombre del cliente">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Importe total (€) <span class="edit-icon">✎</span></label>
+            <input type="number" class="form-input" id="editImporte" min="0" step="0.01" placeholder="0">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Tipo de pago <span class="edit-icon">✎</span></label>
+            <select class="form-select" id="editTipoPago">
+              <option value="Tarjeta">Tarjeta</option>
+              <option value="Efectivo">Efectivo</option>
+              <option value="Bizum">Bizum</option>
+              <option value="Mixto">Mixto</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Descripción <span class="edit-icon">✎</span></label>
+          <input type="text" class="form-input" id="editDescripcion" placeholder="Servicios realizados">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Fecha de pago <span class="edit-icon">✎</span></label>
+          <input type="datetime-local" class="form-input" id="editFechaPago">
+        </div>
+        <div class="readonly-section">
+          <div class="readonly-title">Datos de referencia (solo lectura)</div>
+          <div class="readonly-field"><span class="readonly-key">Staff</span><span class="readonly-val" id="roStaff">—</span></div>
+          <div class="readonly-field"><span class="readonly-key">Fecha reserva</span><span class="readonly-val" id="roFechaReserva">—</span></div>
+          <div class="readonly-field"><span class="readonly-key">Desglose método</span><span class="readonly-val" id="roDesglose">—</span></div>
+          <div class="readonly-field"><span class="readonly-key">Booking ID</span><span class="readonly-val" id="roBookingId">—</span></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-delete" id="btnDelete" title="Eliminar este registro del CMS">
+          🗑️ Borrar
+        </button>
+        <button class="btn btn-cancel" id="btnCancel">Cancelar</button>
+        <button class="btn btn-save" id="btnSave">Guardar cambios</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+  let allItems = [];
+  let filteredItems = [];
+  let currentPage = 1;
+  const PAGE_SIZE = 50;
+  let sortField = 'fechaPago';
+  let sortDir = 'desc';
+
+  // estado de confirmación de borrado (1 click warning, 2 click delete)
+  let deleteConfirmTimer = null;
+
+  const el = {
+    toolbar: document.getElementById('toolbar'),
+    summaryBar: document.getElementById('summaryBar'),
+    content: document.getElementById('content'),
+    pagination: document.getElementById('pagination'),
+    search: document.getElementById('searchBox'),
+    filterTipo: document.getElementById('filterTipoPago'),
+    filterStaff: document.getElementById('filterStaff'),
+    filterDesde: document.getElementById('filterDesde'),
+    filterHasta: document.getElementById('filterHasta'),
+    btnClear: document.getElementById('btnClear'),
+    btnRefresh: document.getElementById('btnRefresh'),
+    counter: document.getElementById('counter'),
+    toast: document.getElementById('toast'),
+    modal: document.getElementById('modalOverlay'),
+    btnClose: document.getElementById('btnModalClose'),
+    btnCancel: document.getElementById('btnCancel'),
+    btnSave: document.getElementById('btnSave'),
+    btnDelete: document.getElementById('btnDelete'),
+    editId: document.getElementById('editId'),
+    editNombre: document.getElementById('editNombre'),
+    editImporte: document.getElementById('editImporte'),
+    editTipoPago: document.getElementById('editTipoPago'),
+    editDescripcion: document.getElementById('editDescripcion'),
+    editFechaPago: document.getElementById('editFechaPago'),
+    roStaff: document.getElementById('roStaff'),
+    roFechaReserva: document.getElementById('roFechaReserva'),
+    roDesglose: document.getElementById('roDesglose'),
+    roBookingId: document.getElementById('roBookingId')
+  };
+
+  function render(data) {
+    allItems = (data.items || []).map(item => {
+      if (item.fechaPago && !(item.fechaPago instanceof Date)) item.fechaPago = new Date(item.fechaPago);
+      if (item.fechaReserva && !(item.fechaReserva instanceof Date)) item.fechaReserva = new Date(item.fechaReserva);
+      return item;
+    });
+    const staffSet = new Set();
+    allItems.forEach(item => { if (item.staff) staffSet.add(item.staff); });
+    const staffList = [...staffSet].sort();
+    el.filterStaff.innerHTML = '<option value="">Staff</option>';
+    staffList.forEach(s => { el.filterStaff.innerHTML += `<option value="${esc(s)}">${esc(formatStaffName(s))}</option>`; });
+    el.toolbar.style.display = 'flex';
+    el.summaryBar.style.display = 'flex';
+    if (!data.isRefresh) currentPage = 1;
+    applyFilters();
+  }
+
+  function applyFilters() {
+    const q = (el.search.value || '').toLowerCase().trim();
+    const tipoF = el.filterTipo.value;
+    const staffF = el.filterStaff.value;
+    const desdeF = el.filterDesde.value ? new Date(el.filterDesde.value + 'T00:00:00') : null;
+    const hastaF = el.filterHasta.value ? new Date(el.filterHasta.value + 'T23:59:59') : null;
+
+    filteredItems = allItems.filter(item => {
+      if (q) {
+        const nombre = (item.nombreCliente || '').toLowerCase();
+        const desc = (item.descripcion || '').toLowerCase();
+        if (!nombre.includes(q) && !desc.includes(q)) return false;
+      }
+      if (tipoF && item.tipoPago !== tipoF) return false;
+      if (staffF && item.staff !== staffF) return false;
+      if (desdeF && item.fechaPago && item.fechaPago < desdeF) return false;
+      if (hastaF && item.fechaPago && item.fechaPago > hastaF) return false;
+      return true;
+    });
+
+    filteredItems.sort((a, b) => {
+      let va = a[sortField]; let vb = b[sortField];
+      if (va instanceof Date && vb instanceof Date) return sortDir === 'asc' ? va - vb : vb - va;
+      if (typeof va === 'number' && typeof vb === 'number') return sortDir === 'asc' ? va - vb : vb - va;
+      va = String(va || '').toLowerCase(); vb = String(vb || '').toLowerCase();
+      const cmp = va.localeCompare(vb);
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+
+    const sumImporte = filteredItems.reduce((acc, item) => acc + (item.importeTotal || 0), 0);
+    document.getElementById('sumRegistros').textContent = filteredItems.length;
+    document.getElementById('sumImporte').textContent = sumImporte.toFixed(2) + ' €';
+    el.counter.innerHTML = `Mostrando <strong>${filteredItems.length}</strong> de ${allItems.length}`;
+    const totalPages = Math.ceil(filteredItems.length / PAGE_SIZE) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    renderTable();
+    renderPagination();
+  }
+
+  function renderTable() {
+    if (filteredItems.length === 0) {
+      el.content.innerHTML = '<div class="empty-state">Sin resultados para los filtros actuales</div>';
+      el.pagination.style.display = 'none';
+      return;
+    }
+    const start = (currentPage - 1) * PAGE_SIZE;
+    const pageItems = filteredItems.slice(start, start + PAGE_SIZE);
+    const cols = [
+      { key: 'fechaPago', label: 'Fecha pago', width: '110px' },
+      { key: 'nombreCliente', label: 'Cliente', width: '' },
+      { key: 'descripcion', label: 'Descripción', width: '' },
+      { key: 'importeTotal', label: 'Importe', width: '90px' },
+      { key: 'tipoPago', label: 'Pago', width: '80px' },
+      { key: 'staff', label: 'Staff', width: '90px' }
+    ];
+    let html = '<div class="table-wrap"><table>';
+    html += '<thead><tr>';
+    cols.forEach(col => {
+      const isSorted = sortField === col.key;
+      const arrow = isSorted ? (sortDir === 'asc' ? '▲' : '▼') : '▼';
+      const cls = isSorted ? ' class="sorted"' : '';
+      const w = col.width ? ` style="width:${col.width}"` : '';
+      html += `<th${cls}${w} data-sort="${col.key}">${col.label}<span class="sort-arrow">${arrow}</span></th>`;
+    });
+    html += '</tr></thead><tbody>';
+    pageItems.forEach(item => {
+      const fechaPagoStr = formatFecha(item.fechaPago);
+      const nombre = esc(item.nombreCliente || '—');
+      const desc = esc(item.descripcion || '—');
+      const importe = item.importeTotal != null ? Number(item.importeTotal).toFixed(2) + ' €' : '—';
+      const tipoPago = item.tipoPago || '—';
+      const badgeCls = getBadgePagoClass(tipoPago);
+      const staffDisplay = esc(formatStaffName(item.staff));
+      html += `<tr data-id="${item._id}">
+        <td>${fechaPagoStr}</td>
+        <td class="col-nombre">${nombre}</td>
+        <td class="col-descripcion" title="${desc}">${desc}</td>
+        <td class="col-importe">${importe}</td>
+        <td><span class="badge-pago ${badgeCls}">${esc(tipoPago)}</span></td>
+        <td>${staffDisplay}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+    el.content.innerHTML = html;
+    el.content.querySelectorAll('tbody tr').forEach(tr => { tr.addEventListener('click', () => openModal(tr.dataset.id)); });
+    el.content.querySelectorAll('thead th[data-sort]').forEach(th => {
+      th.addEventListener('click', () => {
+        const field = th.dataset.sort;
+        if (sortField === field) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        else { sortField = field; sortDir = field === 'fechaPago' || field === 'importeTotal' ? 'desc' : 'asc'; }
+        applyFilters();
+      });
+    });
+  }
+
+  function renderPagination() {
+    const totalPages = Math.ceil(filteredItems.length / PAGE_SIZE) || 1;
+    if (totalPages <= 1) { el.pagination.style.display = 'none'; return; }
+    el.pagination.style.display = 'flex';
+    let html = `<button class="page-btn" ${currentPage <= 1 ? 'disabled' : ''} data-page="${currentPage - 1}">‹</button>`;
+    const range = getPageRange(currentPage, totalPages);
+    range.forEach(p => {
+      if (p === '...') html += `<span class="page-info">…</span>`;
+      else html += `<button class="page-btn${p === currentPage ? ' active' : ''}" data-page="${p}">${p}</button>`;
+    });
+    html += `<button class="page-btn" ${currentPage >= totalPages ? 'disabled' : ''} data-page="${currentPage + 1}">›</button>`;
+    el.pagination.innerHTML = html;
+    el.pagination.querySelectorAll('.page-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = parseInt(btn.dataset.page);
+        if (!isNaN(p) && p >= 1 && p <= totalPages) {
+          currentPage = p; renderTable(); renderPagination();
+          el.content.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+    });
+  }
+
+  function getPageRange(current, total) {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+    const pages = [1];
+    if (current > 3) pages.push('...');
+    for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) pages.push(i);
+    if (current < total - 2) pages.push('...');
+    pages.push(total);
+    return pages;
+  }
+
+  function openModal(id) {
+    const item = allItems.find(x => x._id === id);
+    if (!item) return;
+    // resetear estado del botón borrar
+    resetDeleteButton();
+
+    el.editId.value = item._id;
+    el.editNombre.value = item.nombreCliente || '';
+    el.editImporte.value = item.importeTotal != null ? item.importeTotal : '';
+    el.editTipoPago.value = item.tipoPago || 'Tarjeta';
+    el.editDescripcion.value = item.descripcion || '';
+    if (item.fechaPago instanceof Date) el.editFechaPago.value = toDatetimeLocal(item.fechaPago);
+    else el.editFechaPago.value = '';
+    el.roStaff.textContent = formatStaffName(item.staff) || '—';
+    el.roFechaReserva.textContent = item.fechaReserva ? formatFechaLarga(item.fechaReserva) : '—';
+    el.roDesglose.textContent = item.desglosemetodopago || '—';
+    el.roBookingId.textContent = item.bookingId || '—';
+    el.btnSave.disabled = false;
+    el.btnSave.textContent = 'Guardar cambios';
+    el.btnDelete.disabled = false;
+    el.modal.classList.add('open');
+  }
+
+  function closeModal() {
+    el.modal.classList.remove('open');
+    resetDeleteButton();
+  }
+
+  function saveChanges() {
+    el.btnSave.disabled = true;
+    el.btnSave.textContent = 'Guardando...';
+    el.btnDelete.disabled = true;
+    const _id = el.editId.value;
+    const campos = {
+      nombreCliente: el.editNombre.value.trim(),
+      importeTotal: parseFloat(el.editImporte.value) || 0,
+      tipoPago: el.editTipoPago.value,
+      descripcion: el.editDescripcion.value.trim()
+    };
+    if (el.editFechaPago.value) campos.fechaPago = new Date(el.editFechaPago.value);
+    parent.postMessage({ type: 'save', payload: { _id, campos } }, '*');
+  }
+
+  // borrar registro con confirmación de 2 clicks
+  function handleDeleteClick() {
+    if (el.btnDelete.classList.contains('confirming')) {
+      // Segundo click → ejecutar borrado
+      doDelete();
+    } else {
+      // Primer click → modo confirmación
+      el.btnDelete.classList.add('confirming');
+      el.btnDelete.innerHTML = '⚠ ¿Confirmar borrado?';
+      // Auto-reset tras 4s sin confirmar
+      if (deleteConfirmTimer) clearTimeout(deleteConfirmTimer);
+      deleteConfirmTimer = setTimeout(() => { resetDeleteButton(); }, 4000);
+    }
+  }
+
+  function resetDeleteButton() {
+    if (deleteConfirmTimer) {
+      clearTimeout(deleteConfirmTimer);
+      deleteConfirmTimer = null;
+    }
+    el.btnDelete.classList.remove('confirming');
+    el.btnDelete.innerHTML = '🗑️ Borrar';
+    el.btnDelete.disabled = false;
+  }
+
+  function doDelete() {
+    const _id = el.editId.value;
+    if (!_id) return;
+    el.btnDelete.disabled = true;
+    el.btnSave.disabled = true;
+    el.btnDelete.innerHTML = 'Borrando...';
+    // Marcar la fila visualmente como en proceso de borrado
+    const row = el.content.querySelector(`tr[data-id="${_id}"]`);
+    if (row) row.classList.add('row-deleting');
+    parent.postMessage({ type: 'delete', payload: { _id } }, '*');
+  }
+
+  function refreshList() {
+    el.btnRefresh.disabled = true;
+    el.btnRefresh.classList.add('refreshing');
+    parent.postMessage({ type: 'refresh' }, '*');
+  }
+
+  function formatFecha(d) {
+    if (!d || !(d instanceof Date)) return '—';
+    return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  }
+  function formatFechaLarga(d) {
+    if (!d || !(d instanceof Date)) return '—';
+    return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+  }
+  function toDatetimeLocal(d) {
+    if (!d || !(d instanceof Date)) return '';
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  }
+  function formatStaffName(raw) { if (!raw) return '—'; return raw.replace(/^[A-Z]_/, ''); }
+  function getBadgePagoClass(tipo) {
+    const t = (tipo || '').toLowerCase();
+    if (t === 'tarjeta') return 'badge-tarjeta';
+    if (t === 'efectivo') return 'badge-efectivo';
+    if (t === 'mixto') return 'badge-mixto';
+    if (t === 'bizum') return 'badge-bizum';
+    return 'badge-otro';
+  }
+  function showToast(msg, type) {
+    el.toast.textContent = msg;
+    el.toast.className = 'toast show' + (type ? ' ' + type : '');
+    setTimeout(() => el.toast.classList.remove('show'), 3500);
+  }
+  function esc(str) { if (!str) return ''; const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+
+  el.search.addEventListener('input', () => { currentPage = 1; applyFilters(); });
+  el.filterTipo.addEventListener('change', () => { currentPage = 1; applyFilters(); });
+  el.filterStaff.addEventListener('change', () => { currentPage = 1; applyFilters(); });
+  el.filterDesde.addEventListener('change', () => { currentPage = 1; applyFilters(); });
+  el.filterHasta.addEventListener('change', () => { currentPage = 1; applyFilters(); });
+  el.btnClear.addEventListener('click', () => {
+    el.search.value = ''; el.filterTipo.value = ''; el.filterStaff.value = '';
+    el.filterDesde.value = ''; el.filterHasta.value = '';
+    currentPage = 1; applyFilters();
+  });
+  el.btnRefresh.addEventListener('click', refreshList);
+  el.btnClose.addEventListener('click', closeModal);
+  el.btnCancel.addEventListener('click', closeModal);
+  el.btnSave.addEventListener('click', saveChanges);
+  el.btnDelete.addEventListener('click', handleDeleteClick);
+  el.modal.addEventListener('click', (e) => { if (e.target === el.modal) closeModal(); });
+
+  window.addEventListener('message', (event) => {
+    const msg = event.data;
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'data') {
+      render(msg.payload);
+      // si era refresh, reactivar el botón
+      if (msg.payload && msg.payload.isRefresh) {
+        el.btnRefresh.disabled = false;
+        el.btnRefresh.classList.remove('refreshing');
+        showToast('✓ Lista actualizada', 'success');
+      }
+    }
+    if (msg.type === 'refreshError') {
+      el.btnRefresh.disabled = false;
+      el.btnRefresh.classList.remove('refreshing');
+      showToast('✕ Error refrescando: ' + (msg.message || 'Desconocido'), 'error');
+    }
+    if (msg.type === 'saved') {
+      el.btnSave.disabled = false;
+      el.btnSave.textContent = 'Guardar cambios';
+      el.btnDelete.disabled = false;
+      showToast('✓ Registro actualizado', 'success');
+      closeModal();
+      if (msg.payload && msg.payload.item) {
+        const updated = msg.payload.item;
+        const idx = allItems.findIndex(x => x._id === updated._id);
+        if (idx >= 0) {
+          if (updated.fechaPago && !(updated.fechaPago instanceof Date)) updated.fechaPago = new Date(updated.fechaPago);
+          if (updated.fechaReserva && !(updated.fechaReserva instanceof Date)) updated.fechaReserva = new Date(updated.fechaReserva);
+          allItems[idx] = updated;
+        }
+        applyFilters();
+      }
+    }
+    if (msg.type === 'saveError') {
+      el.btnSave.disabled = false;
+      el.btnSave.textContent = 'Guardar cambios';
+      el.btnDelete.disabled = false;
+      showToast('✕ Error: ' + (msg.message || 'No se pudo guardar'), 'error');
+    }
+    // borrado confirmado por backend
+    if (msg.type === 'deleted') {
+      const deletedId = msg.payload && msg.payload.deletedId;
+      showToast('✓ Registro eliminado', 'success');
+      closeModal();
+      if (deletedId) {
+        const idx = allItems.findIndex(x => x._id === deletedId);
+        if (idx >= 0) {
+          allItems.splice(idx, 1);
+        }
+        applyFilters();
+      }
+    }
+    if (msg.type === 'deleteError') {
+      // Quitar fade-out de la fila si existía
+      const id = el.editId.value;
+      if (id) {
+        const row = el.content.querySelector(`tr[data-id="${id}"]`);
+        if (row) row.classList.remove('row-deleting');
+      }
+      el.btnDelete.disabled = false;
+      el.btnSave.disabled = false;
+      resetDeleteButton();
+      showToast('✕ Error eliminando: ' + (msg.message || 'No se pudo borrar'), 'error');
+    }
+    if (msg.type === 'error') el.content.innerHTML = `<div class="error-msg">❌ Error: ${esc(msg.message || 'Desconocido')}</div>`;
+  });
+
+  parent.postMessage({ type: 'ready' }, '*');
+</script>
+</body>
+</html>
