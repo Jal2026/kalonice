@@ -1,8 +1,11 @@
 /* ═══════════════════════════════════════════════════════════════
-   salonConfigLogic.web.js  v1.0.8
+   salonConfigLogic.web.js  v1.0.9
    KAMISUITE — Backend de configuración de salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.9 · 1 Ago 2026 · + textVoucherAlert, textPrimeAlert, textCardAlert
+     (Texto) a ALL_FIELDS: mensajes de aviso de caducidad de bonos, PRIME
+     y tarjetas promo. Crear los 3 campos Texto en el CMS SalonConfig.
    v1.0.8 · 1 Ago 2026 · LIMPIEZA — revertido v1.0.7. Quitados
      arqueoActivo (de ALL_FIELDS y BOOLEAN_FIELDS) y fondoCajaFijo (de
      ALL_FIELDS y NUMBER_FIELDS): eran campos del enfoque descartado del
@@ -111,7 +114,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[SalonConfig v1.0.8]';
+const TAG = '[SalonConfig v1.0.9]';
 const COLLECTION = 'SalonConfig';
 
 // ── Lista completa de field IDs (53 user fields) ──
@@ -173,6 +176,10 @@ const ALL_FIELDS = [
   'wixAnclaId',
   // v1.0.6 — Margen extensión horario (min) para reservas ONLINE
   'closingGraceMin',
+  // v1.0.9 — textos de aviso de caducidad (bonos / prime / tarjetas promo)
+  'textVoucherAlert',
+  'textPrimeAlert',
+  'textCardAlert'
 ];
 
 // ── Campos booleanos (para parseo correcto) ──
