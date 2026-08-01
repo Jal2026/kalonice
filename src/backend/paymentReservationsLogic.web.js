@@ -1,8 +1,20 @@
 // ═══════════════════════════════════════════════════════════════
-// paymentReservationsLogic.web.js  v1.3.2
+// paymentReservationsLogic.web.js  v1.3.3
 // KAMISUITE — CRUD PaymentReservations + verificación de contactIds
 // ═══════════════════════════════════════════════════════════════
 // CHANGELOG:
+//   v1.3.3 (1-ago-2026) — HARD DELETE de reserva desde el Editor
+//     "Reservas y Pagos". NEW getAvisosBorradoReserva (avisos previos)
+//     + eliminarReservaCompleta: liberan los huecos de calendario +
+//     borran el/los cobro(s) KRI_ + eliminan la fila de
+//     KamisuiteReservations. Excepción controlada para citas mal
+//     planteadas ya cobradas, sin entrar al CMS a mano. NO tocan
+//     bonos/tarjetas canjeadas ni puntos Loyalty: los detectan y los
+//     devuelven como avisos para gestión manual. Facturas emitidas
+//     tampoco se borran (riesgo fiscal Verifactu): solo se avisa del
+//     número. Google Calendar se limpia solo (cron googleCalendarSync
+//     borra huérfanos). Import nuevo: sessions (wix-bookings-backend).
+//     Delete/edit v1.3.1/v1.3.2 intactos.
 //   v1.3.2 (1-ago-2026) — actualizarPaymentReservation ahora
 //     soporta editar 'desglosemetodopago' con regla cross-field:
 //     · Si campos.tipoPago === 'Mixto' y campos.desglosemetodopago
@@ -84,10 +96,11 @@ import { Permissions, webMethod } from 'wix-web-module';
 import { elevate } from 'wix-auth';
 import { contacts } from 'wix-crm-backend';
 import wixData from 'wix-data';
+import { sessions } from 'wix-bookings-backend'; // v1.3.3 — liberar huecos de calendario en el HARD DELETE
 
 const COLLECTION = 'PaymentReservations';
 const COLECCION_RESERVAS = 'KamisuiteReservations'; // v1.3.1 — reversión de status al borrar cobro KRI_
-const TAG = '[PaymentReservations][v1.3.2]';
+const TAG = '[PaymentReservations][v1.3.3]';
 
 // Nombres concretos a loggear para debug (vacío = sin debug dirigido).
 // Se compara normalizado contra el nombreCliente del item.
@@ -290,6 +303,203 @@ export const eliminarPaymentReservation = webMethod(
     }
   }
 );
+
+// ═══════════════════════════════════════════════════════════════
+// v1.3.3 — BORRADO TOTAL de una reserva (HARD DELETE), aunque esté
+// pagada. Salida de emergencia para citas mal planteadas del todo,
+// sin entrar al CMS a mano. Vive en el Editor "Reservas y Pagos".
+// NO sustituye la seguridad normal ("no borrar cita pagada" en
+// Recepción PRO) — es la excepción controlada.
+//
+// Deshace TODO lo que acopla el cobro y ocupa el calendario:
+//   · libera los huecos (sessions.deleteSession, igual que
+//     cancelarReserva de recepcionProLogic),
+//   · borra el/los cobro(s) KRI_ de PaymentReservations,
+//   · elimina la fila de KamisuiteReservations.
+// Google Calendar se limpia solo: el cron de googleCalendarSync
+// borra el evento huérfano en su siguiente pasada.
+//
+// NO toca (decisión de producto): bonos/tarjetas canjeadas ni puntos
+// Loyalty. Pero SÍ los detecta y los devuelve como avisos para que el
+// operador los gestione a mano. Tampoco borra facturas emitidas
+// (riesgo fiscal Verifactu): solo avisa del número de documento.
+//
+// 'KRI_' = 4 chars (recepcionProLogic PREFIJO_PAGO). Invoices se
+// enlaza por campo 'reservaId' (facturacionSalonLogic).
+// ═══════════════════════════════════════════════════════════════
+
+const COL_INVOICES = 'Invoices'; // v1.3.3 — solo lectura, para avisar de factura emitida
+
+// Parseo seguro de sessionIds ({"ids":[...]}) — mismo formato que
+// recepcionProLogic (jsonIn). Devuelve [] ante cualquier problema.
+function _parseSessionIds(raw) {
+  try {
+    if (Array.isArray(raw)) return raw;
+    const o = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const ids = o && o.ids;
+    return Array.isArray(ids) ? ids : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+// Detecta avisos (canje / factura / nº cobros) de una reserva sin
+// borrar nada. El Editor lo llama ANTES de confirmar el HARD DELETE.
+async function _avisosDeReserva(reservaId) {
+  const bookingIdKey = `KRI_${reservaId}`;
+  let hayCanje = false;
+  const detalleCanje = [];
+  let nCobros = 0;
+  let totalCobros = 0;
+  try {
+    const pagos = await wixData.query(COLLECTION)
+      .eq('bookingId', bookingIdKey)
+      .find({ suppressAuth: true });
+    nCobros = pagos.items.length;
+    for (const p of pagos.items) {
+      totalCobros += Number(p.importeTotal || 0);
+      if (String(p.tipoPago || '').toLowerCase() === 'canje') {
+        hayCanje = true;
+        if (p.descripcion) detalleCanje.push(String(p.descripcion));
+      }
+    }
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ _avisosDeReserva pagos: ${e.message}`);
+  }
+  let factura = null;
+  try {
+    const inv = await wixData.query(COL_INVOICES)
+      .eq('reservaId', reservaId)
+      .find({ suppressAuth: true });
+    if (inv.items.length > 0) {
+      factura = inv.items[0].invoiceNumber || '(documento sin número)';
+    }
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ _avisosDeReserva invoices: ${e.message}`);
+  }
+  return { hayCanje, detalleCanje, factura, nCobros, totalCobros };
+}
+
+// getAvisosBorradoReserva({ reservaId })
+// Devuelve datos de la reserva + avisos que el Editor muestra en la
+// confirmación del HARD DELETE. NO borra nada.
+export const getAvisosBorradoReserva = webMethod(
+  Permissions.SiteMember,
+  async ({ reservaId } = {}) => {
+    try {
+      if (!reservaId || typeof reservaId !== 'string') {
+        return { ok: false, error: 'Falta reservaId' };
+      }
+      let reserva = null;
+      try {
+        reserva = await wixData.get(COLECCION_RESERVAS, reservaId, { suppressAuth: true });
+      } catch (e) { /* se maneja abajo */ }
+      if (!reserva) {
+        return { ok: false, error: `Reserva no encontrada: ${reservaId}` };
+      }
+      const avisos = await _avisosDeReserva(reservaId);
+      return {
+        ok: true,
+        reserva: {
+          _id: reservaId,
+          title: reserva.title || reserva.clientName || '(sin título)',
+          clientName: reserva.clientName || '',
+          fechaReserva: reserva.fechaReserva || null,
+          status: reserva.status || '',
+          precioTotal: Number(reserva.precioTotal || 0)
+        },
+        avisos
+      };
+    } catch (err) {
+      console.error(`${TAG} ❌ getAvisosBorradoReserva:`, err);
+      return { ok: false, error: err.message };
+    }
+  }
+);
+
+// eliminarReservaCompleta({ reservaId })  — HARD DELETE
+// Libera huecos + borra TODOS los cobros KRI_ + elimina la fila de
+// KamisuiteReservations. Devuelve los avisos (canje / factura) que
+// quedan pendientes de gestionar a mano.
+export const eliminarReservaCompleta = webMethod(
+  Permissions.SiteMember,
+  async ({ reservaId } = {}) => {
+    try {
+      if (!reservaId || typeof reservaId !== 'string') {
+        return { success: false, error: 'Falta reservaId' };
+      }
+
+      // 0. Leer la reserva (para los huecos + validar existencia)
+      let reserva;
+      try {
+        reserva = await wixData.get(COLECCION_RESERVAS, reservaId, { suppressAuth: true });
+      } catch (e) {
+        return { success: false, error: `Reserva no encontrada: ${reservaId}` };
+      }
+      if (!reserva) {
+        return { success: false, error: `Reserva no encontrada: ${reservaId}` };
+      }
+      const nombreLog = reserva.clientName || reserva.title || '(sin nombre)';
+
+      // Detectar avisos ANTES de borrar (para devolverlos)
+      const avisos = await _avisosDeReserva(reservaId);
+
+      // 1. Liberar los huecos del calendario (igual que cancelarReserva)
+      const sessionIds = _parseSessionIds(reserva.sessionIds);
+      let sessionesBorradas = 0;
+      for (const sid of sessionIds) {
+        if (!sid) continue;
+        try {
+          await sessions.deleteSession(sid, { suppressAuth: true });
+          sessionesBorradas++;
+        } catch (sErr) {
+          console.warn(`${TAG} ⚠️ No se pudo borrar session ${sid}: ${sErr.message}`);
+        }
+      }
+
+      // 2. Borrar TODOS los cobros KRI_ de la reserva
+      let cobrosBorrados = 0;
+      try {
+        const pagos = await wixData.query(COLLECTION)
+          .eq('bookingId', `KRI_${reservaId}`)
+          .find({ suppressAuth: true });
+        for (const p of pagos.items) {
+          try {
+            await wixData.remove(COLLECTION, p._id, { suppressAuth: true });
+            cobrosBorrados++;
+          } catch (pErr) {
+            console.warn(`${TAG} ⚠️ No se pudo borrar cobro ${p._id}: ${pErr.message}`);
+          }
+        }
+      } catch (qErr) {
+        console.warn(`${TAG} ⚠️ Error listando cobros de ${reservaId}: ${qErr.message}`);
+      }
+
+      // 3. Eliminar la fila de KamisuiteReservations (HARD DELETE)
+      await wixData.remove(COLECCION_RESERVAS, reservaId, { suppressAuth: true });
+
+      // NOTA: Google Calendar se limpia solo — el cron de
+      // googleCalendarSync borra el evento huérfano (ya no existe la
+      // reserva) en su siguiente pasada. Bonos/tarjetas canjeadas y
+      // puntos Loyalty NO se tocan; van en 'avisos'. Facturas emitidas
+      // tampoco se borran (fiscal) — 'avisos.factura' lleva el número.
+
+      console.log(`${TAG} 🧨 HARD DELETE reserva ${reservaId} | "${nombreLog}" | ${sessionesBorradas} huecos | ${cobrosBorrados} cobros${avisos.factura ? ` | ⚠️ factura ${avisos.factura}` : ''}${avisos.hayCanje ? ' | ⚠️ tenía canje' : ''}`);
+
+      return {
+        success: true,
+        reservaId,
+        sessionesBorradas,
+        cobrosBorrados,
+        avisos
+      };
+    } catch (err) {
+      console.error(`${TAG} ❌ eliminarReservaCompleta:`, err);
+      return { success: false, error: err.message };
+    }
+  }
+);
+
 
 // ───────────────────────────────────────────────────────────────
 // resolverContactIdsReales(items)  [v1.2.1 — REESCRITO]
