@@ -2,9 +2,16 @@
 // BACKEND cashRegisterLogic.web.js — Arqueo de Caja KAMISUITE v1.1.0
 // =====================================================
 // FECHA: 1 Ago 2026
-// VERSION: 1.1.1
+// VERSION: 1.1.2
 //
 // CHANGELOG
+//   v1.1.2 · 1 Ago 2026 · Arrastre automático del cash del día anterior
+//     - calcularEfectivoEsperado: si el registro del día NO tiene un
+//       openingBalance forzado (> 0), arrastra el efectivo contado del
+//       cierre anterior (getFondoSugerido → countedCash de ayer). El
+//       'Fondo inicial' del arqueo deja de arrancar en 0: hereda el
+//       cash con el que se cerró el día previo. 'Forzar fondo inicial'
+//       (setOpeningBalance) sigue sobrescribiendo cuando se necesita.
 //   v1.1.1 · 1 Ago 2026 · setOpeningBalance — fondo inicial editable
 //     - NEW setOpeningBalance({ fechaISO, openingBalance }): fija el
 //       fondo del día EXISTA o no la caja (crea, o READ-MERGE-UPDATE si
@@ -61,7 +68,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CashRegister v1.1.1]';
+const TAG = '[CashRegister v1.1.2]';
 const COL_REGISTER = 'CashRegister';
 const COL_MOVEMENTS = 'CashMovements';
 const COL_PAGOS = 'PaymentReservations';
@@ -404,7 +411,21 @@ export const calcularEfectivoEsperado = webMethod(
         .find({ suppressAuth: true });
 
       const registro = regResult.items.length > 0 ? regResult.items[0] : null;
-      const fondoInicial = Number(registro?.openingBalance || 0);
+      // v1.1.2 — Fondo inicial del día:
+      //   · Si el registro tiene un openingBalance FORZADO (> 0), ese manda.
+      //   · Si no (0 o sin registro), se ARRASTRA el efectivo contado del
+      //     cierre del día anterior (getFondoSugerido → countedCash de ayer).
+      //   El operador puede sobrescribir con "Forzar fondo inicial" (que
+      //   escribe openingBalance vía setOpeningBalance → pasa a ser > 0).
+      let fondoInicial = Number(registro?.openingBalance || 0);
+      if (fondoInicial <= 0) {
+        try {
+          const sug = await getFondoSugerido({ fechaISO });
+          if (sug && sug.ok) fondoInicial = Number(sug.fondoSugerido || 0);
+        } catch (e) {
+          console.warn(`${TAG} ⚠️ arrastre de fondo no disponible:`, e.message);
+        }
+      }
 
       // 2. Leer cobros en efectivo del día desde PaymentReservations
       //    tipoPago = "Efectivo" puro + parte efectivo de Mixto
