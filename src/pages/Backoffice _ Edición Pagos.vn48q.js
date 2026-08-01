@@ -1,8 +1,11 @@
 // ═══════════════════════════════════════════════════════════════
-// Page Code — PaymentReservations Editor  v2.0.0
+// Page Code — Reservas y Pagos Editor  v2.1.0
 // Bridge entre widget HTML y paymentReservationsLogic.web.js
 // ═══════════════════════════════════════════════════════════════
 // CHANGELOG:
+//   v2.1.0 (1-ago-2026) — HARD DELETE. Nuevos handlers 'avisosBorrado'
+//     (getAvisosBorradoReserva) y 'hardDelete' (eliminarReservaCompleta).
+//     Contrato CRUD previo intacto.
 //   v2.0.0 (25-jun-2026) — SIMPLIFICACIÓN CRUD PURO.
 //     · Eliminados imports de resolverContactIdsReales y exportarTodoJSON
 //       (el widget ya no expone diagnóstico CRM ni exportación).
@@ -16,7 +19,9 @@
 import {
   listarPaymentReservations,
   actualizarPaymentReservation,
-  eliminarPaymentReservation
+  eliminarPaymentReservation,
+  getAvisosBorradoReserva,
+  eliminarReservaCompleta
 } from 'backend/paymentReservationsLogic.web';
 
 $w.onReady(function () {
@@ -124,6 +129,53 @@ $w.onReady(function () {
           type: 'deleteError',
           message: err.message || 'Error inesperado'
         });
+      }
+    }
+
+    // ── HARD DELETE: avisos previos (canje / factura / nº cobros) ──
+    if (msg.type === 'avisosBorrado') {
+      try {
+        const { reservaId } = msg.payload || {};
+        const result = await getAvisosBorradoReserva({ reservaId });
+        if (result && result.ok) {
+          widget.postMessage({
+            type: 'avisosResult',
+            payload: { reservaId, reserva: result.reserva, avisos: result.avisos }
+          });
+        } else {
+          widget.postMessage({
+            type: 'hardDeleteError',
+            message: (result && result.error) || 'No se pudieron leer los avisos'
+          });
+        }
+      } catch (err) {
+        widget.postMessage({ type: 'hardDeleteError', message: err.message || 'Error inesperado' });
+      }
+    }
+
+    // ── HARD DELETE: borrado total de la reserva ──
+    if (msg.type === 'hardDelete') {
+      try {
+        const { reservaId } = msg.payload || {};
+        const result = await eliminarReservaCompleta({ reservaId });
+        if (result && result.success) {
+          widget.postMessage({
+            type: 'hardDeleted',
+            payload: {
+              reservaId,
+              avisos: result.avisos,
+              sessionesBorradas: result.sessionesBorradas,
+              cobrosBorrados: result.cobrosBorrados
+            }
+          });
+        } else {
+          widget.postMessage({
+            type: 'hardDeleteError',
+            message: (result && result.error) || 'No se pudo borrar la reserva'
+          });
+        }
+      } catch (err) {
+        widget.postMessage({ type: 'hardDeleteError', message: err.message || 'Error inesperado' });
       }
     }
   });
