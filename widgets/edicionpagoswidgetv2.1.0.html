@@ -9,7 +9,25 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE — PaymentReservations Editor v2.0.0
+       KAMISUITE — PaymentReservations Editor v2.1.0
+       v2.1.0 (1-ago-2026): SOPORTE COMPLETO PARA EDITAR
+               COBROS MIXTOS. El select tipoPago=Mixto ahora
+               despliega un bloque editable con 3 inputs
+               (Tarjeta / Efectivo / Bizum) + fila resumen
+               "Suma / Total" con validación de cuadre. El
+               botón Guardar se bloquea si la suma no cuadra
+               con el importe total. Prerrellena los 3 inputs
+               con JSON.parse(desglosemetodopago) al abrir el
+               modal sobre un cobro Mixto existente. Al cambiar
+               a un método distinto de Mixto, el bloque se
+               oculta y el desglose se limpia. El bloque de
+               solo lectura pierde la línea "Desglose método"
+               porque ahora es editable arriba (patrón visual
+               y formato JSON idénticos al _openMixto de
+               Recepción PRO widget v1.1.61, para que el chip
+               "💳 Método de cobro" del modal de cita pagada
+               lea el desglose sin cambios). CRUD, tabla,
+               filtros, borrado y refresh sin cambios.
        v2.0.0: SIMPLIFICACIÓN CRUD PURO. Eliminado todo el
                diagnóstico CRM (botones Contact IDs, resolución
                de CIDs reales, exportación JSON, columnas CID,
@@ -133,6 +151,24 @@
     .btn-delete.confirming { background: var(--red); color: var(--bg); border-color: var(--red); animation: pulse 1.5s ease-in-out infinite; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .75; } }
 
+    /* v2.1.0 — Bloque editable de desglose Mixto (encaja con el modal existente) */
+    .mixto-box { display: none; margin: -4px 0 14px 0; padding: 12px 14px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+    .mixto-box.show { display: block; }
+    .mixto-title { font-size: 10px; font-weight: 700; color: var(--purple); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 10px; text-align: center; }
+    .mixto-row { display: grid; grid-template-columns: 80px 1fr; gap: 10px; align-items: center; margin-bottom: 8px; }
+    .mixto-row:last-of-type { margin-bottom: 10px; }
+    .mixto-lbl { font-size: 11px; font-weight: 600; color: var(--text-secondary); }
+    .mixto-input-wrap { position: relative; }
+    .mixto-input { width: 100%; background: var(--surface3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: inherit; font-size: 13px; padding: 8px 26px 8px 10px; outline: none; transition: border-color .2s; }
+    .mixto-input:focus { border-color: var(--purple); }
+    .mixto-input-wrap::after { content: '€'; position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 12px; font-weight: 600; pointer-events: none; }
+    .mixto-sum { display: flex; justify-content: space-between; align-items: baseline; padding-top: 8px; border-top: 1px solid var(--border); }
+    .mixto-sum-lbl { font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+    .mixto-sum-val { font-size: 13px; font-weight: 700; color: var(--red); font-variant-numeric: tabular-nums; }
+    .mixto-sum-val.ok { color: var(--green); }
+    .mixto-hint { font-size: 10px; color: var(--muted); margin-top: 6px; text-align: center; font-style: italic; }
+    .mixto-hint.err { color: var(--red); font-style: normal; font-weight: 600; }
+
     .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(60px); background: var(--surface3); border: 1px solid var(--border-hover); color: var(--text); font-family: inherit; font-size: 12px; font-weight: 600; padding: 10px 20px; border-radius: var(--radius); opacity: 0; transition: all .3s ease; pointer-events: none; z-index: 2000; }
     .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
     .toast.success { border-color: var(--green); color: var(--green); }
@@ -142,7 +178,7 @@
 <body>
   <div class="header">
     <span class="header-brand">KAMISUITE · PaymentReservations</span>
-    <span class="header-version">v2.0.0</span>
+    <span class="header-version">v2.1.0</span>
   </div>
 
   <div class="toolbar" id="toolbar" style="display:none;">
@@ -205,6 +241,27 @@
             </select>
           </div>
         </div>
+        <!-- v2.1.0 — Bloque de desglose Mixto (aparece solo si tipoPago = Mixto) -->
+        <div class="mixto-box" id="mixtoBox">
+          <div class="mixto-title">🔀 Desglose Mixto</div>
+          <div class="mixto-row">
+            <span class="mixto-lbl">Tarjeta</span>
+            <div class="mixto-input-wrap"><input type="number" class="mixto-input" id="mxT" min="0" step="0.01" placeholder="0"></div>
+          </div>
+          <div class="mixto-row">
+            <span class="mixto-lbl">Efectivo</span>
+            <div class="mixto-input-wrap"><input type="number" class="mixto-input" id="mxE" min="0" step="0.01" placeholder="0"></div>
+          </div>
+          <div class="mixto-row">
+            <span class="mixto-lbl">Bizum</span>
+            <div class="mixto-input-wrap"><input type="number" class="mixto-input" id="mxB" min="0" step="0.01" placeholder="0"></div>
+          </div>
+          <div class="mixto-sum">
+            <span class="mixto-sum-lbl">Suma</span>
+            <span class="mixto-sum-val" id="mxSum">0€ / 0€</span>
+          </div>
+          <div class="mixto-hint" id="mxHint">La suma debe cuadrar con el importe total</div>
+        </div>
         <div class="form-group">
           <label class="form-label">Descripción <span class="edit-icon">✎</span></label>
           <input type="text" class="form-input" id="editDescripcion" placeholder="Servicios realizados">
@@ -217,7 +274,6 @@
           <div class="readonly-title">Datos de referencia (solo lectura)</div>
           <div class="readonly-field"><span class="readonly-key">Staff</span><span class="readonly-val" id="roStaff">—</span></div>
           <div class="readonly-field"><span class="readonly-key">Fecha reserva</span><span class="readonly-val" id="roFechaReserva">—</span></div>
-          <div class="readonly-field"><span class="readonly-key">Desglose método</span><span class="readonly-val" id="roDesglose">—</span></div>
           <div class="readonly-field"><span class="readonly-key">Booking ID</span><span class="readonly-val" id="roBookingId">—</span></div>
         </div>
       </div>
@@ -271,8 +327,14 @@
     editFechaPago: document.getElementById('editFechaPago'),
     roStaff: document.getElementById('roStaff'),
     roFechaReserva: document.getElementById('roFechaReserva'),
-    roDesglose: document.getElementById('roDesglose'),
-    roBookingId: document.getElementById('roBookingId')
+    roBookingId: document.getElementById('roBookingId'),
+    // v2.1.0 — refs bloque Mixto
+    mixtoBox: document.getElementById('mixtoBox'),
+    mxT: document.getElementById('mxT'),
+    mxE: document.getElementById('mxE'),
+    mxB: document.getElementById('mxB'),
+    mxSum: document.getElementById('mxSum'),
+    mxHint: document.getElementById('mxHint')
   };
 
   function render(data) {
@@ -435,8 +497,27 @@
     else el.editFechaPago.value = '';
     el.roStaff.textContent = formatStaffName(item.staff) || '—';
     el.roFechaReserva.textContent = item.fechaReserva ? formatFechaLarga(item.fechaReserva) : '—';
-    el.roDesglose.textContent = item.desglosemetodopago || '—';
     el.roBookingId.textContent = item.bookingId || '—';
+
+    // v2.1.0 — Prerrellenar bloque Mixto si el cobro es Mixto y trae desglose.
+    // Formato canónico (idéntico al que emite _openMixto de Recepción PRO):
+    //   JSON.stringify({Tarjeta:N, Efectivo:N, Bizum:N}) con solo keys > 0.
+    // Si el JSON está corrupto o vacío, los inputs se dejan en blanco.
+    el.mxT.value = '';
+    el.mxE.value = '';
+    el.mxB.value = '';
+    if ((item.tipoPago === 'Mixto') && item.desglosemetodopago) {
+      try {
+        const dd = JSON.parse(item.desglosemetodopago);
+        if (dd && typeof dd === 'object') {
+          if (dd.Tarjeta != null && dd.Tarjeta !== '') el.mxT.value = dd.Tarjeta;
+          if (dd.Efectivo != null && dd.Efectivo !== '') el.mxE.value = dd.Efectivo;
+          if (dd.Bizum != null && dd.Bizum !== '') el.mxB.value = dd.Bizum;
+        }
+      } catch (_) { /* desglose ilegible, se deja vacío */ }
+    }
+    updateMixtoVisibility();
+
     el.btnSave.disabled = false;
     el.btnSave.textContent = 'Guardar cambios';
     el.btnDelete.disabled = false;
@@ -449,6 +530,28 @@
   }
 
   function saveChanges() {
+    // v2.1.0 — Si Mixto, validar cuadre antes de enviar. Si no cuadra,
+    // NO hacer postMessage: aviso al operador y dejamos el modal abierto.
+    const tipoPago = el.editTipoPago.value;
+    const importe = Math.round((parseFloat(el.editImporte.value) || 0) * 100) / 100;
+    let desgloseJson = '';
+    if (tipoPago === 'Mixto') {
+      const vT = parseFloat(el.mxT.value) || 0;
+      const vE = parseFloat(el.mxE.value) || 0;
+      const vB = parseFloat(el.mxB.value) || 0;
+      const suma = Math.round((vT + vE + vB) * 100) / 100;
+      if (!(Math.abs(suma - importe) < 0.01 && suma > 0)) {
+        showToast('✕ La suma del desglose no cuadra con el importe total', 'error');
+        return;
+      }
+      // Solo keys > 0 (formato idéntico al _openMixto de Recepción PRO)
+      const dd = {};
+      if (vT > 0) dd.Tarjeta = vT;
+      if (vE > 0) dd.Efectivo = vE;
+      if (vB > 0) dd.Bizum = vB;
+      desgloseJson = JSON.stringify(dd);
+    }
+
     el.btnSave.disabled = true;
     el.btnSave.textContent = 'Guardando...';
     el.btnDelete.disabled = true;
@@ -456,11 +559,64 @@
     const campos = {
       nombreCliente: el.editNombre.value.trim(),
       importeTotal: parseFloat(el.editImporte.value) || 0,
-      tipoPago: el.editTipoPago.value,
-      descripcion: el.editDescripcion.value.trim()
+      tipoPago: tipoPago,
+      descripcion: el.editDescripcion.value.trim(),
+      // v2.1.0 — se envía SIEMPRE:
+      //  - JSON con desglose si Mixto,
+      //  - string vacía si es otro método (limpia residuos previos).
+      desglosemetodopago: desgloseJson
     };
     if (el.editFechaPago.value) campos.fechaPago = new Date(el.editFechaPago.value);
     parent.postMessage({ type: 'save', payload: { _id, campos } }, '*');
+  }
+
+  // v2.1.0 — Mostrar / ocultar bloque Mixto en función del select tipoPago.
+  // Al ocultarse limpia los inputs para no arrastrar valores muertos.
+  function updateMixtoVisibility() {
+    const esMixto = el.editTipoPago.value === 'Mixto';
+    el.mixtoBox.classList.toggle('show', esMixto);
+    if (!esMixto) {
+      el.mxT.value = '';
+      el.mxE.value = '';
+      el.mxB.value = '';
+    }
+    updateMixtoSum();
+  }
+
+  // v2.1.0 — Recalcular la fila "Suma / Total" del bloque Mixto y
+  // habilitar/deshabilitar el botón Guardar según cuadre.
+  //   · Suma verde + botón habilitado cuando |suma − total| < 0.01 y suma > 0.
+  //   · Suma roja + botón deshabilitado en cualquier otro caso.
+  // Si el select NO está en Mixto, el botón Guardar se libera siempre
+  // (los otros métodos no requieren desglose).
+  function updateMixtoSum() {
+    const total = Math.round((parseFloat(el.editImporte.value) || 0) * 100) / 100;
+    if (el.editTipoPago.value !== 'Mixto') {
+      el.mxSum.textContent = `0€ / ${total}€`;
+      el.mxSum.classList.remove('ok');
+      el.mxHint.classList.remove('err');
+      el.mxHint.textContent = 'La suma debe cuadrar con el importe total';
+      el.btnSave.disabled = false;
+      return;
+    }
+    const vT = parseFloat(el.mxT.value) || 0;
+    const vE = parseFloat(el.mxE.value) || 0;
+    const vB = parseFloat(el.mxB.value) || 0;
+    const s = Math.round((vT + vE + vB) * 100) / 100;
+    el.mxSum.textContent = `${s}€ / ${total}€`;
+    const ok = Math.abs(s - total) < 0.01 && s > 0;
+    el.mxSum.classList.toggle('ok', ok);
+    if (ok) {
+      el.mxHint.classList.remove('err');
+      el.mxHint.textContent = 'Suma correcta';
+      el.btnSave.disabled = false;
+    } else {
+      el.mxHint.classList.add('err');
+      el.mxHint.textContent = s === 0
+        ? 'Introduce los importes por método'
+        : `Diferencia: ${(s - total).toFixed(2)}€`;
+      el.btnSave.disabled = true;
+    }
   }
 
   // borrar registro con confirmación de 2 clicks
@@ -549,6 +705,12 @@
   el.btnCancel.addEventListener('click', closeModal);
   el.btnSave.addEventListener('click', saveChanges);
   el.btnDelete.addEventListener('click', handleDeleteClick);
+  // v2.1.0 — listeners del bloque Mixto
+  el.editTipoPago.addEventListener('change', updateMixtoVisibility);
+  el.editImporte.addEventListener('input', updateMixtoSum);
+  el.mxT.addEventListener('input', updateMixtoSum);
+  el.mxE.addEventListener('input', updateMixtoSum);
+  el.mxB.addEventListener('input', updateMixtoSum);
   el.modal.addEventListener('click', (e) => { if (e.target === el.modal) closeModal(); });
 
   window.addEventListener('message', (event) => {
