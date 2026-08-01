@@ -3,13 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>KAMISUITE — PaymentReservations</title>
+  <title>KAMISUITE — Reservas y Pagos</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE — PaymentReservations Editor v2.1.0
+       KAMISUITE — Reservas y Pagos Editor v2.2.0
+       v2.2.0 (1 ago 2026) — Botón HARD DELETE: borra la reserva completa
+       (cobro + reserva + huecos de calendario) para citas mal planteadas
+       ya cobradas. Solo visible en cobros KRI_ (citas internas). Aviso
+       previo con confirm() de canje/factura/puntos. Mixto v2.1.0 intacto.
        v2.1.0 (1-ago-2026): SOPORTE COMPLETO PARA EDITAR
                COBROS MIXTOS. El select tipoPago=Mixto ahora
                despliega un bloque editable con 3 inputs
@@ -149,6 +153,9 @@
     .btn-delete:hover { background: var(--red-dim); border-color: var(--red); }
     .btn-delete:disabled { opacity: .5; cursor: not-allowed; }
     .btn-delete.confirming { background: var(--red); color: var(--bg); border-color: var(--red); animation: pulse 1.5s ease-in-out infinite; }
+    .btn-harddelete { background: var(--red); color: var(--bg); border: 1px solid var(--red); padding: 10px 14px; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+    .btn-harddelete:hover { filter: brightness(1.12); }
+    .btn-harddelete:disabled { opacity: .5; cursor: not-allowed; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .75; } }
 
     /* v2.1.0 — Bloque editable de desglose Mixto (encaja con el modal existente) */
@@ -281,6 +288,9 @@
         <button class="btn btn-delete" id="btnDelete" title="Eliminar este registro del CMS">
           🗑️ Borrar
         </button>
+        <button class="btn btn-harddelete" id="btnHardDelete" title="BORRADO TOTAL: elimina la reserva y su cobro y la quita del calendario. Excepción para citas mal planteadas ya cobradas." style="display:none;">
+          🧨 Borrar reserva completa
+        </button>
         <button class="btn btn-cancel" id="btnCancel">Cancelar</button>
         <button class="btn btn-save" id="btnSave">Guardar cambios</button>
       </div>
@@ -319,6 +329,7 @@
     btnCancel: document.getElementById('btnCancel'),
     btnSave: document.getElementById('btnSave'),
     btnDelete: document.getElementById('btnDelete'),
+    btnHardDelete: document.getElementById('btnHardDelete'),
     editId: document.getElementById('editId'),
     editNombre: document.getElementById('editNombre'),
     editImporte: document.getElementById('editImporte'),
@@ -499,6 +510,18 @@
     el.roFechaReserva.textContent = item.fechaReserva ? formatFechaLarga(item.fechaReserva) : '—';
     el.roBookingId.textContent = item.bookingId || '—';
 
+    // HARD DELETE solo para cobros de citas internas (bookingId 'KRI_').
+    const _bId = String(item.bookingId || '');
+    if (_bId.startsWith('KRI_')) {
+      el.btnHardDelete.style.display = '';
+      el.btnHardDelete.dataset.reservaId = _bId.slice(4);
+    } else {
+      el.btnHardDelete.style.display = 'none';
+      el.btnHardDelete.dataset.reservaId = '';
+    }
+    el.btnHardDelete.disabled = false;
+    el.btnHardDelete.innerHTML = '🧨 Borrar reserva completa';
+
     // v2.1.0 — Prerrellenar bloque Mixto si el cobro es Mixto y trae desglose.
     // Formato canónico (idéntico al que emite _openMixto de Recepción PRO):
     //   JSON.stringify({Tarjeta:N, Efectivo:N, Bizum:N}) con solo keys > 0.
@@ -656,6 +679,16 @@
     parent.postMessage({ type: 'delete', payload: { _id } }, '*');
   }
 
+  // HARD DELETE — borrado total de la reserva (cobro + reserva + calendario).
+  // Paso 1: pedir avisos al page code; se confirma con confirm() mostrándolos.
+  function handleHardDeleteClick() {
+    const reservaId = el.btnHardDelete.dataset.reservaId;
+    if (!reservaId) return;
+    el.btnHardDelete.disabled = true;
+    el.btnHardDelete.innerHTML = 'Comprobando…';
+    parent.postMessage({ type: 'avisosBorrado', payload: { reservaId } }, '*');
+  }
+
   function refreshList() {
     el.btnRefresh.disabled = true;
     el.btnRefresh.classList.add('refreshing');
@@ -705,6 +738,7 @@
   el.btnCancel.addEventListener('click', closeModal);
   el.btnSave.addEventListener('click', saveChanges);
   el.btnDelete.addEventListener('click', handleDeleteClick);
+  el.btnHardDelete.addEventListener('click', handleHardDeleteClick);
   // v2.1.0 — listeners del bloque Mixto
   el.editTipoPago.addEventListener('change', updateMixtoVisibility);
   el.editImporte.addEventListener('input', updateMixtoSum);
@@ -777,6 +811,48 @@
       el.btnSave.disabled = false;
       resetDeleteButton();
       showToast('✕ Error eliminando: ' + (msg.message || 'No se pudo borrar'), 'error');
+    }
+    // ── HARD DELETE: avisos previos + confirmación ──
+    if (msg.type === 'avisosResult') {
+      const reservaId = msg.payload && msg.payload.reservaId;
+      const av = (msg.payload && msg.payload.avisos) || {};
+      const rv = (msg.payload && msg.payload.reserva) || {};
+      el.btnHardDelete.disabled = false;
+      el.btnHardDelete.innerHTML = '🧨 Borrar reserva completa';
+      let txt = '⚠️ BORRADO TOTAL — no se puede deshacer.\n\n';
+      txt += 'Reserva: ' + (rv.title || '(sin título)') + '\n';
+      txt += 'Se elimina la RESERVA y su COBRO (' + (av.nCobros || 0) + ' cobro(s), ' + (av.totalCobros || 0) + '€) y desaparece del calendario.\n';
+      if (av.hayCanje) txt += '\n⚠️ Pagada con BONO/CANJE: el bono NO se devuelve solo. Restáuralo a mano.';
+      if (av.factura) txt += '\n⚠️ Tiene FACTURA ' + av.factura + ': gestiónala/rectifícala aparte.';
+      txt += '\n⚠️ Los puntos Loyalty (si los hubo) no se revocan.';
+      txt += '\n\n¿Confirmar borrado total?';
+      if (window.confirm(txt)) {
+        el.btnHardDelete.disabled = true;
+        el.btnHardDelete.innerHTML = 'Borrando…';
+        const row = el.content.querySelector(`tr[data-id="${el.editId.value}"]`);
+        if (row) row.classList.add('row-deleting');
+        parent.postMessage({ type: 'hardDelete', payload: { reservaId } }, '*');
+      }
+    }
+    // ── HARD DELETE: resultado ──
+    if (msg.type === 'hardDeleted') {
+      const p = msg.payload || {};
+      let t = '✓ Reserva y cobro eliminados';
+      if (p.avisos && p.avisos.factura) t += ' · ⚠️ factura ' + p.avisos.factura + ' pendiente';
+      showToast(t, 'success');
+      closeModal();
+      const reservaId = p.reservaId;
+      if (reservaId) {
+        allItems = allItems.filter(x => !(String(x.bookingId || '').startsWith('KRI_') && String(x.bookingId).slice(4) === reservaId));
+        applyFilters();
+      }
+    }
+    if (msg.type === 'hardDeleteError') {
+      const id = el.editId.value;
+      if (id) { const row = el.content.querySelector(`tr[data-id="${id}"]`); if (row) row.classList.remove('row-deleting'); }
+      el.btnHardDelete.disabled = false;
+      el.btnHardDelete.innerHTML = '🧨 Borrar reserva completa';
+      showToast('✕ Error borrando reserva: ' + (msg.message || 'No se pudo borrar'), 'error');
     }
     if (msg.type === 'error') el.content.innerHTML = `<div class="error-msg">❌ Error: ${esc(msg.message || 'Desconocido')}</div>`;
   });
