@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE - Editor de Productos Custom Backend
 // =====================================================
-// VERSION: 1.0.2
+// VERSION: 1.0.3
 // FECHA: 22 de junio de 2026 (v1.0.2: 30 de julio de 2026)
 //
 // MÓDULO: PRIME + Bonos + Tarjetas Promocionales.
@@ -50,7 +50,9 @@
 //   promoCardsActive. El campo se mantiene en el shape devuelto por
 //   getProductosConfig por retrocompatibilidad.
 //
-// CHANGELOG:
+// CHANGELOG
+//   v1.0.3 - editar emitidos (usos/caducidad) + prepararAvisoCaducidad
+//              (aviso WhatsApp/email cliente-side con tokens desde SalonConfig):
 // v1.0.2 - · listarVouchersEmitidos ahora devuelve clientName (nombre
 //            del cliente) en cada bono, para que el widget muestre el
 //            nombre en la columna CLIENTE en vez del contactId (UUID).
@@ -77,8 +79,10 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import { mediaManager } from 'wix-media-backend';
 import wixData from 'wix-data';
+import { cargarTodosContactos } from 'backend/recepcionLogic.web'; // v1.0.3 — resolver tel/email para el aviso
+import { getSalonConfig } from 'backend/salonConfigLogic.web';      // v1.0.3 — leer textVoucherAlert/textPrimeAlert/textCardAlert
 
-const TAG = '[ProductosKamisuite][1.0.1]';
+const TAG = '[ProductosKamisuite][1.0.3]';
 
 const CMS_CONFIG = 'KamisuiteProductsConfig';
 const CMS_CAMPAIGNS = 'KamisuitePromoCampaigns';
@@ -818,6 +822,181 @@ export const listarPromoCardsEmitidas = webMethod(
 // =====================================================
 // 6. REVOCACIÓN MANUAL (status='CANCELADA')
 // =====================================================
+
+
+// ═══════════════════════════════════════════════════════════════
+// v1.0.3 — EDICIÓN de emitidos + AVISO de caducidad (gestor de bonos)
+//   · actualizarVoucher / actualizarPrimeMembership / actualizarPromoCard:
+//     READ-MERGE-UPDATE de los campos editables (usos disponibles y/o
+//     fecha de caducidad). Hermanos de revocarX (mismo patrón).
+//   · prepararAvisoCaducidad({ tipo, _id }): compone el aviso — lee el
+//     texto del salón de SalonConfig (textVoucherAlert / textPrimeAlert /
+//     textCardAlert), sustituye tokens ({cliente},{bono}/{tarjeta},{usos},
+//     {caducidad}) y resuelve tel/email del cliente. El ENVÍO es
+//     cliente-side (wa.me / mailto) desde el widget, igual que Catálogo.
+// ═══════════════════════════════════════════════════════════════
+
+function _fechaCorta(d) {
+  if (!d) return '';
+  try {
+    return new Date(d).toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid', day: '2-digit', month: '2-digit', year: 'numeric' });
+  } catch (e) { return ''; }
+}
+
+function _sustituirTokens(texto, tokens) {
+  let out = String(texto || '');
+  for (const k of Object.keys(tokens)) {
+    const v = tokens[k];
+    out = out.split(k).join(v == null ? '' : String(v));
+  }
+  return out;
+}
+
+async function _resolverContacto(contactId) {
+  if (!contactId) return null;
+  try {
+    const res = await cargarTodosContactos();
+    const lista = (res && (res.contactos || res.lista || res.items)) || (Array.isArray(res) ? res : []);
+    return lista.find(c => c.contactId === contactId) || null;
+  } catch (e) {
+    console.warn(`${TAG} \u26a0\ufe0f _resolverContacto: ${e.message}`);
+    return null;
+  }
+}
+
+export const actualizarVoucher = webMethod(
+  Permissions.SiteMember,
+  async ({ _id, remainingUses, expirationDate } = {}) => {
+    try {
+      if (!_id) return { success: false, error: 'Falta _id del bono' };
+      const reg = await wixData.get(CMS_VOUCHERS, _id, { suppressAuth: true });
+      if (!reg) return { success: false, error: 'Bono no encontrado' };
+      if (remainingUses !== undefined && remainingUses !== null && remainingUses !== '') {
+        const n = Number(remainingUses);
+        if (!isNaN(n) && n >= 0) reg.remainingUses = Math.round(n);
+      }
+      if (expirationDate !== undefined && expirationDate !== null && expirationDate !== '') {
+        reg.expirationDate = new Date(expirationDate);
+      }
+      const up = await wixData.update(CMS_VOUCHERS, reg, { suppressAuth: true });
+      console.log(`${TAG} \u270f\ufe0f Bono ${_id} actualizado | usos=${up.remainingUses} | caduca=${up.expirationDate}`);
+      return { success: true, _id: up._id, remainingUses: up.remainingUses, expirationDate: up.expirationDate };
+    } catch (error) {
+      console.error(`${TAG} \u274c actualizarVoucher:`, error);
+      return { success: false, error: error.message };
+    }
+  }
+);
+
+export const actualizarPrimeMembership = webMethod(
+  Permissions.SiteMember,
+  async ({ _id, expirationDate } = {}) => {
+    try {
+      if (!_id) return { success: false, error: 'Falta _id de la membres\u00eda' };
+      const reg = await wixData.get(CMS_PRIME, _id, { suppressAuth: true });
+      if (!reg) return { success: false, error: 'Membres\u00eda PRIME no encontrada' };
+      if (expirationDate !== undefined && expirationDate !== null && expirationDate !== '') {
+        reg.expirationDate = new Date(expirationDate);
+      }
+      const up = await wixData.update(CMS_PRIME, reg, { suppressAuth: true });
+      console.log(`${TAG} \u270f\ufe0f PRIME ${_id} actualizada | caduca=${up.expirationDate}`);
+      return { success: true, _id: up._id, expirationDate: up.expirationDate };
+    } catch (error) {
+      console.error(`${TAG} \u274c actualizarPrimeMembership:`, error);
+      return { success: false, error: error.message };
+    }
+  }
+);
+
+export const actualizarPromoCard = webMethod(
+  Permissions.SiteMember,
+  async ({ _id, expirationDate } = {}) => {
+    try {
+      if (!_id) return { success: false, error: 'Falta _id de la tarjeta' };
+      const reg = await wixData.get(CMS_PROMOCARDS, _id, { suppressAuth: true });
+      if (!reg) return { success: false, error: 'Tarjeta promocional no encontrada' };
+      if (expirationDate !== undefined && expirationDate !== null && expirationDate !== '') {
+        reg.expirationDate = new Date(expirationDate);
+      }
+      const up = await wixData.update(CMS_PROMOCARDS, reg, { suppressAuth: true });
+      console.log(`${TAG} \u270f\ufe0f Tarjeta ${_id} actualizada | caduca=${up.expirationDate}`);
+      return { success: true, _id: up._id, expirationDate: up.expirationDate };
+    } catch (error) {
+      console.error(`${TAG} \u274c actualizarPromoCard:`, error);
+      return { success: false, error: error.message };
+    }
+  }
+);
+
+export const prepararAvisoCaducidad = webMethod(
+  Permissions.SiteMember,
+  async ({ tipo, _id } = {}) => {
+    try {
+      if (!tipo || !_id) return { ok: false, error: 'Falta tipo o _id' };
+
+      let cfg = {};
+      try {
+        const cfgRes = await getSalonConfig();
+        cfg = (cfgRes && cfgRes.config) || {};
+      } catch (e) {
+        console.warn(`${TAG} \u26a0\ufe0f getSalonConfig en prepararAviso: ${e.message}`);
+      }
+
+      let tokens = {}, phone = '', email = '', clientName = '', textoField = '';
+
+      if (tipo === 'voucher') {
+        textoField = 'textVoucherAlert';
+        const reg = await wixData.get(CMS_VOUCHERS, _id, { suppressAuth: true });
+        if (!reg) return { ok: false, error: 'Bono no encontrado' };
+        clientName = reg.clientName || '';
+        const cont = await _resolverContacto(reg.contactId);
+        if (cont) { phone = cont.telefono || ''; email = cont.email || ''; if (!clientName) clientName = cont.nombreCompleto || cont.nombre || ''; }
+        tokens = {
+          '{cliente}': clientName,
+          '{bono}': reg.serviceLabel || '',
+          '{usos}': `${reg.remainingUses != null ? reg.remainingUses : 0} de ${reg.totalUses != null ? reg.totalUses : 0}`,
+          '{caducidad}': _fechaCorta(reg.expirationDate)
+        };
+      } else if (tipo === 'prime') {
+        textoField = 'textPrimeAlert';
+        const reg = await wixData.get(CMS_PRIME, _id, { suppressAuth: true });
+        if (!reg) return { ok: false, error: 'Membres\u00eda PRIME no encontrada' };
+        clientName = reg.clientName || '';
+        const cont = await _resolverContacto(reg.contactId);
+        if (cont) { phone = cont.telefono || ''; email = cont.email || ''; if (!clientName) clientName = cont.nombreCompleto || cont.nombre || ''; }
+        tokens = {
+          '{cliente}': clientName,
+          '{tarjeta}': reg.serviceLabel || reg.planLabel || 'Tarjeta PRIME',
+          '{caducidad}': _fechaCorta(reg.expirationDate)
+        };
+      } else if (tipo === 'promo') {
+        textoField = 'textCardAlert';
+        const reg = await wixData.get(CMS_PROMOCARDS, _id, { suppressAuth: true });
+        if (!reg) return { ok: false, error: 'Tarjeta promocional no encontrada' };
+        clientName = reg.buyerName || '';
+        phone = reg.buyerPhone || '';
+        email = reg.buyerEmail || '';
+        if ((!phone || !email || !clientName) && reg.buyerContactId) {
+          const cont = await _resolverContacto(reg.buyerContactId);
+          if (cont) { if (!phone) phone = cont.telefono || ''; if (!email) email = cont.email || ''; if (!clientName) clientName = cont.nombreCompleto || cont.nombre || ''; }
+        }
+        tokens = {
+          '{cliente}': clientName,
+          '{tarjeta}': reg.serviceLabel || '',
+          '{caducidad}': _fechaCorta(reg.expirationDate)
+        };
+      } else {
+        return { ok: false, error: `Tipo no v\u00e1lido: ${tipo}` };
+      }
+
+      const textFinal = _sustituirTokens(cfg[textoField] || '', tokens);
+      return { ok: true, textFinal, phone, email, clientName };
+    } catch (error) {
+      console.error(`${TAG} \u274c prepararAvisoCaducidad:`, error);
+      return { ok: false, error: error.message };
+    }
+  }
+);
 
 async function revocarRegistro(coleccion, id, etiqueta) {
   console.log(`${TAG} 🚫 revocar ${etiqueta}: ${id}`);
