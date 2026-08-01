@@ -1,8 +1,14 @@
 /* ═══════════════════════════════════════════════════════════════
-   salonConfigLogic.web.js  v1.0.7
+   salonConfigLogic.web.js  v1.0.8
    KAMISUITE — Backend de configuración de salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.8 · 1 Ago 2026 · LIMPIEZA — revertido v1.0.7. Quitados
+     arqueoActivo (de ALL_FIELDS y BOOLEAN_FIELDS) y fondoCajaFijo (de
+     ALL_FIELDS y NUMBER_FIELDS): eran campos del enfoque descartado del
+     arqueo. El fondo inicial se resuelve solo con el arrastre
+     (cashRegisterLogic v1.1.3, sin leer SalonConfig). Recomendado borrar
+     también esos 2 campos del CMS SalonConfig. Otros 43 campos intactos.
    v1.0.7 · 1 Ago 2026 · Arqueo de caja: fondoCajaFijo + arqueoActivo
      - ALL_FIELDS     += fondoCajaFijo, arqueoActivo
      - NUMBER_FIELDS  += fondoCajaFijo
@@ -105,7 +111,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[SalonConfig v1.0.7]';
+const TAG = '[SalonConfig v1.0.8]';
 const COLLECTION = 'SalonConfig';
 
 // ── Lista completa de field IDs (53 user fields) ──
@@ -167,9 +173,6 @@ const ALL_FIELDS = [
   'wixAnclaId',
   // v1.0.6 — Margen extensión horario (min) para reservas ONLINE
   'closingGraceMin',
-  // v1.0.7 — Arqueo de caja (módulo opcional)
-  'arqueoActivo',
-  'fondoCajaFijo'
 ];
 
 // ── Campos booleanos (para parseo correcto) ──
@@ -181,8 +184,6 @@ const BOOLEAN_FIELDS = [
   'whatsappPro',
   // v1.0.3 — toggle del sistema de login de Recepción
   'usersActivation',
-  // v1.0.7 — toggle del módulo de arqueo/cierre de caja
-  'arqueoActivo'
 ];
 
 // ── Campos numéricos ──
@@ -208,10 +209,6 @@ const NUMBER_FIELDS = [
   // v1.0.6 — margen extensión horario (min) para reservas ONLINE.
   // Aplicado por widgetPublicoLogic.web.js v0.8.0. Vacío/null → 0.
   'closingGraceMin',
-  // v1.0.7 — fondo fijo de caja diario (€). Leído por
-  // cashRegisterLogic.getFondoSugerido como prioridad 1. Vacío/null → 0
-  // (interpretado como "sin fondo fijo → arrastrar cierre anterior").
-  'fondoCajaFijo'
 ];
 
 /**
