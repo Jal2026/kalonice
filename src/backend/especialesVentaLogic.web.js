@@ -1,8 +1,8 @@
 // =====================================================
 // KAMISUITE - Venta manual de ESPECIALES (PRIME · Bonos · Tarjetas) - Backend
 // =====================================================
-// VERSION: 1.0.0
-// FECHA:   31 de julio de 2026
+// VERSION: 1.0.1
+// FECHA:   31 de julio de 2026 (v1.0.1: 2 de agosto de 2026)
 // ARCHIVO: backend/especialesVentaLogic.web.js
 //
 // PROPÓSITO
@@ -41,6 +41,18 @@
 //   PaymentReservations (cobro).
 //
 // CHANGELOG
+// v1.0.1 - DESCUENTO MANUAL DEL OPERADOR (regalar/descontar en la venta).
+//          Los tres métodos aceptan `importeNeto` + `descripcionExtra`
+//          opcionales (mismo contrato que recepcionProLogic.marcarPagadoReserva
+//          v1.0.4: el widget manda el NETO ya calculado y el token
+//          "🏷️ Descuento -X% (-Y€)"). Defensa final: `importeNeto` se
+//          CLAMPA a [0 … precioBase] en backend (helper resolverImporteFinal).
+//          El neto va a PaymentReservations.importeTotal (→ cierre) y a
+//          `paidPrice` del registro emitido (→ Observatorio muestra el valor
+//          real). `retailPrice` y `appliedDiscount` INTACTOS (bruto / % de
+//          catálogo histórico). Con descuento 100% (neto 0) = "regalar":
+//          ningún guard de precio lo bloquea (guardan el base, no el neto).
+//          Sin `importeNeto` → comportamiento idéntico a v1.0.0.
 // v1.0.0 - Versión inicial. emitirBonoManual (con candado PRIME),
 //          emitirPrimeManual (con flag de club), emitirTarjetaManual.
 // =====================================================
@@ -50,7 +62,7 @@ import wixData from 'wix-data';
 import { contacts } from 'wix-crm-backend';
 import { elevate } from 'wix-auth';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const TAG = `[EspecialesVenta][${VERSION}]`;
 
 const CMS_PRIME       = 'KamisuitePrimeMemberships';
@@ -297,6 +309,26 @@ async function registrarCobroEspecial({ recordId, contactId, clientName, descrip
   }
 }
 
+// v1.0.1 — DESCUENTO MANUAL. El widget envía el NETO ya calculado (patrón de
+// marcarPagadoReserva). Aquí NO se recomputa el descuento: solo se valida.
+// DEFENSA FINAL del backend: si llega un importeNeto válido se clampa a
+// [0 … base]; si no llega (o es inválido/negativo) se devuelve el base, con lo
+// que el comportamiento es idéntico al de v1.0.0. Devuelve el importe a cobrar
+// (que además se graba como paidPrice del registro).
+function resolverImporteFinal(base, importeNeto) {
+  const b = Math.round((Number(base) || 0) * 100) / 100;
+  if (typeof importeNeto !== 'number' || !Number.isFinite(importeNeto) || importeNeto < 0) return b;
+  return Math.min(b, Math.round(importeNeto * 100) / 100);
+}
+
+// v1.0.1 — Concatena el token de descuento ("🏷️ Descuento -X% (-Y€)") a la
+// descripción del cobro, igual que hace el cobro normal, para que el Cierre lo
+// recoja en su sección "Descuentos aplicados". Si no hay token, no cambia nada.
+function componerDescripcion(descripcionBase, descripcionExtra) {
+  const extra = String(descripcionExtra || '').trim();
+  return extra ? `${descripcionBase} · ${extra}` : descripcionBase;
+}
+
 // =====================================================
 // 1. EMITIR BONO A MANO  (con candado PRIME)
 // =====================================================
@@ -320,7 +352,9 @@ export const emitirBonoManual = webMethod(
       serviceSetupUid,
       varianteIdx,
       metodoPago,
-      desglosemetodopago
+      desglosemetodopago,
+      importeNeto,          // v1.0.1 — neto ya calculado por el widget (opcional)
+      descripcionExtra      // v1.0.1 — token "🏷️ Descuento -X% (-Y€)" (opcional)
     } = payload || {};
 
     try {
@@ -417,6 +451,12 @@ export const emitirBonoManual = webMethod(
       const now = new Date();
       const expirationDate = (validityDays > 0) ? sumarDias(now, validityDays) : sumarMeses(now, validityMonths);
 
+      // v1.0.1 — Descuento manual del operador: el importe realmente cobrado es
+      // el neto (clampado). `paidPrice` refleja lo que el cliente pagó (→
+      // Observatorio). `retailPrice` (bruto) y `appliedDiscount` (% de catálogo)
+      // se mantienen como metadatos históricos, sin tocar.
+      const importeFinal = resolverImporteFinal(precioBono, importeNeto);
+
       // Emitir la fila directamente en ACTIVO (sin PENDING/Wix Pay).
       const registro = {
         code,
@@ -425,7 +465,7 @@ export const emitirBonoManual = webMethod(
         serviceSetupUid: serviceUid,
         serviceLabel: serviceLabelFinal,
         retailPrice: precioBruto,
-        paidPrice: precioBono,
+        paidPrice: importeFinal,
         appliedDiscount: descuento,
         totalUses: numero,
         remainingUses: numero,
@@ -442,14 +482,19 @@ export const emitirBonoManual = webMethod(
       const inserted = await wixData.insert(CMS_VOUCHERS, registro, { suppressAuth: true });
       console.log(`${TAG} ✅ Bono ACTIVO emitido a mano: ${inserted._id} (code=${code}) | ${precioBono}€`);
 
-      // Registrar el cobro presencial.
-      const descripcion = `🎟️ Bono · ${serviceLabelFinal} (${numero} usos) · ${precioBono}€`;
+      // Registrar el cobro presencial. La descripción base muestra el precio del
+      // bono; si hubo descuento manual se concatena el token y el importe cobrado
+      // es el neto (mismo criterio que el cobro normal).
+      const descripcion = componerDescripcion(
+        `🎟️ Bono · ${serviceLabelFinal} (${numero} usos) · ${precioBono}€`,
+        descripcionExtra
+      );
       const pagoId = await registrarCobroEspecial({
         recordId: inserted._id,
         contactId: safeContactId,
         clientName: safeClientName,
         descripcion,
-        importe: precioBono,
+        importe: importeFinal,
         metodoPago,
         desglosemetodopago
       });
@@ -470,7 +515,7 @@ export const emitirBonoManual = webMethod(
         serviceLabel: serviceLabelFinal,
         totalUses: numero,
         remainingUses: numero,
-        precio: precioBono,
+        precio: importeFinal,
         expirationDate: expirationDate,
         paymentReservationId: pagoId || ''
       };
@@ -499,7 +544,8 @@ export const emitirBonoManual = webMethod(
 export const emitirPrimeManual = webMethod(
   Permissions.SiteMember,
   async (payload) => {
-    const { contactId, clientName, buyerEmail, buyerPhone, metodoPago, desglosemetodopago } = payload || {};
+    const { contactId, clientName, buyerEmail, buyerPhone, metodoPago, desglosemetodopago,
+      importeNeto, descripcionExtra } = payload || {};   // v1.0.1 — descuento manual (opcional)
 
     try {
       const safeContactId = String(contactId || '').trim();
@@ -530,6 +576,9 @@ export const emitirPrimeManual = webMethod(
       const now = new Date();
       const expirationDate = sumarMeses(now, durationMonths);
 
+      // v1.0.1 — Descuento manual: paidPrice = neto realmente cobrado (clampado).
+      const importeFinal = resolverImporteFinal(annualPrice, importeNeto);
+
       const registro = {
         code,
         contactId: safeContactId,
@@ -538,7 +587,7 @@ export const emitirPrimeManual = webMethod(
         buyerPhone: String(buyerPhone || '').trim(),
         issueDate: now,
         expirationDate: expirationDate,
-        paidPrice: annualPrice,
+        paidPrice: importeFinal,
         paymentMethod: metodoPago || 'Efectivo',
         paymentId: '',
         paymentReservationId: '',
@@ -553,14 +602,17 @@ export const emitirPrimeManual = webMethod(
       // Activar el flag de club en Wix Contacts (no bloqueante).
       await setClubFlag(safeContactId, true);
 
-      // Registrar el cobro presencial.
-      const descripcion = `⭐ Tarjeta PRIME · ${safeClientName} · ${annualPrice}€`;
+      // Registrar el cobro presencial (neto + token de descuento si lo hubo).
+      const descripcion = componerDescripcion(
+        `⭐ Tarjeta PRIME · ${safeClientName} · ${annualPrice}€`,
+        descripcionExtra
+      );
       const pagoId = await registrarCobroEspecial({
         recordId: inserted._id,
         contactId: safeContactId,
         clientName: safeClientName,
         descripcion,
-        importe: annualPrice,
+        importe: importeFinal,
         metodoPago,
         desglosemetodopago
       });
@@ -577,7 +629,7 @@ export const emitirPrimeManual = webMethod(
         tipo: 'prime',
         membershipId: inserted._id,
         code,
-        precio: annualPrice,
+        precio: importeFinal,
         expirationDate: expirationDate,
         paymentReservationId: pagoId || ''
       };
@@ -614,7 +666,8 @@ export const emitirTarjetaManual = webMethod(
       contactId, clientName, campaignId,
       buyerEmail, buyerPhone,
       isGift, recipientName, recipientEmail, recipientMessage,
-      metodoPago, desglosemetodopago
+      metodoPago, desglosemetodopago,
+      importeNeto, descripcionExtra   // v1.0.1 — descuento manual (opcional)
     } = payload || {};
 
     try {
@@ -653,13 +706,17 @@ export const emitirTarjetaManual = webMethod(
       const now = new Date();
       const expirationDate = campaign.endDate ? new Date(campaign.endDate) : null;
 
+      // v1.0.1 — Descuento manual: paidPrice = neto realmente cobrado (clampado).
+      // retailPrice (precio de mercado de la campaña) se mantiene intacto.
+      const importeFinal = resolverImporteFinal(promoPrice, importeNeto);
+
       const registro = {
         code,
         promoTypeId: campaign._id,
         serviceSetupUid: campaign.serviceSetupUid || '',
         serviceLabel: campaign.serviceLabel || '',
         retailPrice: (typeof campaign.retailPrice === 'number') ? campaign.retailPrice : 0,
-        paidPrice: promoPrice,
+        paidPrice: importeFinal,
         buyerName: safeClientName,
         buyerEmail: String(buyerEmail || '').trim(),
         buyerPhone: String(buyerPhone || '').trim(),
@@ -679,15 +736,18 @@ export const emitirTarjetaManual = webMethod(
       const inserted = await wixData.insert(CMS_PROMOCARDS, registro, { suppressAuth: true });
       console.log(`${TAG} ✅ Tarjeta EMITIDA a mano: ${inserted._id} (code=${code}) | ${promoPrice}€`);
 
-      // Registrar el cobro presencial.
+      // Registrar el cobro presencial (neto + token de descuento si lo hubo).
       const etiqueta = campaign.serviceLabel || campaign.name || 'Tarjeta';
-      const descripcion = `🎁 Tarjeta · ${etiqueta}${esRegalo ? ' (regalo)' : ''} · ${promoPrice}€`;
+      const descripcion = componerDescripcion(
+        `🎁 Tarjeta · ${etiqueta}${esRegalo ? ' (regalo)' : ''} · ${promoPrice}€`,
+        descripcionExtra
+      );
       const pagoId = await registrarCobroEspecial({
         recordId: inserted._id,
         contactId: safeContactId,
         clientName: safeClientName,
         descripcion,
-        importe: promoPrice,
+        importe: importeFinal,
         metodoPago,
         desglosemetodopago
       });
@@ -705,7 +765,7 @@ export const emitirTarjetaManual = webMethod(
         promoCardId: inserted._id,
         code,
         serviceLabel: campaign.serviceLabel || '',
-        precio: promoPrice,
+        precio: importeFinal,
         isGift: esRegalo,
         expirationDate: expirationDate,
         paymentReservationId: pagoId || ''
