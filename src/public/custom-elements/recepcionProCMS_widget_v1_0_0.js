@@ -1,9 +1,20 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.74  ·  Evidencia "Arqueo guardado" bajo el botón
- * FECHA: 1 de agosto de 2026
+ * VERSION: 1.1.75  ·  Descuento manual en ESPECIALES (regalar/descontar)
+ * FECHA: 1 de agosto de 2026 (v1.1.75: 2 de agosto de 2026)
  * ---------------------------------------------------------------------
+ * v1.1.75 (2 ago 2026) — DESCUENTO MANUAL en el modal ESPECIALES (venta
+ *   manual de PRIME/Bono/Tarjeta). Reutiliza LITERAL el patrón %/€ del
+ *   cobro normal (misma card .ks-disc-*, misma lógica que _calcDescuento,
+ *   mismo token "🏷️ Descuento -X% (-Y€)"). La card solo se pinta cuando
+ *   hay un producto elegido con precio > 0. Aplica sobre _espPrecioActual()
+ *   (vale igual en las tres pestañas). El botón "Emitir y cobrar" muestra
+ *   el NETO. En _espEmitir, si hay descuento, se añaden al payload
+ *   `importeNeto` (neto ya calculado) + `descripcionExtra` (token). El
+ *   backend especialesVentaLogic v1.0.1 los graba en importeTotal (cierre)
+ *   y paidPrice (Observatorio). Con 100% (o € = precio) el neto queda a 0 =
+ *   "regalar". Cambio aislado a la zona ESPECIALES; nada más se toca.
  * v1.1.74 (1 ago 2026) — Evidencia persistente "✓ Arqueo guardado"
  *   debajo del botón Guardar arqueo. Antes solo había un toast fugaz y
  *   el botón quedaba activo, sin señal de que el guardado había ido
@@ -1257,7 +1268,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.74]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.75]';
 
   // ─── helpers ───
   function esc(s) {
@@ -7127,6 +7138,10 @@ button { font-family: inherit; cursor: pointer; }
       this._espMetodo = 'Efectivo';
       this._espEmitiendo = false;
       this._espMsg = null;
+      // v1.1.75 — descuento manual del operador (mismo modelo que el cobro normal)
+      this._espDisc = 0;
+      this._espDiscMode = 'pct';
+      this._espDiscOpen = false;
       const root = this.shadowRoot;
       root.getElementById('espScrim')?.remove();
       const scrim = document.createElement('div');
@@ -7225,6 +7240,41 @@ button { font-family: inherit; cursor: pointer; }
         .map(m => `<button class="esp-paybtn${this._espMetodo === m ? ' active' : ''}" data-m="${m}">${m}</button>`).join('');
       const puede = this._espPuedeEmitir();
 
+      // v1.1.75 — Card de descuento manual (misma UI %/€ que el cobro normal,
+      // clases .ks-disc-*). Solo cuando hay producto elegido con precio > 0.
+      const _disc = this._espCalcDescuento();
+      const hayDesc = _disc.discEur > 0;
+      const precioNeto = _disc.neto;
+      let discHTML = '';
+      if (precio > 0) {
+        let inner;
+        if (this._espDisc > 0 || this._espDiscOpen) {
+          const mode = this._espDiscMode || 'pct';
+          const maxAttr = mode === 'eur' ? '' : 'max="100"';
+          const stepAttr = mode === 'eur' ? 'step="0.01"' : 'step="1"';
+          const unit = mode === 'eur' ? '€' : '%';
+          inner = `<div class="ks-disc-row">
+            <span class="ks-disc-lbl">🏷 Descuento</span>
+            <div class="ks-disc-mode">
+              <button class="ks-disc-mbtn ${mode === 'pct' ? 'sel' : ''}" data-espmode="pct" title="Porcentaje">%</button>
+              <button class="ks-disc-mbtn ${mode === 'eur' ? 'sel' : ''}" data-espmode="eur" title="Importe en euros">€</button>
+            </div>
+            <div class="ks-disc-input">
+              <input id="espDiscInput" type="number" min="0" ${maxAttr} ${stepAttr} value="${this._espDisc || ''}" placeholder="0">
+              <span>${unit}</span>
+            </div>
+            <button class="ks-disc-clear" id="espDiscClear">✕</button>
+          </div>`;
+        } else {
+          inner = `<button class="ks-disc-toggle" id="espDiscToggle">＋ Aplicar descuento</button>`;
+        }
+        const resLine = `<div id="espDiscResult" style="margin-top:8px;font-size:12px;color:var(--ks-ink2)">${hayDesc ? `Cobrará <b style="color:var(--ks-ink)">${precioNeto}€</b> · antes <span style="text-decoration:line-through">${precio}€</span>` : ''}</div>`;
+        discHTML = `<div class="esp-sec"><span class="esp-eyebrow">Descuento (opcional)</span>${inner}${resLine}</div>`;
+      }
+      const emitLabel = this._espEmitiendo
+        ? 'Emitiendo…'
+        : (precio > 0 ? `Emitir y cobrar · ${hayDesc ? precioNeto : precio}€` : 'Emitir y cobrar');
+
       scrim.innerHTML = `<div class="esp-modal">
         <div class="esp-head"><span class="esp-title">✦ ESPECIALES · Venta manual</span><button class="esp-x" id="espX">✕</button></div>
         <div class="esp-body">
@@ -7238,8 +7288,9 @@ button { font-family: inherit; cursor: pointer; }
             ${prodHTML}
           </div>
           <div class="esp-sec"><span class="esp-eyebrow">Método de pago</span><div class="esp-pay">${payHTML}</div></div>
+          ${discHTML}
           ${this._espMsg ? `<div class="esp-notice ${this._espMsg.tipo}"><span>${esc(this._espMsg.texto)}</span>${this._espMsg.accion ? `<button class="esp-notice-act" id="espMsgAct">${esc(this._espMsg.accion.label)}</button>` : ''}</div>` : ''}
-          <button class="esp-emit" id="espEmit"${puede ? '' : ' disabled'}>${this._espEmitiendo ? 'Emitiendo…' : `Emitir y cobrar${precio > 0 ? ` · ${precio}€` : ''}`}</button>
+          <button class="esp-emit" id="espEmit"${puede ? '' : ' disabled'}>${emitLabel}</button>
         </div>
       </div>`;
       this._espRewire();
@@ -7278,6 +7329,28 @@ button { font-family: inherit; cursor: pointer; }
       scrim.querySelectorAll('.esp-paybtn').forEach(b => b.addEventListener('click', () => {
         this._espMetodo = b.getAttribute('data-m'); this._renderEsp();
       }));
+
+      // v1.1.75 — Descuento manual. Input: actualización en sitio (sin re-render,
+      // para no perder el foco). Modo/toggle/limpiar: re-render completo.
+      const espDiscInput = $('espDiscInput');
+      if (espDiscInput) {
+        espDiscInput.addEventListener('input', e => {
+          let v = parseFloat(e.target.value) || 0;
+          if (v < 0) v = 0;
+          if (this._espDiscMode === 'pct' && v > 100) v = 100;
+          this._espDisc = v;
+          this._espUpdateEmit();
+        });
+      }
+      scrim.querySelectorAll('.ks-disc-mbtn[data-espmode]').forEach(b => b.addEventListener('click', () => {
+        const nuevo = b.getAttribute('data-espmode');
+        if (nuevo === this._espDiscMode) return;
+        this._espDiscMode = nuevo;
+        if (nuevo === 'pct' && this._espDisc > 100) this._espDisc = 100;
+        this._renderEsp();
+      }));
+      $('espDiscToggle') && $('espDiscToggle').addEventListener('click', () => { this._espDiscOpen = true; this._renderEsp(); });
+      $('espDiscClear') && $('espDiscClear').addEventListener('click', () => { this._espDisc = 0; this._espDiscOpen = false; this._espDiscMode = 'pct'; this._renderEsp(); });
 
       $('espMsgAct') && $('espMsgAct').addEventListener('click', () => {
         const a = this._espMsg && this._espMsg.accion;
@@ -7352,6 +7425,45 @@ button { font-family: inherit; cursor: pointer; }
       return 0;
     }
 
+    // v1.1.75 — Descuento manual del operador. Calcado de _calcDescuento (cobro
+    // normal) pero sobre el precio de la pestaña activa (sin promo encadenada:
+    // ESPECIALES no tiene descuento promocional de servicio). Modo % o €.
+    _espCalcDescuento() {
+      const subtotal = Math.round((this._espPrecioActual() || 0) * 100) / 100;
+      const v = Math.max(0, Number(this._espDisc) || 0);
+      let discEur, discPct;
+      if (this._espDiscMode === 'eur') {
+        discEur = Math.min(v, subtotal);                                   // no más que el subtotal
+        discPct = subtotal > 0 ? Math.round((discEur / subtotal) * 10000) / 100 : 0;
+      } else {
+        discPct = Math.min(100, v);
+        discEur = Math.round(subtotal * discPct) / 100;
+      }
+      const neto = Math.max(0, Math.round((subtotal - discEur) * 100) / 100);
+      return { subtotal, discPct, discEur, neto };
+    }
+
+    // v1.1.75 — Actualiza SOLO el botón y la línea de resultado sin re-render
+    // (para no perder el foco del input mientras se teclea el descuento),
+    // igual que _updateTotal hace en el cobro normal.
+    _espUpdateEmit() {
+      const scrim = this.shadowRoot.getElementById('espScrim');
+      if (!scrim) return;
+      const precio = this._espPrecioActual();
+      const { discEur, neto } = this._espCalcDescuento();
+      const hayDesc = discEur > 0;
+      const btn = scrim.querySelector('#espEmit');
+      if (btn && !this._espEmitiendo) {
+        btn.innerHTML = precio > 0 ? `Emitir y cobrar · ${hayDesc ? neto : precio}€` : 'Emitir y cobrar';
+      }
+      const res = scrim.querySelector('#espDiscResult');
+      if (res) {
+        res.innerHTML = hayDesc
+          ? `Cobrará <b style="color:var(--ks-ink)">${neto}€</b> · antes <span style="text-decoration:line-through">${precio}€</span>`
+          : '';
+      }
+    }
+
     _espPuedeEmitir() {
       if (this._espEmitiendo) return false;
       if (!this._espCliente || !this._espCliente.contactId) return false;
@@ -7366,6 +7478,15 @@ button { font-family: inherit; cursor: pointer; }
       this._espMsg = null;
       const cli = this._espCliente;
       const base = { contactId: cli.contactId, clientName: cli.nombre, buyerEmail: cli.email || '', buyerPhone: cli.telefono || '', metodoPago: this._espMetodo };
+      // v1.1.75 — Descuento manual: se manda el NETO ya calculado + el token
+      // (mismo formato exacto que el cobro normal). El backend clampa a [0..base].
+      const { discPct, discEur, neto } = this._espCalcDescuento();
+      if (discEur > 0) {
+        base.importeNeto = neto;
+        base.descripcionExtra = this._espDiscMode === 'eur'
+          ? `🏷️ Descuento -${discEur}€`
+          : `🏷️ Descuento -${discPct}% (-${discEur}€)`;
+      }
       const scrim = this.shadowRoot.getElementById('espScrim');
 
       if (this._espTab === 'prime') {
