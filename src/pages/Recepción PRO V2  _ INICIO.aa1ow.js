@@ -1,10 +1,22 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.33
+// VERSION: 1.0.34
 // FECHA: 1 de agosto de 2026
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
 //
+// v1.0.34: + POPUP ALMACÉN (widget v1.1.76). Import de listarConsumibles,
+//          tirarPapelera y registrarMovimiento (con alias
+//          registrarMovimientoStock, porque registrarMovimiento ya está
+//          ocupado por los movimientos de CAJA de cashRegisterLogic) de
+//          stockLogic.web v1.0.2.
+//          Tres handlers y tres cases nuevos:
+//            'getAlmacenConsumibles' → 'almacenData'
+//            'almacenPapelera'       → 'almacenAccion'  (bote terminado)
+//            'almacenSacar'          → 'almacenAccion'  (APERTURA_MANUAL)
+//          Ninguna de las dos acciones relee la lista: el widget se
+//          actualiza con los contadores que devuelve el backend.
+//          Cambio ADITIVO: no se toca ningún handler existente.
 // v1.0.33: + Fondo inicial EDITABLE desde el arqueo. Import
 //          setOpeningBalance de cashRegisterLogic v1.1.1. Handler
 //          handleCajaSetFondo (mensaje 'caja-set-fondo' → responde
@@ -467,7 +479,17 @@ import {
 // existente en salonConfigLogic.web.js (Permissions.SiteMember). NO se toca.
 import { getSalonConfig } from 'backend/salonConfigLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.33]';
+// v1.0.34 — Almacén de uso en salón (popup de la papelera)
+// OJO: registrarMovimiento ya está importado de cashRegisterLogic para
+// los movimientos de CAJA. Aquí se trae con alias para no colisionar ni
+// tocar nada de lo existente.
+import {
+  listarConsumibles,
+  tirarPapelera,
+  registrarMovimiento as registrarMovimientoStock
+} from 'backend/stockLogic.web';
+
+const TAG = '[RecepcionProCMS v1.0.34]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -611,6 +633,62 @@ async function handleGetEspecialesData() {
   } catch (e) {
     console.error(`${TAG} ❌ getEspecialesData:`, e);
     sendResponse('especialesData', { config: null, servicios: [], campaigns: [], error: e?.message || 'Error' });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// v1.0.34 — ALMACÉN (popup de consumo en la barra superior)
+// ═══════════════════════════════════════════════════════════
+
+async function handleAlmacenConsumibles() {
+  try {
+    const r = await listarConsumibles();
+    sendResponse('almacenData', {
+      productos: (r && r.ok) ? (r.productos || []) : [],
+      error: (r && r.ok) ? null : (r?.error || 'No se pudo leer el almacén')
+    });
+  } catch (e) {
+    console.error(`${TAG} ❌ almacenConsumibles:`, e);
+    sendResponse('almacenData', { productos: [], error: e?.message || 'Error' });
+  }
+}
+
+// Bote terminado: el almacén descuenta uno cerrado y abre el siguiente.
+async function handleAlmacenPapelera(msg) {
+  const payload = msg.payload || {};
+  try {
+    const data = await tirarPapelera(payload);
+    sendResponse('almacenAccion', { data, productId: payload.productId });
+  } catch (e) {
+    console.error(`${TAG} ❌ almacenPapelera:`, e);
+    sendResponse('almacenAccion', {
+      data: { ok: false, productId: payload.productId, error: e?.message || 'Error' },
+      productId: payload.productId
+    });
+  }
+}
+
+// Sacar un bote del almacén para empezarlo, sin tirar ninguno.
+// Es un movimiento APERTURA · APERTURA_MANUAL: el total no cambia,
+// una unidad pasa de cerrada a en uso.
+async function handleAlmacenSacar(msg) {
+  const payload = msg.payload || {};
+  try {
+    const data = await registrarMovimientoStock({
+      productId: payload.productId,
+      moveType: 'APERTURA',
+      reason: 'APERTURA_MANUAL',
+      quantity: 1,
+      staffId: payload.staffId || '',
+      staffName: payload.staffName || ''
+    });
+    sendResponse('almacenAccion', { data, productId: payload.productId });
+  } catch (e) {
+    console.error(`${TAG} ❌ almacenSacar:`, e);
+    sendResponse('almacenAccion', {
+      data: { ok: false, productId: payload.productId, error: e?.message || 'Error' },
+      productId: payload.productId
+    });
   }
 }
 
@@ -1630,6 +1708,10 @@ $w.onReady(function () {
         case 'staffLogin':           handleStaffLogin(); break;
         case 'validatePin':          handleValidatePin(msg); break;
         case 'logEvent':             handleLogEvent(msg); break;
+        // v1.0.34 — popup ALMACÉN
+        case 'getAlmacenConsumibles': handleAlmacenConsumibles(); break;
+        case 'almacenPapelera':       handleAlmacenPapelera(msg); break;
+        case 'almacenSacar':          handleAlmacenSacar(msg); break;
         default: console.warn(`${TAG} ⚠️ Tipo desconocido: ${msg.type}`);
       }
     } catch (err) {
