@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE — Page Code: Gestión de Almacén
 // ARCHIVO: pagecode_almacen.js
-// VERSION: 2.0.0
+// VERSION: 2.1.0
 // FECHA:   2 de agosto de 2026
 // Página:  Recepción | Almacén
 // Elemento HTML: #widgetAlmacen  (HtmlComponent)
@@ -33,13 +33,17 @@
 //   historico          → { productId }
 //   cargar-tienda      → productos de Wix Stores para el traspaso
 //   traspasar          → { storesProductId, cantidad, ... }
+//   exportar-excel     → pedir el .xlsx del almacén
 //
 // MENSAJES QUE ENVIAMOS AL WIDGET
 //   login-config, pin-result, data, producto-guardado,
 //   producto-eliminado, imagen-ok, movimiento-ok, papelera-ok,
-//   historico, tienda, traspaso-ok, error
+//   historico, tienda, traspaso-ok, excel, error
 //
 // CHANGELOG
+// v2.1.0 (2 ago 2026): + handler exportar-excel → stockLogic.exportarExcel.
+//         El fichero viaja en base64 y lo descarga el widget. Mismo
+//         contrato que testCheckout.generarExcel.
 // v2.0.0 (2 ago 2026): reescrito sobre stockLogic + capa de login PIN.
 // =====================================================
 
@@ -53,7 +57,8 @@ import {
   historicoProducto,
   listarProductosTienda,
   traspasarDesdeTienda,
-  movimientosRecientes
+  movimientosRecientes,
+  exportarExcel
 } from 'backend/stockLogic.web';
 
 import {
@@ -62,7 +67,7 @@ import {
   validateLoginPin
 } from 'backend/recepcionAccessLogic.web';
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const TAG = `[AlmacenPage][${VERSION}]`;
 
 $w.onReady(function () {
@@ -86,6 +91,7 @@ $w.onReady(function () {
       case 'historico':         await historicoHandler(msg.payload); break;
       case 'cargar-tienda':     await tiendaHandler(); break;
       case 'traspasar':         await traspasoHandler(msg.payload); break;
+      case 'exportar-excel':    await excelHandler(); break;
       default: break;
     }
   });
@@ -300,6 +306,28 @@ $w.onReady(function () {
       widget.postMessage({ type: 'tienda', payload: { productos: res.productos || [] } });
     } catch (e) {
       console.error(`${TAG} ❌ tiendaHandler:`, e);
+      widget.postMessage({ type: 'error', message: e.message || String(e) });
+    }
+  }
+
+  async function excelHandler() {
+    try {
+      const res = await exportarExcel();
+      if (!res || !res.ok) {
+        widget.postMessage({ type: 'error', message: res?.error || 'Error generando el Excel' });
+        return;
+      }
+      widget.postMessage({
+        type: 'excel',
+        payload: {
+          archivo: res.archivo,
+          nombreArchivo: res.nombreArchivo,
+          mimeType: res.mimeType,
+          totalRegistros: res.totalRegistros
+        }
+      });
+    } catch (e) {
+      console.error(`${TAG} ❌ excelHandler:`, e);
       widget.postMessage({ type: 'error', message: e.message || String(e) });
     }
   }
