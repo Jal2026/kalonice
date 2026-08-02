@@ -1,8 +1,20 @@
 // =====================================================
 // KAMISUITE - Bonos (Página Pública) Backend
 // =====================================================
-// VERSION: 1.1.0
-// FECHA: 30 de julio de 2026
+// VERSION: 1.2.0
+// FECHA: 2 de agosto de 2026
+//
+// v1.2.0: 🏷️ PLAZO DE USO Y FRECUENCIA EN EL DETALLE DEL BONO (widget).
+//   · getVoucherCatalog AÑADE al objeto de cada bono tres campos de solo
+//     lectura para que el widget muestre en el DETALLE (no en la card) el
+//     plazo de uso y la frecuencia: bonusValidityDays (días; 0 = usar el
+//     global), bonusUseIntervalDays (días entre usos; 0 = USO LIBRE) y
+//     globalValidityMonths (fallback en meses de KamisuiteProductsConfig).
+//   · Criterio EXACTO de confirmVoucherPayment v1.1.0: si bonusValidityDays
+//     > 0 manda (días); si 0/vacío el plazo real es el global en meses. Así
+//     el detalle enseña lo mismo que se sella al emitir el bono.
+//   · Sin cambios en emisión, variantes, precios ni ninguna otra función.
+//     Solo se AÑADEN campos al shape de getVoucherCatalog (no se quita nada).
 //
 // v1.1.0: 📆 CADUCIDAD Y FRECUENCIA POR SERVICIO (en días).
 //   · Caducidad del bono en DÍAS naturales desde la emisión, definida
@@ -168,6 +180,8 @@
 // v1.0.2 - Soporte de variantes: 1 card por servicio con array
 //          variantes[] para chips en el widget; voucherKey compuesta;
 //          serviceLabel con sufijo " · <variante>".
+// v1.2.0 - getVoucherCatalog expone bonusValidityDays, bonusUseIntervalDays
+//          y globalValidityMonths (solo lectura) para el detalle del bono.
 // v1.1.0 - Caducidad por servicio en DÍAS (ServiceCatalog.bonusValidityDays,
 //          con fallback a voucherValidityMonths global) + snapshot de la
 //          frecuencia mínima entre usos (bonusUseIntervalDays) en el bono
@@ -181,7 +195,7 @@ import { currentMember } from 'wix-members-backend';
 // v1.0.1 — F7: email triggered de confirmación de compra
 import { triggeredEmails } from 'wix-crm-backend';
 
-const TAG = '[VoucherPublic][1.0.2]';
+const TAG = '[VoucherPublic][1.2.0]';
 
 const CMS_CATALOG = 'ServiceCatalog';
 const CMS_CONFIG = 'KamisuiteProductsConfig';
@@ -434,11 +448,31 @@ export const getVoucherCatalog = webMethod(
       const conBono = items.filter(c => c.bonoActivo === true);
       console.log(`${TAG} 📊 Servicios con bonoActivo===true: ${conBono.length} / ${items.length}`);
 
+      // v1.2.0 — Plazo global (meses) leído UNA vez, para el fallback del
+      // plazo de uso cuando el servicio no define bonusValidityDays. Mismo
+      // origen que confirmVoucherPayment (KamisuiteProductsConfig).
+      let globalValidityMonths = 12;
+      try {
+        const cfgRes = await wixData.query(CMS_CONFIG).limit(1).find({ suppressAuth: true });
+        if (cfgRes.items.length > 0 && typeof cfgRes.items[0].voucherValidityMonths === 'number') {
+          globalValidityMonths = cfgRes.items[0].voucherValidityMonths;
+        }
+      } catch (_) {}
+
       const vouchers = conBono.map(c => {
         const setupUid = c.setupUid || c._id;
         const numero = (typeof c.bonoNumero === 'number') ? c.bonoNumero : 0;
         const descuento = (typeof c.bonoDescuento === 'number') ? c.bonoDescuento : 0;
         const baseLabel = c.label || '';
+
+        // v1.2.0 — Plazo de uso y frecuencia por servicio (solo lectura para
+        // el widget). Criterio idéntico a confirmVoucherPayment v1.1.0.
+        const bonusValidityDays = (typeof c.bonusValidityDays === 'number' && c.bonusValidityDays > 0)
+          ? Math.floor(c.bonusValidityDays)
+          : 0;   // 0 = usar plazo global en meses (globalValidityMonths)
+        const bonusUseIntervalDays = (typeof c.bonusUseIntervalDays === 'number' && c.bonusUseIntervalDays > 0)
+          ? Math.floor(c.bonusUseIntervalDays)
+          : 0;   // 0 = USO LIBRE
 
         // Detectar variantes válidas del servicio (mismo criterio que
         // aplicaremos también en createVoucherCheckout para consistencia).
@@ -491,7 +525,11 @@ export const getVoucherCatalog = webMethod(
           precioBono,
           voucherKey,
           hasVariants,
-          variantes: variantesOut
+          variantes: variantesOut,
+          // v1.2.0 — Plazo de uso y frecuencia (solo lectura) para el detalle.
+          bonusValidityDays,
+          bonusUseIntervalDays,
+          globalValidityMonths
         };
       });
 
