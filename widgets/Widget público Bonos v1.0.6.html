@@ -1,0 +1,1582 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KAMISUITE — Bonos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════
+   KAMISUITE — Widget público Bonos v1.0.6
+   F2.3 del módulo Productos Custom.
+
+   v1.0.6 (2 ago 2026):
+     · 🗂️ Catálogo ordenado ALFABÉTICAMENTE por group (categoría),
+       agrupando las cards en bloques. Se ordena una lista de índices
+       (no state.vouchers) para conservar el data-idx original del
+       click; desempate por label dentro del mismo grupo.
+     · ➖ LÍNEA DE SEPARACIÓN entre bloques de categoría: separador
+       full-width en el grid (.kp-group-sep, grid-column:1/-1) que se
+       inserta cada vez que cambia el group.
+
+   v1.0.5 (2 ago 2026):
+     · 🏷️ FIX categoría de la card del catálogo: se leía serviceFamily
+       (con fallback a serviceGroup); ahora lee SOLO serviceGroup, que
+       es el campo `group` de ServiceCatalog (la categoría correcta).
+       Sin fallback a family (mostraba el dato equivocado). Sin cambios
+       en backend: getVoucherCatalog ya enviaba serviceGroup = c.group.
+
+   v1.0.4 (2 ago 2026):
+     · 🏷️ DETALLE DEL BONO: la categoría (serviceFamily) del hero se
+       sustituye por el PLAZO DE USO y la FRECUENCIA del bono. La card
+       del catálogo NO cambia (sigue mostrando familia + usos).
+       - Plazo de uso: bonusValidityDays días si el servicio lo define
+         (>0); si no, el plazo global en meses (globalValidityMonths).
+       - Frecuencia: "cada N días" si bonusUseIntervalDays > 0; si 0/
+         vacío, "USO LIBRE".
+       Datos de solo lectura que envía voucherPublicLogic.web.js v1.2.0
+       en getVoucherCatalog (mismo criterio que la emisión del bono).
+       Nuevo bloque #custTerms (sustituye a #custFamily) + CSS
+       .kp-panel-hero-info .kp-hero-terms. Helper renderTerms().
+     · Cero cambios en la card del catálogo, variantes, precios, flujo
+       de compra, estados de vista, skins ni backend salvo el shape
+       ampliado de getVoucherCatalog.
+
+   v1.0.3 (3 jul 2026):
+     · 🔧 Selector de variante MOVIDO de la card al modal.
+       La card vuelve a ser una sola tarjeta por servicio con precio
+       "Desde X€" cuando hay variantes (o precio único cuando no).
+       El cliente entra al modal y ahí, entre el hero y el formulario,
+       ve el bloque "Elige tamaño" con los chips de variante. Al pulsar
+       un chip: el hero actualiza label y precio (con la variante), el
+       botón COMPRAR queda enlazado a esa variante y validarForm() lo
+       activa (si el resto del formulario está correcto).
+     · Cero cambios en el backend (voucherPublicLogic.web.js v1.0.2).
+     · Cero cambios en CSS (los chips .kp-chip / .kp-chip.is-sel /
+       .kp-chip.is-owned ya están definidos desde v1.0.2 y se reutilizan
+       en el modal sin modificaciones).
+     · Cero cambios estéticos fuera de mover los chips (mismo look,
+       mismo tono).
+
+   v1.0.2 (3 jul 2026):
+     · 🎚️ SOPORTE DE VARIANTES: UNA sola tarjeta por servicio con
+       CHIPS DE VARIANTE (M / L / XL...) dentro de la card. Al pulsar
+       una variante la card muestra su precio y se activa el enlace a
+       la compra. Si esa variante ya está comprada por el cliente, el
+       chip queda .is-owned (no clicable, con look verde) y al estar
+       seleccionado la card muestra el bloque de código+usos+vencimiento
+       (idéntico al comportamiento owned de v1.0.1, ahora por variante).
+
+       Añadidos al CSS existente al final del <style>: .kp-variantes
+       (contenedor flex de chips), .kp-chip (patrón visual clónico del
+       .kr-chip del bundle de reservas — mismos tokens --kr-*), estados
+       .kp-chip.is-sel y .kp-chip.is-owned.
+
+       Nuevo estado state.selectedVariantByCard = { <voucherIdx>:
+       <variantIdx> | null }. Se resetea tras purchaseSuccess.
+
+     · Sin variantes: comportamiento actual literal (una card, un
+       precio, click → viewCustomize).
+
+     · Cambios internos limpios: renderCatalog, seleccionarVoucher,
+       comprar y case 'alreadyHasVoucher'. Nueva función
+       seleccionarVariante(voucherIdx, variantIdx) que actualiza el
+       estado y repinta el catálogo.
+
+     Cero cambios estéticos en CSS existente, cero cambios en estados
+     de vista (viewLoading/Browse/Empty/Customize/Redirecting/Success/
+     Error), cero cambios en KR_SKINS, applySkin, mostrarSuccess,
+     showError, retry loop, header, footer, copy visible al usuario,
+     navegación PRIME. Cero cambios en el DOM (mismos ids).
+
+   v1.0.1 (27 jun 2026):
+     · 🩹 FIX navegación a /tarjetaprime. El botón "Hazte PRIME" del
+       banner primeGate usaba <a href="/tarjetaprime"> directo, lo
+       cual NO funciona dentro de un HTML Component de Wix (iframe
+       sandboxed). El click intentaba navegar DENTRO del iframe (que
+       corre en otro origin: *.htmlcomponentservice.com) → 403
+       Forbidden, sin propagar la navegación al sitio padre.
+       Cambio: <a href> sustituido por <button> + send('navigate',
+       {url:'/tarjetaprime'}) al page code, que llama wixLocation.to
+       (patrón ya en producción en clienteArea / agenda).
+
+   Tokens y skins reutilizados (kr-styles.js + kr-skins.js).
+   Defaults = "Niebla". El page code envía SalonConfig.widgetSkin.
+
+   - El catálogo muestra servicios con bonoActivo=true del
+     ServiceCatalog, con imagen del servicio convertida a URL pública.
+   - Comprar requiere Wix Member + PRIME activo (decisión A).
+   - Si ya hay un bono activo del mismo servicio: bloqueo con info
+     del bono (decisión C, sin acumular).
+   ═══════════════════════════════════════════════════ */
+
+:root {
+  --kr-bg:            oklch(98.6% 0.003 250);
+  --kr-surface:       oklch(100% 0 0);
+  --kr-surface-2:     oklch(97.4% 0.004 250);
+  --kr-inset:         oklch(96.2% 0.005 252);
+  --kr-line:          oklch(91% 0.006 252);
+  --kr-line-2:        oklch(84% 0.008 252);
+  --kr-ink:           oklch(30% 0.013 258);
+  --kr-ink-2:         oklch(48% 0.011 258);
+  --kr-ink-3:         oklch(64% 0.009 258);
+  --kr-accent:        oklch(40% 0.022 258);
+  --kr-accent-2:      oklch(33% 0.024 258);
+  --kr-accent-ink:    oklch(98.5% 0.003 250);
+  --kr-accent-soft:   oklch(93.5% 0.012 256);
+  --kr-accent-line:   oklch(62% 0.02 256);
+  --kr-focus:         oklch(58% 0.13 256);
+  --kr-danger:        oklch(55% 0.18 25);
+  --kr-danger-soft:   oklch(95% 0.035 28);
+  --kr-green-soft:    oklch(94% 0.05 152);
+  --kr-green:         oklch(53% 0.115 153);
+
+  --kr-font:          "Bai Jamjuree", ui-sans-serif, system-ui, sans-serif;
+  --kr-fs-eyebrow:    0.7rem;
+  --kr-fs-xs:         0.78rem;
+  --kr-fs-sm:         0.86rem;
+  --kr-fs-base:       0.94rem;
+  --kr-fs-md:         1.0rem;
+  --kr-fs-lg:         1.15rem;
+  --kr-fs-xl:         1.4rem;
+  --kr-w-medium:      500;
+  --kr-w-semi:        600;
+  --kr-w-bold:        700;
+
+  --kr-radius:        10px;
+  --kr-radius-sm:     max(4px, calc(var(--kr-radius) - 5px));
+  --kr-radius-lg:     calc(var(--kr-radius) + 4px);
+  --kr-radius-pill:   999px;
+  --kr-maxw:          900px;
+
+  --kr-shadow-1:      0 1px 2px oklch(40% 0.02 258 / .05), 0 1px 1px oklch(40% 0.02 258 / .04);
+  --kr-shadow-2:      0 14px 40px -18px oklch(40% 0.03 258 / .28), 0 2px 8px oklch(40% 0.02 258 / .06);
+  --kr-dur:           170ms;
+  --kr-ease:          cubic-bezier(.2,.7,.2,1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  font-family: var(--kr-font);
+  background: var(--kr-bg);
+  color: var(--kr-ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Header (alineado con content) ── */
+.kp-header {
+  background: var(--kr-surface);
+  border-bottom: 1px solid var(--kr-line);
+}
+.kp-header-inner {
+  max-width: var(--kr-maxw);
+  margin: 0 auto;
+  padding: 16px;
+}
+.kp-header-eyebrow {
+  font-size: var(--kr-fs-eyebrow);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--kr-ink-3);
+  font-weight: var(--kr-w-medium);
+  margin-bottom: 2px;
+}
+.kp-header-title {
+  font-size: var(--kr-fs-lg);
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-ink);
+  letter-spacing: -0.015em;
+}
+.kp-header-brand {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-3);
+  font-weight: var(--kr-w-medium);
+  margin-top: 2px;
+}
+.kp-header-brand:empty { display: none; }
+
+.kp-back {
+  background: transparent;
+  border: 1px solid var(--kr-line);
+  color: var(--kr-ink-2);
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--kr-fs-xs);
+  padding: 6px 12px;
+  border-radius: var(--kr-radius);
+  font-family: inherit;
+  margin-bottom: 10px;
+  transition: all var(--kr-dur) var(--kr-ease);
+}
+.kp-back:hover {
+  border-color: var(--kr-line-2);
+  color: var(--kr-ink);
+  background: var(--kr-surface-2);
+}
+.kp-back svg { width: 13px; height: 13px; }
+
+/* ── Content ── */
+.kp-content {
+  max-width: var(--kr-maxw);
+  margin: 0 auto;
+  padding: 16px;
+}
+
+/* ── Loading ── */
+.kp-loading {
+  text-align: center;
+  padding: 50px 24px;
+  color: var(--kr-ink-3);
+  font-size: var(--kr-fs-sm);
+}
+.kp-spinner {
+  width: 28px; height: 28px;
+  border: 3px solid var(--kr-line);
+  border-top-color: var(--kr-accent);
+  border-radius: 50%;
+  animation: kp-spin 0.8s linear infinite;
+  margin: 0 auto 12px;
+}
+@keyframes kp-spin { to { transform: rotate(360deg); } }
+
+/* ── Empty / Próximamente ── */
+.kp-empty {
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-lg);
+  padding: 36px 24px;
+  text-align: center;
+  color: var(--kr-ink-2);
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-empty h2 {
+  font-size: var(--kr-fs-md);
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-ink);
+  margin-bottom: 6px;
+}
+.kp-empty p {
+  font-size: var(--kr-fs-sm);
+  color: var(--kr-ink-3);
+  max-width: 420px;
+  margin: 0 auto;
+  line-height: 1.55;
+}
+.kp-empty .cta {
+  margin-top: 16px;
+}
+
+/* ── Catálogo: grid de cards ── */
+.kp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+/* v1.0.6 — Línea de separación entre bloques de categoría (group).
+   Ocupa toda la fila del grid para forzar el salto de bloque. */
+.kp-group-sep {
+  grid-column: 1 / -1;
+  height: 0;
+  border-top: 1px solid var(--kr-line-2);
+  margin: 2px 0;
+}
+.kp-card {
+  background: var(--kr-surface);
+  border-radius: var(--kr-radius);
+  overflow: hidden;
+  box-shadow: var(--kr-shadow-1);
+  border: 1px solid var(--kr-line);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.22s var(--kr-ease), box-shadow 0.22s var(--kr-ease), border-color 0.22s var(--kr-ease);
+}
+.kp-card.is-clickable { cursor: pointer; }
+.kp-card.is-clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--kr-shadow-2);
+  border-color: var(--kr-accent-line);
+}
+.kp-card-img {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: var(--kr-inset);
+}
+.kp-card-img img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.35s var(--kr-ease);
+}
+.kp-card.is-clickable:hover .kp-card-img img { transform: scale(1.04); }
+.kp-card-img-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--kr-ink-3);
+  font-size: var(--kr-fs-xs);
+}
+.kp-badge {
+  position: absolute;
+  top: 10px; right: 10px;
+  background: var(--kr-accent);
+  color: var(--kr-accent-ink);
+  padding: 4px 10px;
+  border-radius: var(--kr-radius-pill);
+  font-size: var(--kr-fs-eyebrow);
+  font-weight: var(--kr-w-bold);
+  letter-spacing: 0.3px;
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-badge.is-owned {
+  background: var(--kr-green);
+  color: oklch(99% 0.01 152);
+}
+.kp-card-body {
+  padding: 12px 14px 14px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kp-card-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+}
+.kp-card-family {
+  font-size: var(--kr-fs-eyebrow);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--kr-ink-3);
+  font-weight: var(--kr-w-semi);
+}
+.kp-card-usos {
+  font-size: var(--kr-fs-eyebrow);
+  color: var(--kr-ink-2);
+  font-weight: var(--kr-w-semi);
+}
+.kp-card-label {
+  font-size: var(--kr-fs-base);
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-ink);
+  line-height: 1.3;
+}
+.kp-card-pricing {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: 6px;
+}
+.kp-price-final {
+  font-size: var(--kr-fs-md);
+  font-weight: var(--kr-w-bold);
+  color: var(--kr-ink);
+  letter-spacing: -0.01em;
+}
+.kp-price-old {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-3);
+  text-decoration: line-through;
+}
+.kp-card-owned-info {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-2);
+  line-height: 1.4;
+  background: var(--kr-green-soft);
+  border-radius: var(--kr-radius-sm);
+  padding: 8px 10px;
+  margin-top: auto;
+}
+.kp-card-owned-info strong { color: var(--kr-ink); }
+
+/* ── Customize (datos comprador) ── */
+.kp-panel {
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+  box-shadow: var(--kr-shadow-1);
+  overflow: hidden;
+}
+.kp-panel-hero {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 14px;
+  padding: 14px;
+  background: var(--kr-inset);
+  border-bottom: 1px solid var(--kr-line);
+  align-items: center;
+}
+.kp-panel-hero-img {
+  aspect-ratio: 4 / 3;
+  border-radius: var(--kr-radius);
+  overflow: hidden;
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+}
+.kp-panel-hero-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.kp-panel-hero-info h3 {
+  font-size: var(--kr-fs-base);
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-ink);
+  margin-bottom: 2px;
+}
+.kp-panel-hero-info .family {
+  font-size: var(--kr-fs-eyebrow);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--kr-ink-3);
+  font-weight: var(--kr-w-semi);
+  margin-bottom: 6px;
+}
+/* v1.0.4 — Plazo de uso + frecuencia del bono en el hero del detalle
+   (sustituye a .family / la categoría). */
+.kp-panel-hero-info .kp-hero-terms {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+.kp-panel-hero-info .kp-hero-terms .t {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-2);
+  line-height: 1.35;
+}
+.kp-panel-hero-info .kp-hero-terms .t strong {
+  color: var(--kr-ink);
+  font-weight: var(--kr-w-semi);
+}
+.kp-panel-hero-info .stats {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-2);
+  line-height: 1.5;
+}
+.kp-panel-hero-info .stats strong { color: var(--kr-ink); font-weight: var(--kr-w-semi); }
+.kp-panel-hero-info .price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 4px;
+}
+.kp-panel-hero-info .price-final {
+  font-size: var(--kr-fs-lg);
+  font-weight: var(--kr-w-bold);
+  color: var(--kr-ink);
+}
+.kp-panel-hero-info .price-old {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-3);
+  text-decoration: line-through;
+}
+@media (max-width: 460px) {
+  .kp-panel-hero { grid-template-columns: 1fr; }
+}
+
+.kp-panel-body { padding: 16px; }
+.kp-panel-h {
+  font-size: var(--kr-fs-base);
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-ink);
+  margin-bottom: 12px;
+}
+
+/* ── Form ── */
+.kp-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+@media (max-width: 460px) {
+  .kp-form-row { grid-template-columns: 1fr; }
+}
+.kp-field { margin-bottom: 10px; }
+.kp-label {
+  display: block;
+  font-size: var(--kr-fs-xs);
+  font-weight: var(--kr-w-medium);
+  color: var(--kr-ink-2);
+  margin-bottom: 4px;
+}
+.kp-input {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--kr-line-2);
+  border-radius: var(--kr-radius);
+  font-family: inherit;
+  font-size: var(--kr-fs-sm);
+  color: var(--kr-ink);
+  outline: none;
+  background: var(--kr-surface);
+  transition: all var(--kr-dur) var(--kr-ease);
+}
+.kp-input:focus {
+  border-color: var(--kr-accent);
+  box-shadow: 0 0 0 3px var(--kr-accent-soft);
+}
+
+/* ── T&C ── */
+.kp-terms {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-2);
+  line-height: 1.45;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: var(--kr-inset);
+  border-radius: var(--kr-radius-sm);
+}
+.kp-terms input[type="checkbox"] {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  accent-color: var(--kr-accent);
+  cursor: pointer;
+}
+.kp-terms label { cursor: pointer; flex: 1; }
+.kp-terms a {
+  color: var(--kr-accent);
+  text-decoration: underline;
+  font-weight: var(--kr-w-medium);
+}
+.kp-terms a:hover { color: var(--kr-accent-2); }
+
+/* ── Buttons ── */
+.kp-btn {
+  width: 100%;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: var(--kr-radius);
+  font-family: inherit;
+  font-size: var(--kr-fs-base);
+  font-weight: var(--kr-w-semi);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all var(--kr-dur) var(--kr-ease);
+  text-decoration: none;
+}
+.kp-btn:active { transform: translateY(1px); }
+.kp-btn-primary {
+  background: var(--kr-accent);
+  color: var(--kr-accent-ink);
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-btn-primary:hover { background: var(--kr-accent-2); }
+.kp-btn-primary:disabled {
+  background: var(--kr-inset);
+  color: var(--kr-ink-3);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.kp-btn-ghost {
+  background: var(--kr-surface);
+  color: var(--kr-ink);
+  border: 1px solid var(--kr-line);
+}
+.kp-btn-ghost:hover {
+  background: var(--kr-surface-2);
+  border-color: var(--kr-line-2);
+}
+
+/* ── Notice / banners ── */
+.kp-notice {
+  background: var(--kr-accent-soft);
+  border: 1px solid var(--kr-accent-line);
+  color: var(--kr-accent-2);
+  padding: 10px 12px;
+  border-radius: var(--kr-radius-sm);
+  font-size: var(--kr-fs-xs);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+/* Banner para "Necesitas PRIME primero" */
+.kp-prime-gate {
+  background: var(--kr-accent-soft);
+  border: 1px solid var(--kr-accent-line);
+  border-radius: var(--kr-radius);
+  padding: 16px;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.kp-prime-gate-text {
+  flex: 1;
+  min-width: 220px;
+}
+.kp-prime-gate-text h3 {
+  font-size: var(--kr-fs-base);
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-accent-2);
+  margin-bottom: 4px;
+}
+.kp-prime-gate-text p {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-2);
+  line-height: 1.5;
+}
+.kp-prime-gate .kp-btn {
+  width: auto;
+  padding: 10px 18px;
+  flex-shrink: 0;
+}
+
+/* ── Result (success/error) ── */
+.kp-result {
+  background: var(--kr-surface);
+  border-radius: var(--kr-radius-lg);
+  border: 1px solid var(--kr-line);
+  text-align: center;
+  padding: 32px 24px;
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-result-icon {
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 14px;
+}
+.kp-result-icon.ok {
+  background: var(--kr-accent);
+  box-shadow: var(--kr-shadow-2);
+}
+.kp-result-icon.err { background: var(--kr-danger); }
+.kp-result-icon svg { width: 24px; height: 24px; color: var(--kr-accent-ink); }
+.kp-result h3 {
+  font-size: var(--kr-fs-lg);
+  font-weight: var(--kr-w-bold);
+  color: var(--kr-ink);
+  margin-bottom: 8px;
+}
+.kp-result p {
+  color: var(--kr-ink-2);
+  font-size: var(--kr-fs-sm);
+  line-height: 1.55;
+  margin-bottom: 16px;
+}
+.kp-result p strong { color: var(--kr-ink); }
+.kp-code-box {
+  background: var(--kr-inset);
+  border: 1.5px dashed var(--kr-accent-line);
+  border-radius: var(--kr-radius);
+  padding: 10px;
+  margin: 0 0 16px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--kr-fs-md);
+  font-weight: var(--kr-w-bold);
+  color: var(--kr-ink);
+  letter-spacing: 2px;
+}
+
+.kp-hidden { display: none !important; }
+
+.kp-footer {
+  text-align: center;
+  padding: 8px 10px;
+  font-size: var(--kr-fs-eyebrow);
+  color: var(--kr-ink-3);
+}
+.kp-footer strong { color: var(--kr-ink-2); }
+
+/* ═══════════════════════════════════════════════════
+   v1.0.2 — Chips de variante dentro de la card.
+   Patrón visual clónico del .kr-chip del bundle público de
+   reservas (kr-styles.js) traducido al scope .kp-. Sin colores
+   hardcoded: usa tokens del skin activo (--kr-*).
+   ═══════════════════════════════════════════════════ */
+.kp-variantes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 6px;
+}
+.kp-chip {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 14px;
+  border-radius: var(--kr-radius);
+  border: 1px solid var(--kr-line);
+  background: var(--kr-surface);
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--kr-ink);
+  transition: all var(--kr-dur) var(--kr-ease);
+  text-align: left;
+  min-height: 40px;
+}
+.kp-chip:hover:not(.is-sel):not(.is-owned) {
+  border-color: var(--kr-line-2);
+}
+.kp-chip__lab {
+  font-size: var(--kr-fs-sm);
+  font-weight: var(--kr-w-medium);
+  line-height: 1.2;
+}
+.kp-chip__sub {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.kp-chip.is-sel {
+  border-color: var(--kr-accent);
+  background: var(--kr-accent-soft);
+  color: var(--kr-accent-2);
+}
+.kp-chip.is-sel .kp-chip__sub {
+  color: var(--kr-accent-2);
+  opacity: .8;
+}
+.kp-chip.is-owned {
+  border-color: var(--kr-green);
+  background: var(--kr-green-soft);
+  color: var(--kr-ink);
+  cursor: not-allowed;
+}
+.kp-chip.is-owned .kp-chip__sub {
+  color: var(--kr-ink-2);
+}
+</style>
+</head>
+<body>
+
+<div class="kp-header">
+  <div class="kp-header-inner">
+    <div class="kp-header-eyebrow">Membresía PRIME</div>
+    <div class="kp-header-title">Bonos</div>
+    <div class="kp-header-brand" id="headerBrand"></div>
+  </div>
+</div>
+
+<div class="kp-content">
+
+  <!-- LOADING -->
+  <div id="viewLoading" class="kp-loading">
+    <div class="kp-spinner"></div>
+    <p>Cargando bonos...</p>
+  </div>
+
+  <!-- BROWSE (catálogo) -->
+  <div id="viewBrowse" class="kp-hidden">
+    <button type="button" class="kp-back kp-hidden" id="btnBack" style="display:none">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      Volver
+    </button>
+
+    <!-- Banner si Wix Member sin PRIME -->
+    <div id="primeGate" class="kp-prime-gate kp-hidden">
+      <div class="kp-prime-gate-text">
+        <h3>Los bonos son exclusivos de miembros PRIME</h3>
+        <p>Hazte PRIME para acceder a la compra de bonos por servicio con descuento.</p>
+      </div>
+      <button class="kp-btn kp-btn-primary" id="primeGateBtn" type="button">Hazte PRIME</button>
+    </div>
+
+    <div id="cardsGrid" class="kp-grid"></div>
+  </div>
+
+  <!-- EMPTY -->
+  <div id="viewEmpty" class="kp-empty kp-hidden">
+    <h2>No hay bonos disponibles</h2>
+    <p>Este salón aún no ofrece bonos para sus servicios. Vuelve a echar un vistazo más adelante.</p>
+  </div>
+
+  <!-- CUSTOMIZE (datos comprador) -->
+  <div id="viewCustomize" class="kp-hidden">
+    <button type="button" class="kp-back" id="btnBackCustomize">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      Volver
+    </button>
+
+    <div class="kp-panel">
+      <div class="kp-panel-hero">
+        <div class="kp-panel-hero-img">
+          <img id="custImg" src="" alt="">
+        </div>
+        <div class="kp-panel-hero-info">
+          <div class="kp-hero-terms" id="custTerms"></div>
+          <h3 id="custLabel"></h3>
+          <div class="stats">
+            <strong id="custUsos">—</strong> usos · <strong id="custDescuento">—</strong>% descuento
+          </div>
+          <div class="price-row">
+            <span class="price-final" id="custPrecio">—</span>
+            <span class="price-old" id="custPrecioBruto"></span>
+          </div>
+        </div>
+      </div>
+      <div class="kp-panel-body">
+        <!-- v1.0.3: selector de variante DENTRO del modal. Se muestra
+             cuando el servicio tiene hasVariants; oculto en caso
+             contrario. Se pinta desde renderVariantSelectorInModal(). -->
+        <div id="variantSelector" class="kp-hidden" style="margin-bottom:14px"></div>
+
+        <h4 class="kp-panel-h">Tus datos</h4>
+
+        <div class="kp-form-row">
+          <div class="kp-field">
+            <label class="kp-label">Nombre</label>
+            <input type="text" class="kp-input" id="inputBuyerName" placeholder="Nombre y apellidos">
+          </div>
+          <div class="kp-field">
+            <label class="kp-label">Teléfono</label>
+            <input type="tel" class="kp-input" id="inputBuyerPhone" placeholder="600 000 000">
+          </div>
+        </div>
+        <div class="kp-field">
+          <label class="kp-label">Email</label>
+          <input type="email" class="kp-input" id="inputBuyerEmail" placeholder="tu@email.com">
+        </div>
+
+        <div id="loginNotice" class="kp-notice kp-hidden">
+          Para finalizar la compra hace falta iniciar sesión. Te abriremos la ventana de acceso al pulsar Comprar.
+        </div>
+
+        <div class="kp-terms" id="termsBlock">
+          <input type="checkbox" id="inputTerms" checked>
+          <label for="inputTerms">
+            He leído y acepto los <a id="termsLink" href="#" target="_blank" rel="noopener">Términos y Condiciones</a>.
+          </label>
+        </div>
+
+        <button type="button" class="kp-btn kp-btn-primary" id="btnBuy" disabled>Comprar bono</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- REDIRECTING -->
+  <div id="viewRedirecting" class="kp-loading kp-hidden">
+    <div class="kp-spinner"></div>
+    <p>Procesando el pago...</p>
+  </div>
+
+  <!-- SUCCESS -->
+  <div id="viewSuccess" class="kp-result kp-hidden">
+    <div class="kp-result-icon ok">
+      <svg fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+    </div>
+    <h3>¡Bono activado!</h3>
+    <p id="successText"></p>
+    <div class="kp-code-box" id="successCode"></div>
+    <button type="button" class="kp-btn kp-btn-ghost" id="btnSuccessClose">Volver al catálogo</button>
+  </div>
+
+  <!-- ERROR -->
+  <div id="viewError" class="kp-result kp-hidden">
+    <div class="kp-result-icon err">
+      <svg fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+        <line x1="18" y1="6" x2="6" y2="18"/>
+        <line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </div>
+    <h3 id="errorTitle">Algo ha fallado</h3>
+    <p id="errorText">Inténtalo de nuevo en un momento</p>
+    <button type="button" class="kp-btn kp-btn-ghost" id="btnErrorReset">Volver</button>
+  </div>
+
+</div>
+
+<div class="kp-footer">Powered by <strong>KAMISUITE</strong></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ═══════════════════════════════════════════════════
+  // KR_SKINS — copia literal de kr-skins.js
+  // ═══════════════════════════════════════════════════
+  var KR_SKINS = {
+    niebla: { tokens: {} },
+    arena: {
+      tokens: {
+        "--kr-bg": "oklch(98.4% 0.009 78)",
+        "--kr-surface": "oklch(99.6% 0.006 80)",
+        "--kr-surface-2": "oklch(97% 0.012 78)",
+        "--kr-inset": "oklch(95.6% 0.014 76)",
+        "--kr-line": "oklch(90% 0.016 72)",
+        "--kr-line-2": "oklch(82% 0.02 68)",
+        "--kr-ink": "oklch(31% 0.018 60)",
+        "--kr-ink-2": "oklch(48% 0.016 60)",
+        "--kr-ink-3": "oklch(64% 0.014 62)",
+        "--kr-accent": "oklch(42% 0.028 64)",
+        "--kr-accent-2": "oklch(35% 0.03 62)",
+        "--kr-accent-soft": "oklch(93% 0.022 72)",
+        "--kr-accent-line": "oklch(64% 0.026 66)",
+        "--kr-focus": "oklch(58% 0.09 70)",
+        "--kr-radius": "13px"
+      }
+    },
+    grafito: {
+      tokens: {
+        "--kr-bg": "oklch(99% 0 0)",
+        "--kr-surface": "oklch(100% 0 0)",
+        "--kr-surface-2": "oklch(97% 0 0)",
+        "--kr-inset": "oklch(95.5% 0 0)",
+        "--kr-line": "oklch(89% 0 0)",
+        "--kr-line-2": "oklch(80% 0 0)",
+        "--kr-ink": "oklch(20% 0 0)",
+        "--kr-ink-2": "oklch(42% 0 0)",
+        "--kr-ink-3": "oklch(62% 0 0)",
+        "--kr-accent": "oklch(22% 0 0)",
+        "--kr-accent-2": "oklch(12% 0 0)",
+        "--kr-accent-ink": "oklch(99% 0 0)",
+        "--kr-accent-soft": "oklch(94.5% 0 0)",
+        "--kr-accent-line": "oklch(55% 0 0)",
+        "--kr-focus": "oklch(50% 0 0)",
+        "--kr-radius": "6px"
+      }
+    },
+    lumiere: {
+      tokens: {
+        "--kr-bg": "oklch(98.2% 0.012 88)",
+        "--kr-surface": "oklch(99.6% 0.008 88)",
+        "--kr-surface-2": "oklch(96.6% 0.016 86)",
+        "--kr-inset": "oklch(95% 0.02 84)",
+        "--kr-line": "oklch(90% 0.022 82)",
+        "--kr-line-2": "oklch(80% 0.03 80)",
+        "--kr-ink": "oklch(26% 0.012 70)",
+        "--kr-ink-2": "oklch(45% 0.014 72)",
+        "--kr-ink-3": "oklch(62% 0.018 76)",
+        "--kr-accent": "oklch(56% 0.085 78)",
+        "--kr-accent-2": "oklch(47% 0.08 74)",
+        "--kr-accent-ink": "oklch(99% 0.01 88)",
+        "--kr-accent-soft": "oklch(93% 0.035 84)",
+        "--kr-accent-line": "oklch(66% 0.075 80)",
+        "--kr-focus": "oklch(58% 0.085 78)",
+        "--kr-radius": "4px"
+      }
+    },
+    botanica: {
+      tokens: {
+        "--kr-bg": "oklch(98.6% 0.01 150)",
+        "--kr-surface": "oklch(99.8% 0.006 150)",
+        "--kr-surface-2": "oklch(97% 0.016 152)",
+        "--kr-inset": "oklch(95.4% 0.02 152)",
+        "--kr-line": "oklch(90% 0.022 154)",
+        "--kr-line-2": "oklch(81% 0.03 156)",
+        "--kr-ink": "oklch(28% 0.025 160)",
+        "--kr-ink-2": "oklch(46% 0.022 158)",
+        "--kr-ink-3": "oklch(63% 0.02 156)",
+        "--kr-accent": "oklch(48% 0.09 156)",
+        "--kr-accent-2": "oklch(40% 0.085 158)",
+        "--kr-accent-soft": "oklch(93% 0.03 152)",
+        "--kr-accent-line": "oklch(62% 0.08 156)",
+        "--kr-focus": "oklch(56% 0.1 156)",
+        "--kr-radius": "16px"
+      }
+    },
+    aurora: {
+      tokens: {
+        "--kr-bg": "oklch(98.7% 0.006 320)",
+        "--kr-surface": "oklch(100% 0 0)",
+        "--kr-surface-2": "oklch(97.4% 0.01 322)",
+        "--kr-inset": "oklch(96% 0.014 326)",
+        "--kr-line": "oklch(91% 0.016 330)",
+        "--kr-line-2": "oklch(82% 0.024 336)",
+        "--kr-ink": "oklch(27% 0.03 326)",
+        "--kr-ink-2": "oklch(46% 0.026 330)",
+        "--kr-ink-3": "oklch(64% 0.022 334)",
+        "--kr-accent": "oklch(56% 0.16 350)",
+        "--kr-accent-2": "oklch(48% 0.17 352)",
+        "--kr-accent-soft": "oklch(94% 0.04 348)",
+        "--kr-accent-line": "oklch(66% 0.14 350)",
+        "--kr-focus": "oklch(58% 0.16 350)",
+        "--kr-radius": "12px",
+        "--kr-font": '"Instrument Sans", ui-sans-serif, system-ui, sans-serif'
+      }
+    }
+  };
+
+  function applySkin(name) {
+    var skin = KR_SKINS[name];
+    if (!skin) return;
+    var all = {};
+    Object.keys(KR_SKINS).forEach(function (k) {
+      Object.keys(KR_SKINS[k].tokens || {}).forEach(function (t) { all[t] = true; });
+    });
+    var root = document.documentElement;
+    Object.keys(all).forEach(function (t) { root.style.removeProperty(t); });
+    Object.keys(skin.tokens).forEach(function (t) {
+      root.style.setProperty(t, skin.tokens[t]);
+    });
+    root.dataset.skin = name;
+  }
+
+  // ═══════════════════════════════════════════════════
+  // ESTADO
+  // ═══════════════════════════════════════════════════
+  var state = {
+    vouchers: [],
+    selected: null,
+    // v1.0.2 — Mapa voucherIdx → variantIdx elegido por el cliente en
+    // la card. null = ninguna variante seleccionada aún. Solo aplica
+    // a cards con hasVariants:true. Se resetea en el reload post-compra.
+    // v1.0.3 — Ya NO se usa en la card (los chips se movieron al modal).
+    // Se conserva declarado por compatibilidad de reset, sin efecto visual.
+    selectedVariantByCard: {},
+    // v1.0.3 — Variante seleccionada en el modal actual. null = sin elegir.
+    // Se usa por renderVariantSelectorInModal y validarForm.
+    selectedVariantInModal: null,
+    member: { isMember: false, isPrime: false, primeExpirationDate: null, serviciosBloqueados: [], bonosActivos: [] },
+    termsUrl: '',
+    bootstrapped: false,
+    currentView: 'loading'
+  };
+
+  var views = ['Loading', 'Browse', 'Empty', 'Customize', 'Redirecting', 'Success', 'Error'];
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    if (s === null || s === undefined) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+  function fmtMoney(n) {
+    if (n === null || n === undefined || isNaN(n)) return '—';
+    return Number(n).toFixed(2).replace('.', ',') + ' €';
+  }
+  function fmtDate(d) {
+    if (!d) return '—';
+    try {
+      var dt = new Date(d);
+      if (isNaN(dt.getTime())) return '—';
+      return dt.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+    } catch (e) { return '—'; }
+  }
+  // v1.0.4 — Plazo de uso y frecuencia del bono (hero del detalle).
+  // Sustituye a la categoría. Lee lo que envía voucherPublicLogic v1.2.0:
+  //   · bonusValidityDays (días; 0 → plazo global en meses)
+  //   · bonusUseIntervalDays (días entre usos; 0 → USO LIBRE)
+  //   · globalValidityMonths (fallback en meses)
+  function fmtDias(n) { return n === 1 ? '1 día' : n + ' días'; }
+  function fmtMeses(n) { return n === 1 ? '1 mes' : n + ' meses'; }
+  function renderTerms(v) {
+    var validityDays = (typeof v.bonusValidityDays === 'number') ? v.bonusValidityDays : 0;
+    var globalMonths = (typeof v.globalValidityMonths === 'number' && v.globalValidityMonths > 0) ? v.globalValidityMonths : 12;
+    var intervalDays = (typeof v.bonusUseIntervalDays === 'number') ? v.bonusUseIntervalDays : 0;
+    var plazoTxt = (validityDays > 0) ? fmtDias(validityDays) : fmtMeses(globalMonths);
+    var frecTxt = (intervalDays > 0) ? ('cada ' + fmtDias(intervalDays)) : 'USO LIBRE';
+    return '<div class="t">Plazo de uso: <strong>' + esc(plazoTxt) + '</strong></div>'
+         + '<div class="t">Frecuencia: <strong>' + esc(frecTxt) + '</strong></div>';
+  }
+
+  function emailValido(e) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim());
+  }
+  function showView(name) {
+    state.currentView = name;
+    views.forEach(function (v) {
+      var el = $('view' + v);
+      if (el) el.classList.add('kp-hidden');
+    });
+    var target = $('view' + name.charAt(0).toUpperCase() + name.slice(1));
+    if (target) target.classList.remove('kp-hidden');
+  }
+
+  // ═══════════════════════════════════════════════════
+  // POST MESSAGE BRIDGE
+  // ═══════════════════════════════════════════════════
+  function send(type, payload) {
+    try {
+      window.parent.postMessage({ type: type, payload: payload || {} }, '*');
+    } catch (e) {
+      console.error('[Bonos] postMessage error:', e);
+    }
+  }
+
+  var readyTimer = null;
+  function startReadyRetry() {
+    var fired = 0;
+    function ping() {
+      if (state.bootstrapped) {
+        if (readyTimer) clearInterval(readyTimer);
+        return;
+      }
+      fired++;
+      send('ready');
+      if (fired > 20) {
+        if (readyTimer) clearInterval(readyTimer);
+        showError('No se ha podido cargar el catálogo. Recarga la página.');
+      }
+    }
+    ping();
+    readyTimer = setInterval(ping, 700);
+  }
+
+  window.addEventListener('message', function (event) {
+    var msg = event.data;
+    if (!msg || typeof msg !== 'object' || !msg.type) return;
+    handleMessage(msg);
+  });
+
+  function handleMessage(msg) {
+    var p = msg.payload || {};
+    switch (msg.type) {
+
+      case 'bootstrap':
+        if (p.skin) applySkin(p.skin);
+        if (p.brandName) $('headerBrand').textContent = p.brandName;
+        state.termsUrl = p.termsConditionsUrl || '';
+        if (state.termsUrl) {
+          $('termsLink').href = state.termsUrl;
+          $('termsBlock').style.display = '';
+        } else {
+          $('termsBlock').style.display = 'none';
+        }
+        state.vouchers = p.vouchers || [];
+        state.member = p.member || state.member;
+        state.bootstrapped = true;
+        if (!state.vouchers.length) {
+          showView('empty');
+        } else {
+          renderCatalog();
+          showView('browse');
+        }
+        break;
+
+      case 'loginRequired':
+        $('loginNotice').classList.remove('kp-hidden');
+        showView('customize');
+        break;
+
+      case 'needsPrime':
+        // El miembro intentó comprar pero no es PRIME. Volvemos al
+        // catálogo y mostramos el banner persistente.
+        state.member.isMember = true;
+        state.member.isPrime = false;
+        renderCatalog();
+        showView('browse');
+        break;
+
+      case 'alreadyHasVoucher':
+        // Ya tiene bono activo del servicio+variante. Volvemos al catálogo:
+        // renderCatalog refleja el bloqueo en el chip/card correspondiente.
+        // v1.0.2 — Bloqueo por voucherKey (compuesta con variante cuando
+        // aplica). El sel.voucherKey ya viene resuelto por seleccionarVoucher.
+        if (p.voucher && state.selected) {
+          var sel = state.selected;
+          var selKey = sel.voucherKey || sel.serviceSetupUid;
+          if (selKey) state.member.serviciosBloqueados.push(selKey);
+          state.member.bonosActivos.push({
+            code: p.voucher.code || '',
+            serviceSetupUid: sel.serviceSetupUid,
+            serviceLabel: sel.serviceLabel,
+            voucherKey: selKey,
+            remainingUses: p.voucher.remainingUses,
+            totalUses: sel.bonoNumero,
+            expirationDate: p.voucher.expirationDate || null
+          });
+        }
+        renderCatalog();
+        showView('browse');
+        showError(p.message || 'Ya tienes un bono activo de este servicio.');
+        break;
+
+      case 'purchaseSuccess':
+        mostrarSuccess(p);
+        break;
+
+      case 'purchaseCancelled':
+        showView('customize');
+        break;
+
+      case 'purchaseError':
+        showError(msg.message || 'No se pudo completar la compra');
+        break;
+
+      case 'error':
+        showError(msg.message || 'Error');
+        break;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════
+  // RENDER CATÁLOGO
+  // ═══════════════════════════════════════════════════
+  function renderCatalog() {
+    // Banner PRIME gate: solo si el miembro es Wix Member pero NO PRIME.
+    var showGate = state.member.isMember && !state.member.isPrime;
+    if (showGate) $('primeGate').classList.remove('kp-hidden');
+    else $('primeGate').classList.add('kp-hidden');
+
+    // v1.0.3 — Bloqueo a nivel card SOLO cuando el servicio no tiene
+    // variantes. Con variantes, la card entra al modal y allí el chip
+    // owned se marca; la card queda clicable siempre (hay variantes
+    // libres que comprar). bonoMap indexado por voucherKey para el
+    // bloque owned que se sigue mostrando en la card sin variantes.
+    var bloqueadosSet = {};
+    (state.member.serviciosBloqueados || []).forEach(function (key) { bloqueadosSet[key] = true; });
+    var bonoMap = {};
+    (state.member.bonosActivos || []).forEach(function (b) {
+      var k = b.voucherKey || b.serviceSetupUid;
+      if (k) bonoMap[k] = b;
+    });
+
+    var grid = $('cardsGrid');
+    var html = '';
+
+    // v1.0.6 — Orden alfabético por group (categoría) para agrupar las
+    // cards en bloques. Se ordena una lista de ÍNDICES (no state.vouchers)
+    // para conservar el data-idx original que usa el click. Desempate por
+    // label dentro del mismo grupo.
+    var order = state.vouchers.map(function (_, i) { return i; });
+    order.sort(function (a, b) {
+      var ga = (state.vouchers[a].serviceGroup || '').toLowerCase();
+      var gb = (state.vouchers[b].serviceGroup || '').toLowerCase();
+      var c = ga.localeCompare(gb, 'es');
+      if (c !== 0) return c;
+      return (state.vouchers[a].serviceLabel || '').localeCompare(state.vouchers[b].serviceLabel || '', 'es');
+    });
+
+    var prevGroup = null;
+    order.forEach(function (idx) {
+      var v = state.vouchers[idx];
+
+      // v1.0.6 — Línea de separación entre bloques de categoría (group).
+      var gActual = v.serviceGroup || '';
+      if (prevGroup !== null && gActual !== prevGroup) {
+        html += '<div class="kp-group-sep" role="separator"></div>';
+      }
+      prevGroup = gActual;
+
+      var img = v.imagePublicUrl || '';
+      var ahorroPct = v.bonoDescuento > 0 ? Math.round(v.bonoDescuento) : 0;
+      var hasVariants = !!v.hasVariants && Array.isArray(v.variantes) && v.variantes.length > 0;
+
+      // Estado owned de la card:
+      //   · Sin variantes: card owned si voucherKey (=serviceSetupUid) está en bloqueadosSet.
+      //   · Con variantes: nunca owned (el bloqueo por variante se maneja en el modal).
+      var cardVoucherKey = v.voucherKey || v.serviceSetupUid;
+      var owned = !hasVariants && !!bloqueadosSet[cardVoucherKey];
+
+      // Precio a mostrar:
+      //   · Sin variantes: v.precioBono (comportamiento v1.0.1).
+      //   · Con variantes: "Desde X€" con el mínimo de variantes[].precioBono.
+      var precioMostrar = v.precioBono;
+      var precioBrutoMostrar = v.precioBruto;
+      var esDesde = false;
+      if (hasVariants) {
+        var precios = v.variantes.map(function (vv) { return vv.precioBono; }).filter(function (p) { return typeof p === 'number' && p > 0; });
+        var brutos  = v.variantes.map(function (vv) { return vv.precioBruto; }).filter(function (p) { return typeof p === 'number' && p > 0; });
+        if (precios.length) {
+          precioMostrar = Math.min.apply(null, precios);
+          precioBrutoMostrar = brutos.length ? Math.min.apply(null, brutos) : null;
+          esDesde = true;
+        }
+      }
+
+      html += '<div class="kp-card ' + (owned ? '' : 'is-clickable') + '" data-idx="' + idx + '">'
+        + '<div class="kp-card-img">'
+          + (img ? '<img src="' + esc(img) + '" alt="' + esc(v.serviceLabel) + '" loading="lazy">' : '<div class="kp-card-img-placeholder">Sin imagen</div>')
+          + (owned
+              ? '<div class="kp-badge is-owned">YA LO TIENES</div>'
+              : (ahorroPct > 0 ? '<div class="kp-badge">-' + ahorroPct + '%</div>' : ''))
+        + '</div>'
+        + '<div class="kp-card-body">'
+          + '<div class="kp-card-meta">'
+            + '<span class="kp-card-family">' + esc(v.serviceGroup || '') + '</span>'
+            + '<span class="kp-card-usos">' + v.bonoNumero + ' usos</span>'
+          + '</div>'
+          + '<div class="kp-card-label">' + esc(v.serviceLabel) + '</div>';
+
+      if (owned) {
+        var b = bonoMap[cardVoucherKey] || {};
+        html += '<div class="kp-card-owned-info">'
+          + 'Código <strong>' + esc(b.code || '—') + '</strong><br>'
+          + '<strong>' + (b.remainingUses != null ? b.remainingUses : '—') + '/' + (b.totalUses != null ? b.totalUses : v.bonoNumero) + '</strong> usos · vence <strong>' + esc(fmtDate(b.expirationDate)) + '</strong>'
+        + '</div>';
+      } else {
+        html += '<div class="kp-card-pricing">'
+          + '<span class="kp-price-final">' + (esDesde ? 'Desde ' : '') + fmtMoney(precioMostrar) + '</span>'
+          + (precioBrutoMostrar && precioBrutoMostrar > precioMostrar ? '<span class="kp-price-old">' + fmtMoney(precioBrutoMostrar) + '</span>' : '')
+        + '</div>';
+      }
+
+      html += '</div></div>';
+    });
+    grid.innerHTML = html;
+
+    grid.querySelectorAll('.kp-card.is-clickable').forEach(function (card) {
+      card.addEventListener('click', function () {
+        var idx = parseInt(card.getAttribute('data-idx'), 10);
+        seleccionarVoucher(idx);
+      });
+    });
+  }
+
+  // ═══════════════════════════════════════════════════
+  // CUSTOMIZE / COMPRA
+  // ═══════════════════════════════════════════════════
+  //
+  // v1.0.3 — Con hasVariants:
+  //   · state.selected se inicializa apuntando al servicio (label base,
+  //     sin variante aplicada aún).
+  //   · state.selectedVariantInModal = null → aún no ha elegido chip.
+  //   · Se renderiza el bloque de chips DENTRO del modal (variantSelector).
+  //   · Hero muestra "Desde X€" (min variantes). Al pulsar chip, la
+  //     función seleccionarVarianteModal(vIdx) actualiza hero, state.selected
+  //     con datos de la variante, y valida el form.
+  //   · Botón COMPRAR queda deshabilitado hasta que haya chip elegido
+  //     Y nombre + email válidos + T&C.
+  function seleccionarVoucher(idx) {
+    var v = state.vouchers[idx];
+    if (!v) return;
+
+    var hasVariants = !!v.hasVariants && Array.isArray(v.variantes) && v.variantes.length > 0;
+
+    // Base del state.selected (sin variante aplicada aún cuando hasVariants).
+    state.selected = {
+      voucherIdx: idx,
+      serviceSetupUid: v.serviceSetupUid,
+      serviceCatalogId: v.serviceCatalogId,
+      serviceLabel: v.serviceLabel,
+      serviceFamily: v.serviceFamily,
+      serviceGroup: v.serviceGroup,
+      imagePublicUrl: v.imagePublicUrl,
+      precioServicio: v.precioServicio,
+      bonoNumero: v.bonoNumero,
+      bonoDescuento: v.bonoDescuento,
+      precioBruto: v.precioBruto,
+      precioBono: v.precioBono,
+      voucherKey: v.voucherKey || v.serviceSetupUid,
+      varianteIdx: null,
+      hasVariants: hasVariants,
+      variantes: hasVariants ? v.variantes : []
+    };
+    state.selectedVariantInModal = null;
+
+    // Hero.
+    $('custImg').src = v.imagePublicUrl || '';
+    $('custTerms').innerHTML = renderTerms(v);
+    $('custLabel').textContent = v.serviceLabel || '';
+    $('custUsos').textContent = v.bonoNumero;
+    $('custDescuento').textContent = v.bonoDescuento;
+
+    if (hasVariants) {
+      // Precio "Desde X€" al abrir el modal.
+      var precios = v.variantes.map(function (vv) { return vv.precioBono; }).filter(function (p) { return typeof p === 'number' && p > 0; });
+      var minPrecio = precios.length ? Math.min.apply(null, precios) : 0;
+      $('custPrecio').textContent = 'Desde ' + fmtMoney(minPrecio);
+      $('custPrecioBruto').style.display = 'none';
+      $('btnBuy').textContent = 'Elige tamaño';
+    } else {
+      $('custPrecio').textContent = fmtMoney(v.precioBono);
+      if (v.precioBruto && v.precioBruto > v.precioBono) {
+        $('custPrecioBruto').textContent = fmtMoney(v.precioBruto);
+        $('custPrecioBruto').style.display = '';
+      } else {
+        $('custPrecioBruto').style.display = 'none';
+      }
+      $('btnBuy').textContent = 'Comprar bono · ' + fmtMoney(v.precioBono);
+    }
+
+    // Selector de variantes DENTRO del modal.
+    renderVariantSelectorInModal();
+
+    // Reset form.
+    $('inputBuyerName').value = '';
+    $('inputBuyerEmail').value = '';
+    $('inputBuyerPhone').value = '';
+    $('inputTerms').checked = true;
+    $('loginNotice').classList.add('kp-hidden');
+
+    validarForm();
+    showView('customize');
+  }
+
+  // v1.0.3 — Renderiza el bloque de chips de variante DENTRO del modal.
+  // Cuando el servicio no tiene variantes, oculta el bloque.
+  // Al pulsar un chip: seleccionarVarianteModal(idx).
+  function renderVariantSelectorInModal() {
+    var container = $('variantSelector');
+    if (!container) return;
+    var sel = state.selected;
+    if (!sel || !sel.hasVariants || !sel.variantes || !sel.variantes.length) {
+      container.classList.add('kp-hidden');
+      container.innerHTML = '';
+      return;
+    }
+
+    // Set de voucherKey bloqueadas (variante ya poseída).
+    var bloqueadosSet = {};
+    (state.member.serviciosBloqueados || []).forEach(function (key) { bloqueadosSet[key] = true; });
+
+    var vIdxSel = state.selectedVariantInModal;
+    var html = ''
+      + '<div class="kp-panel-h" style="margin-bottom:6px">Elige tamaño</div>'
+      + '<div class="kp-variantes">';
+    sel.variantes.forEach(function (variante) {
+      var chipOwned = !!bloqueadosSet[variante.voucherKey];
+      var chipSel = (vIdxSel === variante.idx);
+      var chipCls = 'kp-chip'
+        + (chipSel ? ' is-sel' : '')
+        + (chipOwned ? ' is-owned' : '');
+      html += '<button type="button" class="' + chipCls + '" data-variant-idx="' + variante.idx + '"'
+        + (chipOwned ? ' aria-disabled="true"' : '')
+        + '>'
+        + '<span class="kp-chip__lab">' + esc(variante.label) + '</span>'
+        + '<span class="kp-chip__sub">' + fmtMoney(variante.precioBono) + '</span>'
+        + '</button>';
+    });
+    html += '</div>';
+    container.innerHTML = html;
+    container.classList.remove('kp-hidden');
+
+    container.querySelectorAll('.kp-chip').forEach(function (chip) {
+      if (chip.classList.contains('is-owned')) return;
+      chip.addEventListener('click', function () {
+        var variantIdx = parseInt(chip.getAttribute('data-variant-idx'), 10);
+        seleccionarVarianteModal(variantIdx);
+      });
+    });
+  }
+
+  // v1.0.3 — Aplica la variante seleccionada dentro del modal:
+  // actualiza hero (label + precio), state.selected con los datos de la
+  // variante, y valida el form para activar/desactivar botón COMPRAR.
+  function seleccionarVarianteModal(variantIdx) {
+    var sel = state.selected;
+    if (!sel || !sel.hasVariants) return;
+    var variante = (sel.variantes || []).find(function (vv) { return vv.idx === variantIdx; });
+    if (!variante) return;
+
+    state.selectedVariantInModal = variantIdx;
+
+    // Aplicar la variante al state.selected.
+    sel.serviceLabel = variante.serviceLabel;    // "Nanoplastia · L"
+    sel.precioServicio = variante.precioServicio;
+    sel.precioBruto = variante.precioBruto;
+    sel.precioBono = variante.precioBono;
+    sel.voucherKey = variante.voucherKey;
+    sel.varianteIdx = variante.idx;
+
+    // Actualiza hero.
+    $('custLabel').textContent = variante.serviceLabel || sel.serviceLabel;
+    $('custPrecio').textContent = fmtMoney(variante.precioBono);
+    if (variante.precioBruto && variante.precioBruto > variante.precioBono) {
+      $('custPrecioBruto').textContent = fmtMoney(variante.precioBruto);
+      $('custPrecioBruto').style.display = '';
+    } else {
+      $('custPrecioBruto').style.display = 'none';
+    }
+    $('btnBuy').textContent = 'Comprar bono · ' + fmtMoney(variante.precioBono);
+
+    // Repinta chips para actualizar .is-sel.
+    renderVariantSelectorInModal();
+
+    validarForm();
+  }
+
+  function validarForm() {
+    var buyerName = $('inputBuyerName').value.trim();
+    var buyerEmail = $('inputBuyerEmail').value.trim();
+    var ok = !!buyerName && emailValido(buyerEmail);
+    var termsVisible = $('termsBlock').style.display !== 'none';
+    if (termsVisible && !$('inputTerms').checked) ok = false;
+    // v1.0.3 — Si el servicio tiene variantes, exigir variante elegida.
+    if (state.selected && state.selected.hasVariants && state.selectedVariantInModal == null) {
+      ok = false;
+    }
+    $('btnBuy').disabled = !ok;
+  }
+
+  function comprar() {
+    if (!state.selected) return;
+    // v1.0.2 — varianteIdx viaja al backend cuando el bono es de una
+    // variante concreta. null si el servicio no tiene variantes.
+    var payload = {
+      serviceSetupUid: state.selected.serviceSetupUid,
+      varianteIdx: (state.selected.varianteIdx != null) ? state.selected.varianteIdx : null,
+      buyerName: $('inputBuyerName').value.trim(),
+      buyerEmail: $('inputBuyerEmail').value.trim(),
+      buyerPhone: $('inputBuyerPhone').value.trim()
+    };
+    showView('redirecting');
+    send('purchase', payload);
+  }
+
+  function mostrarSuccess(p) {
+    var code = p && p.code ? String(p.code) : '—';
+    var expFmt = p && p.expirationDate ? fmtDate(p.expirationDate) : '';
+    var usos = p && p.totalUses != null ? p.totalUses : '';
+    $('successCode').textContent = code;
+    $('successText').innerHTML = 'Tu bono está activo con <strong>' + esc(String(usos)) + ' usos</strong>'
+      + (expFmt ? ' hasta el <strong>' + esc(expFmt) + '</strong>' : '')
+      + '. Presenta el código en el salón al pedir tu cita.';
+    showView('success');
+  }
+
+  function showError(msg) {
+    $('errorText').textContent = msg || 'Inténtalo de nuevo en un momento';
+    showView('error');
+  }
+
+  // ═══════════════════════════════════════════════════
+  // EVENT LISTENERS
+  // ═══════════════════════════════════════════════════
+  ['inputBuyerName', 'inputBuyerEmail', 'inputBuyerPhone'].forEach(function (id) {
+    $(id).addEventListener('input', validarForm);
+  });
+  $('inputTerms').addEventListener('change', validarForm);
+  $('btnBuy').addEventListener('click', comprar);
+
+  // v1.0.1 — Navegación a /tarjetaprime vía page code (NO <a href>
+  // directo, porque los HTML Components de Wix corren en iframe
+  // sandboxed con otro origin → href interno da 403 Forbidden y la
+  // navegación nunca llega al sitio padre).
+  $('primeGateBtn').addEventListener('click', function () {
+    send('navigate', { url: '/tarjetaprime' });
+  });
+
+  $('btnBackCustomize').addEventListener('click', function () {
+    state.selected = null;
+    showView('browse');
+  });
+
+  $('btnSuccessClose').addEventListener('click', function () {
+    // Tras éxito, recargamos el bootstrap (ya tiene este bono activo).
+    // v1.0.3 — Reset del estado de variante seleccionada en el modal.
+    state.bootstrapped = false;
+    state.selected = null;
+    state.selectedVariantInModal = null;
+    state.selectedVariantByCard = {};
+    showView('loading');
+    send('ready');
+    startReadyRetry();
+  });
+
+  $('btnErrorReset').addEventListener('click', function () {
+    showView(state.selected ? 'customize' : 'browse');
+  });
+
+  // Arranque.
+  startReadyRetry();
+
+})();
+</script>
+</body>
+</html>
