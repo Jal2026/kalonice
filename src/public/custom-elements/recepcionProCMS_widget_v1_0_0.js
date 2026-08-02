@@ -1,9 +1,26 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.75  ·  Descuento manual en ESPECIALES (regalar/descontar)
+ * VERSION: 1.1.76  ·  Popup ALMACÉN (papelera y sacar de almacén)
  * FECHA: 1 de agosto de 2026 (v1.1.75: 2 de agosto de 2026)
  * ---------------------------------------------------------------------
+ * v1.1.76 (2 ago 2026) — POPUP ALMACÉN en la barra superior, junto a
+ *   ESPECIALES. Botón turquesa "ALMACÉN" que abre un modal con los
+ *   productos de uso en salón que tienen existencias, buscador y filtro
+ *   por categoría, y DOS acciones por producto:
+ *     🗑️ TIRAR   → bote terminado. El almacén descuenta uno cerrado y
+ *                  abre el siguiente (stockLogic.tirarPapelera).
+ *     📤 SACAR   → coger un bote del almacén para empezarlo, sin tirar
+ *                  ninguno (movimiento APERTURA · APERTURA_MANUAL).
+ *   Los contadores se actualizan en local con lo que devuelve el
+ *   backend: sin recargar la agenda ni releer la lista entera.
+ *   Ambas acciones están permitidas a CUALQUIER nivel de acceso: no son
+ *   administración, son registrar lo que se acaba de hacer físicamente.
+ *   El movimiento se firma con _empleadoActivo (mismo mecanismo que
+ *   _logEvent); sin capa de login, se graba sin firma.
+ *   Cambio ADITIVO y aislado: clases .ks-almacen y .alm-*, mensajes
+ *   propios. NO se toca ESPECIALES, ni el calendario, ni el cobro, ni
+ *   el arqueo. Requiere page code v1.0.34 y stockLogic v1.0.2.
  * v1.1.75 (2 ago 2026) — DESCUENTO MANUAL en el modal ESPECIALES (venta
  *   manual de PRIME/Bono/Tarjeta). Reutiliza LITERAL el patrón %/€ del
  *   cobro normal (misma card .ks-disc-*, misma lógica que _calcDescuento,
@@ -1394,6 +1411,42 @@ button { font-family: inherit; cursor: pointer; }
   padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer;
 }
 .ks-especiales:hover { filter: brightness(1.06); }
+/* ── v1.1.76 · Botón y modal ALMACÉN ── */
+.ks-almacen {
+  border: 1px solid #1c9c93; background: #1c9c93; color: #fff;
+  padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  margin-right: 8px;
+}
+.ks-almacen:hover { filter: brightness(1.08); }
+.alm-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.alm-modal { background: #fff; border-radius: 14px; width: min(680px,96vw); max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.alm-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 20px; border-bottom: 1px solid var(--ks-line); }
+.alm-title { font-size: 15px; font-weight: 700; color: var(--ks-ink); }
+.alm-x { border: none; background: transparent; font-size: 19px; cursor: pointer; color: #9ca3af; line-height: 1; }
+.alm-filters { display: flex; gap: 8px; padding: 13px 20px; border-bottom: 1px solid var(--ks-line); flex-wrap: wrap; }
+.alm-input { flex: 1; min-width: 170px; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--ks-line); border-radius: 8px; font-size: 13px; font-family: inherit; }
+.alm-input:focus { outline: none; border-color: #1c9c93; }
+.alm-sel { padding: 9px 10px; border: 1px solid var(--ks-line); border-radius: 8px; font-size: 12.5px; font-family: inherit; background: #fff; max-width: 190px; }
+.alm-list { overflow-y: auto; padding: 6px 20px 14px; flex: 1; }
+.alm-row { display: flex; align-items: center; gap: 11px; padding: 9px 0; border-bottom: 1px solid var(--ks-line); }
+.alm-row:last-child { border-bottom: none; }
+.alm-img { width: 38px; height: 38px; border-radius: 8px; object-fit: cover; background: #f3f4f6; flex-shrink: 0; }
+.alm-main { flex: 1; min-width: 0; }
+.alm-name { font-size: 13px; font-weight: 700; color: var(--ks-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.alm-meta { font-size: 10.5px; color: #9ca3af; margin-top: 1px; }
+.alm-cnt { text-align: center; min-width: 46px; flex-shrink: 0; }
+.alm-cnt b { display: block; font-size: 16px; font-weight: 800; color: var(--ks-ink); line-height: 1.1; }
+.alm-cnt span { font-size: 8.5px; letter-spacing: .4px; text-transform: uppercase; color: #9ca3af; font-weight: 700; }
+.alm-cnt.use b { color: #1c9c93; }
+.alm-acts { display: flex; gap: 6px; flex-shrink: 0; }
+.alm-btn { border: 1px solid var(--ks-line); background: #fff; border-radius: 8px; padding: 6px 9px; font-size: 15px; cursor: pointer; line-height: 1; font-family: inherit; }
+.alm-btn:hover { border-color: #1c9c93; }
+.alm-btn:disabled { opacity: .35; cursor: not-allowed; }
+.alm-btn small { display: block; font-size: 8.5px; font-weight: 700; letter-spacing: .3px; color: #6b7280; margin-top: 2px; }
+.alm-low { color: #d97706; font-weight: 700; }
+.alm-empty { text-align: center; padding: 34px 10px; color: #9ca3af; font-size: 13px; }
+.alm-foot { padding: 11px 20px; border-top: 1px solid var(--ks-line); font-size: 11px; color: #9ca3af; }
+
 /* ── Modal ESPECIALES (venta manual) ── */
 .esp-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
 .esp-modal { background: #fff; border-radius: 14px; width: min(560px,96vw); max-height: 92vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
@@ -2756,6 +2809,9 @@ button { font-family: inherit; cursor: pointer; }
         // v1.1.69 — ESPECIALES (venta manual)
         case 'espClientesEncontrados': this._renderEspCli(p.clientes || []); break;
         case 'espClienteCreado': this._onEspClienteCreado(p.data); break;
+        // v1.1.76 — ALMACÉN
+        case 'almacenData':     this._onAlmData(p); break;
+        case 'almacenAccion':   this._onAlmAccion(p); break;
         case 'especialesData': this._onEspData(p); break;
         case 'bonoEmitido': this._onEspEmitido('bono', p.data); break;
         case 'primeEmitido': this._onEspEmitido('prime', p.data); break;
@@ -3072,6 +3128,7 @@ button { font-family: inherit; cursor: pointer; }
             </div>
             <div class="ks-brandhint">Recepción PRO · agenda operativa · CMS-first</div>
             <div class="ks-brandactions">
+              <button class="ks-almacen" id="almBtn">🗄️ ALMACÉN</button>
               <button class="ks-especiales" id="espBtn">✦ ESPECIALES</button>
               <button class="ks-automodel">Modelo automático</button>
             </div>
@@ -3190,6 +3247,10 @@ button { font-family: inherit; cursor: pointer; }
       // v1.1.69 — ESPECIALES: venta manual de PRIME/Bonos/Tarjetas
       const espBtnEl = root.getElementById('espBtn');
       if (espBtnEl) espBtnEl.addEventListener('click', () => this._openEspeciales());
+
+      // v1.1.76 — ALMACÉN: papelera y sacar de almacén
+      const almBtnEl = root.getElementById('almBtn');
+      if (almBtnEl) almBtnEl.addEventListener('click', () => this._openAlmacen());
 
       // ── Datepicker (V1) ──
       const openDp = (e) => { e.stopPropagation(); this._openDatePicker(); };
@@ -7123,6 +7184,183 @@ button { font-family: inherit; cursor: pointer; }
       root.appendChild(t);
       clearTimeout(this._toastTimer);
       this._toastTimer = setTimeout(() => t.remove(), 2600);
+    }
+
+
+    // ═══════════════════════════════════════════════════
+    // v1.1.76 — ALMACÉN (papelera y sacar de almacén)
+    // ═══════════════════════════════════════════════════
+    // Superficie de trabajo diario, no de administración: solo dos
+    // acciones, ambas permitidas a cualquier nivel de acceso. La gestión
+    // del almacén (alta, coste, mínimos, traspasos) vive en su pantalla.
+    _openAlmacen() {
+      this._almProductos = [];
+      this._almQ = '';
+      this._almCat = '';
+      this._almCargando = true;
+      this._almOcupado = {};
+      const root = this.shadowRoot;
+      root.getElementById('almScrim')?.remove();
+      const scrim = document.createElement('div');
+      scrim.className = 'alm-scrim';
+      scrim.id = 'almScrim';
+      root.appendChild(scrim);
+      this._renderAlmacen();
+      this._sendToPage('getAlmacenConsumibles', {});
+    }
+
+    _closeAlmacen() {
+      this.shadowRoot.getElementById('almScrim')?.remove();
+    }
+
+    _almFiltrados() {
+      const q = (this._almQ || '').trim().toLowerCase();
+      const cat = this._almCat || '';
+      return (this._almProductos || []).filter(p => {
+        if (cat && (p.category || '') !== cat) return false;
+        if (!q) return true;
+        return `${p.productName} ${p.brand} ${p.category}`.toLowerCase().includes(q);
+      });
+    }
+
+    _renderAlmacen() {
+      const scrim = this.shadowRoot.getElementById('almScrim');
+      if (!scrim) return;
+
+      const cats = Array.from(new Set((this._almProductos || [])
+        .map(p => (p.category || '').trim()).filter(c => c)))
+        .sort((a, b) => a.localeCompare(b, 'es'));
+
+      const lista = this._almFiltrados();
+
+      let cuerpo;
+      if (this._almCargando) {
+        cuerpo = '<div class="alm-empty">Cargando productos…</div>';
+      } else if (!lista.length) {
+        cuerpo = '<div class="alm-empty">No hay productos que coincidan.</div>';
+      } else {
+        cuerpo = lista.map(p => {
+          const ocupado = this._almOcupado[p.id] === true;
+          const meta = [p.brand, p.category, p.unit].filter(x => x).join(' · ');
+          return `<div class="alm-row" data-id="${esc(p.id)}">
+            ${p.imageUrl ? `<img class="alm-img" src="${esc(p.imageUrl)}" alt=""/>` : '<div class="alm-img"></div>'}
+            <div class="alm-main">
+              <div class="alm-name">${esc(p.productName)}</div>
+              <div class="alm-meta">${esc(meta)}${p.needsRestock ? ' · <span class="alm-low">⚠ reponer</span>' : ''}</div>
+            </div>
+            <div class="alm-cnt"><b>${p.stockStored}</b><span>Cerrados</span></div>
+            <div class="alm-cnt use"><b>${p.stockInUse}</b><span>En uso</span></div>
+            <div class="alm-acts">
+              <button class="alm-btn" data-alm="tirar" data-id="${esc(p.id)}" title="Bote terminado: tirar a la basura"${ocupado || p.total <= 0 ? ' disabled' : ''}>🗑️<small>TIRAR</small></button>
+              <button class="alm-btn" data-alm="sacar" data-id="${esc(p.id)}" title="Sacar un bote del almacén para empezarlo"${ocupado || p.stockStored <= 0 ? ' disabled' : ''}>📤<small>SACAR</small></button>
+            </div>
+          </div>`;
+        }).join('');
+      }
+
+      scrim.innerHTML = `<div class="alm-modal">
+        <div class="alm-head">
+          <span class="alm-title">🗄️ ALMACÉN · consumo del día</span>
+          <button class="alm-x" id="almX">✕</button>
+        </div>
+        <div class="alm-filters">
+          <input class="alm-input" id="almQ" type="text" placeholder="Buscar producto, marca o categoría…" value="${esc(this._almQ || '')}"/>
+          <select class="alm-sel" id="almCat">
+            <option value="">Todas las categorías</option>
+            ${cats.map(c => `<option value="${esc(c)}"${this._almCat === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="alm-list">${cuerpo}</div>
+        <div class="alm-foot">🗑️ TIRAR: bote terminado — descuenta uno del almacén y abre el siguiente. &nbsp;·&nbsp; 📤 SACAR: coger un bote para empezarlo, sin tirar ninguno.</div>
+      </div>`;
+
+      this._almRewire();
+    }
+
+    _almRewire() {
+      const scrim = this.shadowRoot.getElementById('almScrim');
+      if (!scrim) return;
+
+      scrim.addEventListener('click', (e) => { if (e.target === scrim) this._closeAlmacen(); }, { once: true });
+      scrim.querySelector('#almX')?.addEventListener('click', () => this._closeAlmacen());
+
+      const inp = scrim.querySelector('#almQ');
+      if (inp) {
+        inp.addEventListener('input', () => {
+          this._almQ = inp.value;
+          this._renderAlmacen();
+          // Devolver el foco y el cursor al final tras repintar.
+          const nuevo = this.shadowRoot.querySelector('#almQ');
+          if (nuevo) { nuevo.focus(); nuevo.setSelectionRange(nuevo.value.length, nuevo.value.length); }
+        });
+      }
+      scrim.querySelector('#almCat')?.addEventListener('change', (e) => {
+        this._almCat = e.target.value;
+        this._renderAlmacen();
+      });
+
+      scrim.querySelectorAll('[data-alm]').forEach(b => {
+        b.addEventListener('click', () => this._almAccion(b.dataset.alm, b.dataset.id));
+      });
+    }
+
+    // Firma del movimiento: el empleado logueado por PIN. Sin capa de
+    // login activa (usersActivation en false) se graba sin firma, igual
+    // que hace _logEvent.
+    _almFirma() {
+      const s = this._empleadoActivo;
+      if (!this._usersActivation || !s) return { staffId: '', staffName: '' };
+      return {
+        staffId: s._id || s.staffId || s.wixResourceId || '',
+        staffName: s.staffName || s.displayName || s.name || ''
+      };
+    }
+
+    _almAccion(accion, id) {
+      const p = (this._almProductos || []).find(x => x.id === id);
+      if (!p || this._almOcupado[id]) return;
+      if (accion === 'tirar' && p.total <= 0) return;
+      if (accion === 'sacar' && p.stockStored <= 0) return;
+
+      this._almOcupado[id] = true;
+      this._renderAlmacen();
+      this._sendToPage(accion === 'tirar' ? 'almacenPapelera' : 'almacenSacar', {
+        payload: { productId: id, ...this._almFirma() }
+      });
+      this._toast(accion === 'tirar' ? `🗑️ ${p.productName}` : `📤 ${p.productName}`);
+    }
+
+    _onAlmData(p) {
+      this._almCargando = false;
+      this._almProductos = Array.isArray(p.productos) ? p.productos : [];
+      if (p.error) this._toast('Almacén: ' + p.error);
+      this._renderAlmacen();
+    }
+
+    // Actualización en local con los contadores que devuelve el backend:
+    // no se relee la lista entera por cada clic.
+    _onAlmAccion(p) {
+      const d = p.data || {};
+      const id = d.productId || p.productId;
+      if (id) this._almOcupado[id] = false;
+
+      if (!d.ok) {
+        this._toast('Almacén: ' + (d.error || 'no se pudo registrar'));
+        this._renderAlmacen();
+        return;
+      }
+
+      const i = (this._almProductos || []).findIndex(x => x.id === id);
+      if (i >= 0) {
+        const it = this._almProductos[i];
+        it.stockStored = d.stockStored;
+        it.stockInUse = d.stockInUse;
+        it.total = (typeof d.total === 'number') ? d.total : (d.stockStored + d.stockInUse);
+        if (typeof d.needsRestock === 'boolean') it.needsRestock = d.needsRestock;
+        // Un producto que llega a cero sale del listado de consumo.
+        if (it.total <= 0) this._almProductos.splice(i, 1);
+      }
+      this._renderAlmacen();
     }
 
     // ═══════════════════════════════════════════════════
