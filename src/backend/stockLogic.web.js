@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE — ALMACÉN DE USO EN SALÓN (V2, CMS-first)
 // Backend: stockLogic.web.js
-// VERSION: 1.0.0
+// VERSION: 1.0.2
 // FECHA:   2 de agosto de 2026
 // =====================================================
 //
@@ -105,6 +105,26 @@
 // producto. Multi-tenant por construcción.
 //
 // CHANGELOG
+// v1.0.2 (2 ago 2026): + exportarExcel(). Genera un .xlsx REAL de cuatro
+//         hojas (Informe · Categorías · Marcas · Listado) y lo devuelve
+//         en base64 para que el widget lo descargue.
+//         PATRÓN COPIADO LITERAL de testCheckout.web.js (generarExcel) y
+//         de http-functions.js (get_descargarExcel), ambos en producción:
+//           import * as XLSX from 'xlsx'   ← paquete npm ya instalado
+//           XLSX.utils.json_to_sheet / aoa_to_sheet / book_new /
+//           book_append_sheet, ws['!cols'], y
+//           XLSX.write(wb, { type: 'base64', bookType: 'xlsx' })
+//         Sin librerías externas ni URLs de terceros. testCheckout NO se
+//         toca (lista negra de backends compartidos): solo se replica su
+//         patrón aquí.
+// v1.0.1 (2 ago 2026): + generarStockInicial(). Función de un solo uso
+//         para la migración del listado de almacén de KALÓNICE: recorre
+//         KamisuiteStock y, por cada producto con stockStored > 0 que aún
+//         NO tenga ningún movimiento, escribe su fila ENTRADA /
+//         STOCK_INICIAL. Idempotente: se puede ejecutar las veces que
+//         haga falta sin duplicar. Existe porque el CSV no puede traer
+//         los movimientos: el campo productId necesita el _id que Wix
+//         genera en la importación.
 // v1.0.0 (2 ago 2026): versión inicial. CRUD de productos, motor de
 //         movimientos, papelera, apertura, ajuste por recuento,
 //         traspaso desde Wix Stores con reversión, histórico, listado
@@ -115,13 +135,14 @@ import { Permissions, webMethod } from 'wix-web-module';
 import { mediaManager } from 'wix-media-backend';
 import { elevate } from 'wix-auth';
 import wixData from 'wix-data';
+import * as XLSX from 'xlsx';
 import {
   getProductVariants,
   decrementInventory,
   updateInventoryVariantFieldsByProductId
 } from 'wix-stores-backend';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.2';
 const TAG = `[Stock][${VERSION}]`;
 
 const CMS_STOCK = 'KamisuiteStock';
@@ -1030,6 +1051,243 @@ export const movimientosRecientes = webMethod(
       return { ok: true, total: movimientos.length, movimientos, version: VERSION };
     } catch (e) {
       console.error(`${TAG} ❌ movimientosRecientes:`, e.message);
+      return { ok: false, error: e.message };
+    }
+  }
+);
+
+// =====================================================
+// 12. GENERAR STOCK INICIAL (migración, un solo uso)
+// =====================================================
+// Recorre KamisuiteStock y escribe la fila ENTRADA / STOCK_INICIAL de
+// cada producto con stockStored > 0 que todavía no tenga histórico.
+//
+// Por qué existe: el CSV de importación no puede traer los movimientos,
+// porque KamisuiteStockMoves.productId es el _id que Wix genera al
+// importar y no se conoce antes. Se importan primero las fichas con su
+// cantidad y después se llama a esta función una sola vez.
+//
+// IDEMPOTENTE: un producto que ya tiene cualquier movimiento se salta.
+// Se puede ejecutar dos veces sin duplicar nada.
+//
+// NO toca los contadores: la cantidad ya está en la ficha importada.
+// Solo escribe la traza que le da un punto de partida al histórico
+// (storedBefore 0 → storedAfter = stockStored).
+export const generarStockInicial = webMethod(
+  Permissions.SiteMember,
+  async (datos) => {
+    try {
+      const nota = str(datos?.notes) || 'Stock importado del listado de almacén';
+      const staffName = str(datos?.staffName) || 'MIGRACIÓN';
+
+      const productos = await leerTodo(CMS_STOCK);
+      const conMovimiento = new Set(
+        (await leerTodo(CMS_MOVES)).map(m => str(m.productId)).filter(id => id)
+      );
+
+      let creados = 0, saltados = 0, sinStock = 0;
+      const errores = [];
+
+      for (const p of productos) {
+        const stored = num(p.stockStored, 0);
+        if (stored <= 0) { sinStock += 1; continue; }
+        if (conMovimiento.has(p._id)) { saltados += 1; continue; }
+
+        try {
+          await insertarMovimiento({
+            productId: p._id,
+            productName: str(p.productName),
+            storesProductId: str(p.storesProductId),
+            moveType: 'ENTRADA',
+            reason: 'STOCK_INICIAL',
+            quantity: stored,
+            storedBefore: 0,
+            storedAfter: stored,
+            inUseBefore: 0,
+            inUseAfter: num(p.stockInUse, 0),
+            staffId: '',
+            staffName,
+            notes: nota
+          });
+          creados += 1;
+        } catch (err) {
+          errores.push(`${str(p.productName)}: ${err.message}`);
+        }
+      }
+
+      console.log(`${TAG} 🧾 Stock inicial → creados:${creados} saltados:${saltados} sinStock:${sinStock} errores:${errores.length}`);
+      return { ok: true, creados, saltados, sinStock, errores, version: VERSION };
+    } catch (e) {
+      console.error(`${TAG} ❌ generarStockInicial:`, e.message);
+      return { ok: false, error: e.message };
+    }
+  }
+);
+
+// =====================================================
+// 13. EXPORTAR A EXCEL (.xlsx real)
+// =====================================================
+// Cuatro hojas:
+//   Informe     — valoración, estado del stock y calidad del dato
+//   Categorías  — referencias, unidades, % y valor por categoría
+//   Marcas      — lo mismo por marca
+//   Listado     — las referencias completas, una fila por producto
+//
+// Las métricas se calculan AQUÍ, sobre la colección, no sobre lo que
+// el widget tenga filtrado en pantalla: el informe descargado siempre
+// refleja el almacén entero.
+//
+// Devuelve el fichero en base64 con el mismo contrato que
+// testCheckout.generarExcel: { ok, archivo, nombreArchivo, mimeType }.
+export const exportarExcel = webMethod(
+  Permissions.SiteMember,
+  async () => {
+    try {
+      const rows = await leerTodo(CMS_STOCK);
+      if (!rows.length) return { ok: false, error: 'El almacén está vacío' };
+
+      const productos = rows.map(adaptarProducto)
+        .sort((a, b) => a.productName.localeCompare(b.productName, 'es'));
+      const act = productos.filter(p => p.active);
+
+      // ── Métricas ──
+      let valorCoste = 0, valorComercial = 0, margen = 0;
+      let sinCoste = 0, sinPvp = 0, refsMargen = 0;
+      for (const p of act) {
+        if (p.unitCost > 0) valorCoste += p.total * p.unitCost; else sinCoste++;
+        if (p.retailPrice > 0) valorComercial += p.total * p.retailPrice; else sinPvp++;
+        if (p.unitCost > 0 && p.retailPrice > 0) {
+          margen += p.total * (p.retailPrice - p.unitCost);
+          refsMargen++;
+        }
+      }
+      const uds = act.reduce((a, p) => a + p.total, 0);
+      const r2 = n => Math.round((Number(n) || 0) * 100) / 100;
+      const pct = (n, t) => t > 0 ? Math.round((n / t) * 1000) / 10 : 0;
+
+      const agrupar = (campo) => {
+        const m = {};
+        for (const p of act) {
+          const k = (p[campo] || '').trim() || '(sin asignar)';
+          if (!m[k]) m[k] = { k, refs: 0, uds: 0, com: 0, coste: 0 };
+          m[k].refs++; m[k].uds += p.total;
+          if (p.retailPrice > 0) m[k].com += p.total * p.retailPrice;
+          if (p.unitCost > 0) m[k].coste += p.total * p.unitCost;
+        }
+        return Object.values(m).sort((a, b) => b.uds - a.uds);
+      };
+      const cats = agrupar('category');
+      const marcas = agrupar('brand');
+
+      const hoy = new Date().toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' });
+
+      // ── Hoja 1: Informe ──
+      const informe = [
+        ['INFORME DE ALMACÉN', hoy],
+        [],
+        ['VALORACIÓN', ''],
+        ['Valor comercial (PVP × unidades)', r2(valorComercial)],
+        ['Valor contable (coste × unidades)', r2(valorCoste)],
+        ['Margen teórico', r2(margen)],
+        ['Referencias con coste y PVP', refsMargen],
+        ['Valor medio por unidad', uds ? r2(valorComercial / uds) : 0],
+        [],
+        ['ESTADO DEL STOCK', ''],
+        ['Referencias activas', act.length],
+        ['Referencias inactivas', productos.length - act.length],
+        ['Referencias totales', productos.length],
+        ['Unidades totales', uds],
+        ['Unidades cerradas', act.reduce((a, p) => a + p.stockStored, 0)],
+        ['Unidades abiertas (en uso)', act.reduce((a, p) => a + p.stockInUse, 0)],
+        ['Referencias con botes abiertos', act.filter(p => p.stockInUse > 0).length],
+        ['Referencias con menos de 3 unidades', act.filter(p => p.total > 0 && p.total < 3).length],
+        ['Referencias bajo mínimo', act.filter(p => p.needsRestock && !p.outOfStock).length],
+        ['Referencias agotadas', act.filter(p => p.outOfStock).length],
+        [],
+        ['CALIDAD DEL DATO', ''],
+        ['Referencias con PVP informado', act.length - sinPvp],
+        ['% con PVP', pct(act.length - sinPvp, act.length)],
+        ['Referencias con coste informado', act.length - sinCoste],
+        ['% con coste', pct(act.length - sinCoste, act.length)],
+        ['Referencias sin stock mínimo', act.filter(p => !p.minStock).length]
+      ];
+      const wsInf = XLSX.utils.aoa_to_sheet(informe);
+      wsInf['!cols'] = [{ wch: 42 }, { wch: 18 }];
+
+      // ── Hojas 2 y 3: Categorías y Marcas ──
+      const filaGrupo = g => ({
+        'Nombre': g.k,
+        'Referencias': g.refs,
+        'Unidades': g.uds,
+        '% unidades': pct(g.uds, uds),
+        'Valor comercial (€)': r2(g.com),
+        '% valor': pct(g.com, valorComercial),
+        'Valor coste (€)': r2(g.coste)
+      });
+      const colsGrupo = [{ wch: 26 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 10 }, { wch: 15 }];
+
+      const wsCat = XLSX.utils.json_to_sheet(cats.map(filaGrupo));
+      wsCat['!cols'] = colsGrupo;
+      const wsMar = XLSX.utils.json_to_sheet(marcas.map(filaGrupo));
+      wsMar['!cols'] = colsGrupo;
+
+      // ── Hoja 4: Listado ──
+      const listado = productos.map(p => {
+        const estado = !p.active ? 'INACTIVO'
+          : p.outOfStock ? 'AGOTADO'
+          : p.needsRestock ? 'REPONER'
+          : p.total < 3 ? 'CRÍTICO' : 'OK';
+        return {
+          'Producto': p.productName,
+          'Marca': p.brand,
+          'Categoría': p.category,
+          'Unidad': p.unit,
+          'Cerrados': p.stockStored,
+          'En uso': p.stockInUse,
+          'Total': p.total,
+          'Mínimo': p.minStock,
+          'Coste (€)': p.unitCost != null ? p.unitCost : '',
+          'Valor coste (€)': p.unitCost != null ? r2(p.unitCost * p.total) : '',
+          'PVP (€)': p.retailPrice != null ? p.retailPrice : '',
+          'Valor PVP (€)': p.retailPrice != null ? r2(p.retailPrice * p.total) : '',
+          'Proveedor': p.supplier,
+          'Estado': estado,
+          'SKU': p.sku,
+          'ID origen': p.legacyId,
+          'Notas': p.notes
+        };
+      });
+      const wsList = XLSX.utils.json_to_sheet(listado);
+      wsList['!cols'] = [
+        { wch: 40 }, { wch: 18 }, { wch: 18 }, { wch: 12 },
+        { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 9 },
+        { wch: 11 }, { wch: 15 }, { wch: 10 }, { wch: 14 },
+        { wch: 18 }, { wch: 11 }, { wch: 14 }, { wch: 11 }, { wch: 55 }
+      ];
+
+      // ── Libro ──
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, wsInf, 'Informe');
+      XLSX.utils.book_append_sheet(wb, wsCat, 'Categorías');
+      XLSX.utils.book_append_sheet(wb, wsMar, 'Marcas');
+      XLSX.utils.book_append_sheet(wb, wsList, 'Listado');
+
+      const archivo = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+      const fechaFichero = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+      const nombreArchivo = `almacen_${fechaFichero}.xlsx`;
+
+      console.log(`${TAG} 📊 Excel generado: ${productos.length} referencias, 4 hojas`);
+
+      return {
+        ok: true,
+        archivo,
+        nombreArchivo,
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        totalRegistros: productos.length,
+        version: VERSION
+      };
+    } catch (e) {
+      console.error(`${TAG} ❌ exportarExcel:`, e.message);
       return { ok: false, error: e.message };
     }
   }
