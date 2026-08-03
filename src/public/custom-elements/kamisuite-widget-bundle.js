@@ -3,8 +3,45 @@
  * BUNDLE para Wix Custom Element (todo-en-uno)
  * =====================================================================
  * Tag name:  kami-reserva
- * VERSION:   2.0.16 (bundle)
- * FECHA:     5 de julio de 2026
+ * VERSION:   2.0.17 (bundle)
+ * FECHA:     3 de agosto de 2026
+ *
+ * v2.0.17 — SEGUNDO PROFESIONAL PARA LOS COMPLEMENTOS (recuperado de V1).
+ *   Backend pareja: widgetPublicoLogic v0.9.0. Motor final:
+ *   Page code: Servicios (Item) v0.3.5. El motor de packs
+ *   (recepcionProLogic) NO se toca: el reparto de fases lo aplica el
+ *   propio backend del widget público tras crear la reserva.
+ *
+ *   La UI de este bloque llevaba en el bundle desde el principio
+ *   (state.proExtra, state.sameExtra, _renderProExtra, fila "Compl. con"
+ *   del resumen y de la confirmación) pero NUNCA se veía, porque el
+ *   backend emitía `requiresExtraPro: false` hardcodeado. Y aunque se
+ *   hubiera visto, el segundo profesional no viajaba en ninguno de los dos
+ *   emits. Esta versión cierra el lazo:
+ *
+ *   · _hayComplementosElegidos() — nuevo. El bloque solo se pinta si el
+ *     servicio tiene complementos (requiresExtraPro del backend) Y el
+ *     cliente ha MARCADO al menos uno. Sin complemento marcado no hay nada
+ *     que repartir.
+ *   · _renderProExtra ahora es defensivo con proExtraField null (el Paso 2
+ *     puede no existir) y, al ocultarse, normaliza el estado a "mismo
+ *     profesional" para no dejar un segundo profesional fantasma.
+ *   · _afterCompChange repinta el bloque: aparece al marcar el primer
+ *     complemento y desaparece al quedarse sin ninguno.
+ *   · Cambiar el switch o el chip del segundo profesional AHORA vuelve a
+ *     pedir huecos (this.state.hour = null + _recompute(true)), igual que
+ *     hace _renderProMain desde v2.0.9: la disponibilidad depende de los
+ *     dos profesionales, y la hora elegida puede dejar de ser válida.
+ *   · _renderProMain repinta también el bloque del segundo.
+ *   · _proExtraEnvio() — nuevo. Devuelve "" salvo que haya reparto real
+ *     (bloque visible + switch en "otro" + id concreto ≠ principal ≠ 'any').
+ *   · 'pedir-huecos' añade `proExtraId` y `principalSetupUid` (el backend
+ *     necesita el mapeoFases del servicio para calcular el punto de corte).
+ *   · 'reservar' añade `staffExtraId`.
+ *
+ *   Con proExtraId/staffExtraId vacíos, TODO el comportamiento es idéntico
+ *   a v2.0.16. Cero cambios de estética, de flujo, de gating, de variantes
+ *   o de resumen.
  *
  * v2.0.16 — durationMin (duración total) en el payload de reserva.
  *   El payload del evento 'reservar' incluye ahora durationMin =
@@ -1601,6 +1638,14 @@ window.KR_applySkin = function (el, name) {
           fecha: day.id,
           proId: this.state.proMain,
           durationMin: calc.duration,
+          // v2.0.17 — Segundo profesional para los complementos. Cuando va
+          // informado, el backend (widgetPublicoLogic v0.9.0) parte la cita
+          // en dos tramos y valida cada uno contra su profesional. Vacío →
+          // motor mono-profesional, idéntico a v2.0.16.
+          // `principalSetupUid` es necesario para que el backend calcule el
+          // punto de corte a partir del mapeoFases del servicio.
+          proExtraId: this._proExtraEnvio(),
+          principalSetupUid: (this._service && this._service.setupUid) || "",
           // v2.0.8 — Restringe candidatos cuando proId='any' a los
           // profesionales permitidos para este servicio (idStaff).
           idStaffPermitidos: Array.isArray(this._service.idStaff) ? this._service.idStaff : []
@@ -2077,6 +2122,10 @@ window.KR_applySkin = function (el, name) {
         this.state.hour = null;
         this._renderProMain();
         if (this.state.sameExtra) this.state.proExtra = id;
+        // v2.0.17 — repintar los chips del segundo profesional: el
+        // principal ya no debe salir seleccionable como "otro", y si el
+        // switch está en "el mismo" hay que reflejar el cambio.
+        this._renderProExtra();
         this._recompute(true);
         this._renderActions();
         this._renderSummary();
@@ -2263,15 +2312,55 @@ window.KR_applySkin = function (el, name) {
     _afterCompChange() {
       this.state.hour = null;
       this._renderComplements();
+      // v2.0.17 — El bloque "Profesional para los complementos" depende de
+      // que haya complementos MARCADOS, así que se repinta cada vez que el
+      // cliente toca uno (aparece al marcar el primero, desaparece al
+      // quedarse sin ninguno).
+      this._renderProExtra();
       this._recompute(true);
       this._renderActions();
       this._renderSummary();
     }
 
     /* ---- professional for complements ---- */
+    // v2.0.17 — ¿El cliente ha marcado algún complemento?
+    // bool  → valor truthy.
+    // choice→ opción elegida distinta de 'none'. Si aún no ha elegido nada
+    //         (undefined) cuenta como NO marcado: el bloque solo aparece
+    //         cuando hay una elección real que repartir.
+    _hayComplementosElegidos() {
+      const cfg = this._service;
+      if (!cfg || !Array.isArray(cfg.complements) || !this.state || !this.state.comp) return false;
+      return cfg.complements.some(c => {
+        const v = this.state.comp[c.id];
+        if (c.type === "bool") return !!v;
+        const o = (c.options || []).find(op => op.id === v);
+        return !!(o && o.id !== "none");
+      });
+    }
+
     _renderProExtra() {
+      // v2.0.17 — defensivo: el Paso 2 puede no existir (_build deja
+      // proExtraField = null). Necesario porque ahora se llama también
+      // desde _afterCompChange.
+      if (!this.proExtraField) return;
+
       this.proExtraField.innerHTML = "";
-      if (!this._service.requiresExtraPro) { this.proExtraField.hidden = true; return; }
+
+      // v2.0.17 — Doble condición:
+      //   · requiresExtraPro (backend widgetPublicoLogic v0.9.0: el
+      //     servicio TIENE complementos elegibles), y
+      //   · el cliente ha marcado al menos uno (si no, no hay nada que
+      //     repartir y el bloque sería ruido).
+      // Al ocultarse se normaliza el estado a "mismo profesional" para no
+      // dejar un segundo profesional fantasma en el payload.
+      if (!this._service.requiresExtraPro || !this._hayComplementosElegidos()) {
+        this.proExtraField.hidden = true;
+        this.state.sameExtra = true;
+        this.state.proExtra = this.state.proMain;
+        return;
+      }
+
       this.proExtraField.hidden = false;
       this.proExtraField.appendChild(el("label", "kr-label", "Profesional para los complementos"));
       const row = el("div", "kr-switchrow");
@@ -2281,7 +2370,15 @@ window.KR_applySkin = function (el, name) {
       sw.addEventListener("change", () => {
         this.state.sameExtra = sw.checked;
         if (sw.checked) this.state.proExtra = this.state.proMain;
-        this._renderProExtra(); this._renderSummary();
+        // v2.0.17 — La disponibilidad depende AHORA de los dos
+        // profesionales: al cambiar el reparto hay que volver a pedir
+        // huecos, igual que hace _renderProMain al cambiar el principal.
+        // La hora elegida puede ya no ser válida con el nuevo reparto.
+        this.state.hour = null;
+        this._renderProExtra();
+        this._recompute(true);
+        this._renderActions();
+        this._renderSummary();
       });
       row.appendChild(sw);
       this.proExtraField.appendChild(row);
@@ -2289,9 +2386,28 @@ window.KR_applySkin = function (el, name) {
         const sub = el("div", "kr-pros kr-subselect");
         this.proExtraField.appendChild(sub);
         this._proChips(sub, this.state.proExtra, id => {
-          this.state.proExtra = id; this._renderProExtra(); this._renderSummary();
+          if (this.state.proExtra === id) return;   // no-op si no cambia
+          this.state.proExtra = id;
+          this.state.hour = null;
+          this._renderProExtra();
+          this._recompute(true);
+          this._renderActions();
+          this._renderSummary();
         });
       }
+    }
+
+    // v2.0.17 — wixResourceId del SEGUNDO profesional a enviar al backend.
+    // Devuelve "" cuando no hay reparto (bloque oculto, switch "el mismo",
+    // wildcard 'Cualquiera', o coincide con el principal) → el backend
+    // toma el camino mono-profesional idéntico al de v2.0.16.
+    _proExtraEnvio() {
+      if (!this._service || !this._service.requiresExtraPro) return "";
+      if (!this._hayComplementosElegidos()) return "";
+      if (!this.state || this.state.sameExtra) return "";
+      const pe = this.state.proExtra;
+      if (!pe || pe === "any" || pe === this.state.proMain) return "";
+      return pe;
     }
 
     /* ---- hours / availability ---- */
@@ -2835,6 +2951,10 @@ window.KR_applySkin = function (el, name) {
           complementosSetupUid,
           staffId: this.state.proMain,
           staffName: this._proName(this.state.proMain),
+          // v2.0.17 — Segundo profesional para los complementos. Vacío
+          // cuando no hay reparto → crearReservaPublica se comporta como
+          // en v2.0.16 (toda la cita al principal).
+          staffExtraId: this._proExtraEnvio(),
           contactDetails: {
             firstName: data.nombre,
             lastName: data.apellido,
