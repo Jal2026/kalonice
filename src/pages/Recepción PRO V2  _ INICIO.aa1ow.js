@@ -489,7 +489,13 @@ import {
   registrarMovimiento as registrarMovimientoStock
 } from 'backend/stockLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.34]';
+// v1.0.35 — FICHA TÉCNICA (histórico de color del sistema anterior).
+// Backend de SOLO LECTURA y SIN datos económicos: getFichaTecnicaCliente
+// no devuelve importes ni métodos de pago en ningún nivel del payload.
+// Nombre comprobado contra el resto de imports de este archivo: no colisiona.
+import { getFichaTecnicaCliente } from 'backend/memoriaLegacyLogic.web';
+
+const TAG = '[RecepcionProCMS v1.0.35]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -633,6 +639,57 @@ async function handleGetEspecialesData() {
   } catch (e) {
     console.error(`${TAG} ❌ getEspecialesData:`, e);
     sendResponse('especialesData', { config: null, servicios: [], campaigns: [], error: e?.message || 'Error' });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// v1.0.35 — FICHA TÉCNICA (histórico de color del sistema anterior)
+// ═══════════════════════════════════════════════════════════
+// Popup de la barra superior. Uso: personal de sala.
+//
+// ⚠️ SIN DATOS ECONÓMICOS. El filtro está en el backend, no aquí ni en
+// el widget: getFichaTecnicaCliente nunca envía importes. Filtrar en el
+// render sería inútil (se vería en el inspector del navegador).
+//
+// El buscador usa cacheContactos con canal propio
+// (ftBuscarCliente/ftClientesEncontrados) para no pisar ni la búsqueda
+// del aside (buscarCliente) ni la de ESPECIALES (espBuscarCliente).
+
+function handleFtBuscarCliente(msg) {
+  const searchTerm = String(msg.query || '').trim().toLowerCase();
+  if (searchTerm.length < 2) { sendResponse('ftClientesEncontrados', { clientes: [] }); return; }
+  const searchPhone = searchTerm.replace(/[\s\-\(\)]/g, '');
+  const filtered = cacheContactos.filter(c => {
+    const nombre = (c.nombreCompleto || '').toLowerCase();
+    const telefono = (c.telefono || '').replace(/[\s\-\(\)]/g, '');
+    return nombre.includes(searchTerm) || telefono.includes(searchPhone);
+  });
+  const limitados = filtered.slice(0, 20);
+  sendResponse('ftClientesEncontrados', {
+    clientes: limitados,
+    totalEncontrados: filtered.length,
+    mostrados: limitados.length
+  });
+}
+
+async function handleFichaTecnica(msg) {
+  try {
+    const data = await getFichaTecnicaCliente({
+      telefono: msg.telefono || '',
+      clientId: (msg.clientId === undefined || msg.clientId === '') ? null : msg.clientId
+    });
+    sendResponse('fichaTecnicaData', {
+      data,
+      clientName: msg.clientName || '',
+      telefono: msg.telefono || ''
+    });
+  } catch (e) {
+    console.error(`${TAG} ❌ fichaTecnica:`, e);
+    sendResponse('fichaTecnicaData', {
+      data: { ok: false, error: { message: e?.message || 'Error' } },
+      clientName: msg.clientName || '',
+      telefono: msg.telefono || ''
+    });
   }
 }
 
@@ -1709,6 +1766,8 @@ $w.onReady(function () {
         case 'validatePin':          handleValidatePin(msg); break;
         case 'logEvent':             handleLogEvent(msg); break;
         // v1.0.34 — popup ALMACÉN
+        case 'ftBuscarCliente':      handleFtBuscarCliente(msg); break;
+        case 'getFichaTecnica':      handleFichaTecnica(msg); break;
         case 'getAlmacenConsumibles': handleAlmacenConsumibles(); break;
         case 'almacenPapelera':       handleAlmacenPapelera(msg); break;
         case 'almacenSacar':          handleAlmacenSacar(msg); break;
