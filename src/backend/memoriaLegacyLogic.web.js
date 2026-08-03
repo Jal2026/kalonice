@@ -1,11 +1,28 @@
 // =====================================================
 // KAMISUITE — Backend: MEMORIA (histórico legacy SABDE)
 // =====================================================
-// VERSION: 1.0.1
+// VERSION: 1.0.2
 // FECHA:   3 de agosto de 2026
 // ARCHIVO: backend/memoriaLegacyLogic.web.js
 //
 // CHANGELOG
+//   v1.0.2 (3-Ago-2026) — Producto identificado por referencia.
+//     El CSV v3 resuelve el nombre real de cada producto cruzando el
+//     NroProd del ticket con la columna Prod del listado de almacén de
+//     SADPE (27 de 32 referencias de 2026, 97,5% del importe), y añade
+//     `p` (referencia) y `m` (marca) a cada línea de venta.
+//     · shapeTicket expone refProducto y marca.
+//     · NUEVO helper claveServicio(): TODAS las ventas comparten el
+//       código 'VN', así que agrupar por código las fundiría en una
+//       sola fila con el nombre del primer producto que apareciera.
+//       Las líneas de VENTA se agrupan por 'VN:<referencia>'; el resto
+//       sigue agrupándose por código. Aplicado en getMemoriaResumen y
+//       en getMemoriaCliente.
+//     · NUEVO bloque `porMarca` en getMemoriaResumen (solo líneas de
+//       venta; las que no tienen ficha en el almacén caen en
+//       'SIN MARCA', no se inventan).
+//     · getMemoriaServicio acepta ahora la clave compuesta 'VN:<ref>'
+//       además del código simple.
 //   v1.0.1 (3-Ago-2026) — FIX lectura del campo `lineas`.
 //     El CSV v1 escribía un ARRAY JSON directo `[{...}]`, que dispara
 //     el triángulo amarillo de Wix tanto en campo Text como en Object.
@@ -80,7 +97,7 @@
 //
 // FUNCIONES EXPORTADAS
 //   getMemoriaResumen()        → KPIs, serie mensual, grupos, servicios,
-//                                staff, métodos de pago, día de semana
+//                                marcas, staff, métodos de pago, día semana
 //   getMemoriaClientes()       → índice agregado por cliente (buscador)
 //   getMemoriaCliente()        → ficha legacy de un cliente + fórmulas
 //   getMemoriaDia()            → "Aquel día": tickets de una fecha
@@ -92,7 +109,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const TAG = `[MemoriaLegacy][${VERSION}]`;
 
 const CMS_TICKETS = 'KamisuiteLegacyTickets';
@@ -163,6 +180,12 @@ const F_MES = {
 // i=importe, of=oficial.
 const L_COD = 'c', L_DESC = 'd', L_GRUPO = 'g';
 const L_CANT = 'q', L_IMP = 'i', L_OFICIAL = 'of';
+// Solo en líneas de venta: p = referencia legacy del producto (NroProd
+// de SABDE = columna Prod del almacén), m = marca resuelta desde la ficha.
+const L_REFPROD = 'p', L_MARCA = 'm';
+
+// Grupo de tarifa que identifica una línea de venta de producto.
+const GRUPO_VENTA = 'VENTA';
 
 // =====================================================
 // HELPERS
@@ -241,6 +264,15 @@ function jsonIn(v, unwrapKey) {
   return [];
 }
 
+// Clave de agrupación de una línea. Todas las ventas de producto
+// comparten el código 'VN' de la tarifa, de modo que agrupar por código
+// las mezclaría bajo un único nombre. Para VENTA la clave incluye la
+// referencia del producto; para el resto es el código de servicio.
+function claveServicio(l) {
+  if (l.grupo === GRUPO_VENTA && l.refProducto) return 'VN:' + l.refProducto;
+  return l.codigo || '?';
+}
+
 function parseObj(raw) {
   if (!raw) return {};
   if (typeof raw === 'object') return raw;
@@ -292,7 +324,9 @@ function shapeTicket(row) {
     grupo:     txt(l[L_GRUPO]),
     cantidad:  toNum(l[L_CANT]) || 1,
     importe:   r2(l[L_IMP]),
-    oficial:   txt(l[L_OFICIAL])
+    oficial:   txt(l[L_OFICIAL]),
+    refProducto: toNum(l[L_REFPROD]) || 0,
+    marca:     txt(l[L_MARCA])
   }));
 
   return {
@@ -400,6 +434,7 @@ export const getMemoriaResumen = webMethod(
       const dias = new Set();
       const porGrupo = new Map();
       const porServicio = new Map();
+      const porMarca = new Map();
       const porStaff = new Map();
       const porMetodo = new Map();
       const porDow = new Map();
@@ -441,14 +476,29 @@ export const getMemoriaResumen = webMethod(
           gg.lineas++; gg.importe += l.importe;
           porGrupo.set(g, gg);
 
-          const key = l.codigo || '?';
+          const key = claveServicio(l);
           const ss = porServicio.get(key) || {
-            codigo: key, servicio: l.servicio, grupo: g,
+            key: key, codigo: l.codigo || '?', servicio: l.servicio, grupo: g,
+            marca: l.marca, refProducto: l.refProducto,
+            esProducto: g === GRUPO_VENTA,
             lineas: 0, unidades: 0, importe: 0
           };
           ss.lineas++; ss.unidades += l.cantidad; ss.importe += l.importe;
           if (!ss.servicio && l.servicio) ss.servicio = l.servicio;
+          if (!ss.marca && l.marca) ss.marca = l.marca;
           porServicio.set(key, ss);
+
+          // Marca: solo tiene sentido en líneas de venta. Las referencias
+          // sin ficha en el almacén van a 'SIN MARCA' — no se adivina.
+          if (g === GRUPO_VENTA) {
+            const mk = l.marca || 'SIN MARCA';
+            const mm = porMarca.get(mk) || {
+              marca: mk, lineas: 0, unidades: 0, importe: 0, refs: new Set()
+            };
+            mm.lineas++; mm.unidades += l.cantidad; mm.importe += l.importe;
+            if (l.refProducto) mm.refs.add(l.refProducto);
+            porMarca.set(mk, mm);
+          }
 
           const of = l.oficial || 'SIN ASIGNAR';
           const st = porStaff.get(of) || { oficial: of, lineas: 0, importe: 0, tickets: new Set() };
@@ -491,6 +541,12 @@ export const getMemoriaResumen = webMethod(
           .sort((a, b) => b.importe - a.importe),
         porServicio: [...porServicio.values()]
           .map(s => ({ ...s, importe: r2(s.importe) }))
+          .sort((a, b) => b.importe - a.importe),
+        porMarca: [...porMarca.values()]
+          .map(m => ({
+            marca: m.marca, lineas: m.lineas, unidades: m.unidades,
+            importe: r2(m.importe), referencias: m.refs.size
+          }))
           .sort((a, b) => b.importe - a.importe),
         porStaff: [...porStaff.values()]
           .map(s => ({ oficial: s.oficial, lineas: s.lineas, importe: r2(s.importe), tickets: s.tickets.size }))
@@ -678,9 +734,14 @@ export const getMemoriaCliente = webMethod(
 
         for (const l of t.lineas) {
           if (!l.codigo) continue;
-          const s = porServicio.get(l.codigo) || { codigo: l.codigo, servicio: l.servicio, grupo: l.grupo, veces: 0, importe: 0 };
+          const kSrv = claveServicio(l);
+          const s = porServicio.get(kSrv) || {
+            key: kSrv, codigo: l.codigo, servicio: l.servicio, grupo: l.grupo,
+            marca: l.marca, esProducto: l.grupo === GRUPO_VENTA,
+            veces: 0, importe: 0
+          };
           s.veces++; s.importe += l.importe;
-          porServicio.set(l.codigo, s);
+          porServicio.set(kSrv, s);
 
           const of = l.oficial || 'SIN ASIGNAR';
           const st = porStaff.get(of) || { oficial: of, veces: 0, importe: 0 };
@@ -799,6 +860,15 @@ export const getMemoriaServicio = webMethod(
       const cod = txt(codigo).toUpperCase();
       if (!cod) return { ok: false, error: { message: 'Falta codigo' } };
 
+      // Clave compuesta de producto: 'VN:<referencia>'. Ver claveServicio().
+      let codBase = cod;
+      let refBuscada = 0;
+      if (cod.indexOf(':') > 0) {
+        const partes = cod.split(':');
+        codBase = partes[0];
+        refBuscada = toNum(partes[1]);
+      }
+
       const { tickets } = await getData(refresh);
 
       let veces = 0, unidades = 0, importe = 0;
@@ -807,13 +877,17 @@ export const getMemoriaServicio = webMethod(
       const porStaff = new Map();
       const clientes = new Map();
 
+      let marca = '';
+
       for (const t of tickets) {
         for (const l of t.lineas) {
-          if (txt(l.codigo).toUpperCase() !== cod) continue;
+          if (txt(l.codigo).toUpperCase() !== codBase) continue;
+          if (refBuscada && l.refProducto !== refBuscada) continue;
 
           veces++; unidades += l.cantidad; importe += l.importe;
           if (!descripcion && l.servicio) descripcion = l.servicio;
           if (!grupo && l.grupo) grupo = l.grupo;
+          if (!marca && l.marca) marca = l.marca;
 
           const mes = t.fecha.slice(0, 7);
           const m = porMes.get(mes) || { periodo: mes, veces: 0, importe: 0 };
@@ -841,8 +915,11 @@ export const getMemoriaServicio = webMethod(
         ok: true,
         version: VERSION,
         codigo: cod,
+        codigoBase: codBase,
+        refProducto: refBuscada,
         descripcion,
         grupo,
+        marca,
         totales: {
           veces,
           unidades,
