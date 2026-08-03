@@ -1,8 +1,26 @@
 // =====================================================
 // KAMISUITE — Page Code: /reservar/{slug}
 // =====================================================
-// VERSION: 0.3.4
-// FECHA: 5 de julio de 2026
+// VERSION: 0.3.5
+// FECHA: 3 de agosto de 2026
+//
+// v0.3.5:
+//   + Reenvía el SEGUNDO PROFESIONAL para los complementos, en los dos
+//     handlers. Este page code pasa los campos por lista blanca explícita,
+//     así que sin estas líneas el dato muere aquí y no llega al backend.
+//       · 'pedir-huecos' → `proExtraId` y `principalSetupUid`
+//         (getHuecosDisponibles v0.9.0 los necesita para partir la cita en
+//          dos tramos y calcular el punto de corte desde el mapeoFases).
+//       · 'reservar'     → `staffExtraId`
+//         (crearReservaPublica v0.9.0 estampa staffId en las fases del
+//          tramo posterior tras crear la reserva; el motor de packs
+//          compartido NO se modifica).
+//     Bundle pareja: kamisuite-widget-bundle v2.0.17. Con los campos
+//     vacíos, comportamiento v0.3.4 byte a byte. Cambio quirúrgico: tres
+//     propiedades añadidas a los objetos ya existentes. Cero cambios en el
+//     resto de los handlers, en 'navigate-back', en imports ni en helpers.
+//     Se CONSERVAN `varianteSel` (v0.3.3), `durationMin` (v0.3.4) e
+//     `idStaffPermitidos` (v0.3.2).
 //
 // v0.3.4:
 //   + Reenvía `durationMin` (duración total de la cita) desde el evento
@@ -234,7 +252,15 @@ function montarCustomElement() {
         fecha: d.fecha,
         proId: d.proId,
         durationMin: d.durationMin,
-        idStaffPermitidos: Array.isArray(d.idStaffPermitidos) ? d.idStaffPermitidos : []
+        idStaffPermitidos: Array.isArray(d.idStaffPermitidos) ? d.idStaffPermitidos : [],
+        // v0.3.5 — Segundo profesional para los complementos. Cuando llega
+        // informado, el backend v0.9.0 parte la cita en dos tramos y valida
+        // cada uno contra su profesional. Vacío → motor mono-profesional,
+        // comportamiento v0.3.4 idéntico. `principalSetupUid` es necesario
+        // para que el backend calcule el punto de corte a partir del
+        // mapeoFases del servicio.
+        proExtraId: d.proExtraId || '',
+        principalSetupUid: d.principalSetupUid || ''
       });
       // Devolver al widget vía atributo dedicado.
       // Patrón: cada respuesta tiene un requestId que el widget genera
@@ -284,6 +310,11 @@ function montarCustomElement() {
         durationMin: d.durationMin,
         staffId: d.staffId,
         staffName: d.staffName || '',
+        // v0.3.5 — Segundo profesional para los complementos (recuperación
+        // del `empleado2Id` de V1). Vacío cuando no hay reparto → el
+        // backend crea la reserva con toda la cita al profesional
+        // principal, comportamiento v0.3.4 idéntico.
+        staffExtraId: d.staffExtraId || '',
         contactDetails: d.contactDetails || {},
         memberContactId: d.memberContactId || ctx.memberInfo?.contactId || '',
         notas: d.notas || ''
