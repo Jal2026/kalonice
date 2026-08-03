@@ -1,11 +1,26 @@
 // =====================================================
 // KAMISUITE — Backend: MEMORIA (histórico legacy SABDE)
 // =====================================================
-// VERSION: 1.0.0
+// VERSION: 1.0.1
 // FECHA:   3 de agosto de 2026
 // ARCHIVO: backend/memoriaLegacyLogic.web.js
 //
 // CHANGELOG
+//   v1.0.1 (3-Ago-2026) — FIX lectura del campo `lineas`.
+//     El CSV v1 escribía un ARRAY JSON directo `[{...}]`, que dispara
+//     el triángulo amarillo de Wix tanto en campo Text como en Object.
+//     Regla documentada en serviciosEdicionLogic v1.11.3: Wix avisa
+//     ante array directo y NO avisa ante objeto envuelto {items:[...]}.
+//     Por eso existe allí el helper wrapItems().
+//     · `lineas` pasa a almacenarse como { "items": [ ... ] } y el
+//       campo a tipo Object/JSON.
+//     · parseLineas() sustituido por jsonIn(), helper LITERAL de
+//       widgetPublicoLogic v0.7.7 / catalogoConsultaLogic v1.0.1:
+//       tolera objeto envuelto {items|ids|names}, array directo
+//       (formato del import v1) y string JSON legacy. La lectura
+//       funciona con cualquiera de los tres, así que no hay ventana
+//       de rotura entre desplegar el backend y reimportar el CSV.
+//
 //   v1.0.0 (3-Ago-2026) — Versión inicial. Lectura del histórico
 //     legacy importado desde SABDE (ficheros de facturación cabecera
 //     + detalle de líneas + tarifa de precios). SOLO LECTURA.
@@ -35,7 +50,8 @@
 //   Tramo 26-jun → 30-jul PENDIENTE de entrega por el salón.
 //
 // COLECCIONES (solo lectura, suppressAuth)
-//   - KamisuiteLegacyTickets  (1 fila por ticket; líneas en JSON)
+//   - KamisuiteLegacyTickets  (1 fila por ticket; campo `lineas` de
+//                              tipo Object/JSON con forma { items: [...] })
 //   - KamisuiteLegacyMensual  (1 fila por mes; agregados en JSON)
 //
 // NOTA SOBRE FIELD IDs
@@ -76,7 +92,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const TAG = `[MemoriaLegacy][${VERSION}]`;
 
 const CMS_TICKETS = 'KamisuiteLegacyTickets';
@@ -204,15 +220,25 @@ function dowFromYmd(ymd) {
 
 const NOMBRE_DOW = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
-function parseLineas(raw) {
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw;
-  try {
-    const arr = JSON.parse(String(raw));
-    return Array.isArray(arr) ? arr : [];
-  } catch (_) {
+// jsonIn defensivo — helper LITERAL de widgetPublicoLogic v0.7.7 y
+// catalogoConsultaLogic v1.0.1. Un campo JSON de Wix puede llegar como:
+// objeto envuelto {items:[...]} (formato canónico, sin warning),
+// array directo (formato legacy) o string JSON (campo Text).
+// Los tres se leen igual.
+function jsonIn(v, unwrapKey) {
+  if (v == null || v === '') return [];
+  if (typeof v === 'string') {
+    try { v = JSON.parse(v); } catch (e) { return []; }
+  }
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    if (unwrapKey && Array.isArray(v[unwrapKey])) return v[unwrapKey];
+    if (Array.isArray(v.items)) return v.items;
+    if (Array.isArray(v.ids))   return v.ids;
+    if (Array.isArray(v.names)) return v.names;
     return [];
   }
+  if (Array.isArray(v)) return v;
+  return [];
 }
 
 function parseObj(raw) {
@@ -260,7 +286,7 @@ async function cargarColeccion(coleccion, campoOrden) {
 // Proyecta una fila cruda del CMS al shape que consume el widget.
 function shapeTicket(row) {
   const ymd = toYmdMadrid(row[F_TICKET.fecha]);
-  const lineas = parseLineas(row[F_TICKET.lineas]).map(l => ({
+  const lineas = jsonIn(row[F_TICKET.lineas], 'items').map(l => ({
     codigo:    txt(l[L_COD]),
     servicio:  txt(l[L_DESC]),
     grupo:     txt(l[L_GRUPO]),
