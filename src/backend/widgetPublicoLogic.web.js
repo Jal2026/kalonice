@@ -1,9 +1,117 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.8.0
-// FECHA: 8 de julio de 2026
+// VERSION: 0.9.0
+// FECHA: 3 de agosto de 2026
 // ARCHIVO: backend/widgetPublicoLogic.web.js
+//
+// v0.9.0: 👥 SEGUNDO PROFESIONAL PARA LOS COMPLEMENTOS (recuperación de
+//    una capacidad que existía en V1 y nunca se cableó en V2).
+//
+//    ─── QUÉ SE RECUPERA ───
+//    En V1 (`coloracionLogic.web.js`, aún en el repo) el cliente podía
+//    reservar el servicio principal con un profesional y los extras con
+//    otro. Dos piezas lo sostenían:
+//      · `consultarDisponibilidadUnificada` (línea 853) recibía `staff2Id`
+//        y consultaba TRAMO A con staffPrimary y TRAMO B con staffSecondary
+//        en paralelo, cruzando ambos conjuntos de slots por la hora exacta
+//        de fin de PROCESO.
+//      · `confirmarEnCalendario` (línea 1629) recibía `empleado2Id` →
+//        `extrasStaffId`, y la línea 1854 repartía:
+//          `staffParaFase = fase.fase === 'LAVADO' ? empleadoIdReal : extrasStaffId`
+//        es decir: el LAVADO se quedaba con el principal y todo el resto
+//        del tramo posterior al proceso iba al segundo.
+//
+//    En V2 el widget bundle CONSERVA la UI completa (state.proExtra,
+//    state.sameExtra, _renderProExtra, fila "Compl. con" del resumen)
+//    pero estaba oculta porque `adaptarServicio` emitía
+//    `requiresExtraPro: false` HARDCODEADO (deuda declarada en el propio
+//    comentario del archivo). Además el bundle nunca enviaba el segundo
+//    profesional en ninguno de los dos emits. Esta versión cierra la deuda.
+//
+//    ─── (A) requiresExtraPro REAL ───
+//    `adaptarServicio` deja de clavar `false`: emite
+//    `requiresExtraPro = complements.length > 0`. Sin complementos no hay
+//    nada que repartir → el bloque no se pinta. El bundle v2.0.17 añade
+//    una segunda condición por encima de ésta: solo lo muestra cuando el
+//    cliente ha MARCADO al menos un complemento.
+//
+//    ─── (B) REGLA DE REPARTO (decidida por Jal, 3-ago-2026) ───
+//    UN SOLO segundo profesional (no uno por complemento), que se lleva
+//    todo el tramo posterior al proceso SALVO el lavado. Traducción
+//    estructural a V2, donde la etiqueta 'LAVADO' de V1 no existe:
+//
+//      · CON PROCESO → el tramo del principal termina al acabar la
+//        PRIMERA fase que ocupa después del PROCESO. Esa fase es
+//        exactamente lo que en V1 era el lavado (el TRAMO B de V1
+//        arrancaba en `ids.lavado || ids.final`, la única pieza que V1
+//        devolvía al principal). Todo lo posterior → segundo.
+//        Ejemplo Tinte Raíz + Corte Mujer de complemento:
+//          Principal: aplicación → proceso → lavado
+//          Segundo:   secado → corte
+//
+//      · SIN PROCESO → el tramo del principal termina justo ANTES del
+//        primer bloque elegible por el cliente (tipo:'servicio' NO
+//        obligatorio, tipo:'exclusivo', o CASO B con variantes). Los
+//        complementos elegidos, y lo que venga detrás de ellos, → segundo.
+//        NOTA EXPLÍCITA PARA JAL: si un salón coloca en el mapeoFases una
+//        fase INCLUIDA obligatoria DESPUÉS de un complemento opcional, esa
+//        incluida cae en el tramo del segundo. Es la consecuencia de
+//        mantener UN ÚNICO punto de corte temporal (dos tramos contiguos),
+//        que es lo que hacía V1 y lo único que el motor de disponibilidad
+//        puede validar sin fragmentar la cita. Si se prefiere otro
+//        criterio, se cambia solo `calcularDurPrincipalCascada`.
+//
+//    El corte SIEMPRE cae en piezas base (nunca dentro de un complemento
+//    elegible), por lo que `durPrincipal` se calcula exacto en backend sin
+//    conocer las variantes elegidas, y `durExtra = durationMin - durPrincipal`
+//    usando la duración total que el bundle ya calcula (con variantes).
+//
+//    ─── (C) NUEVO HELPER `calcularDurPrincipalCascada` ───
+//    Hermano de `calcularBaseDurationCascada` (v0.8.0): mismo recorrido
+//    del mapeoFases y mismo criterio literal de `construirFasesPack`, pero
+//    se detiene en el punto de corte definido arriba. Sin mapeoFases
+//    (servicio simple) → `it.duration` (todo el principal, los
+//    complementos encolados detrás van al segundo).
+//
+//    ─── (D) getHuecosDisponibles: DOS TRAMOS ───
+//    Acepta `proExtraId` y `principalSetupUid`. Si `proExtraId` no llega,
+//    es 'any', o coincide con `proId` → CAMINO ACTUAL BYTE A BYTE. Si
+//    llega distinto:
+//      · durPrincipal ← calcularDurPrincipalCascada(servicio principal)
+//      · durExtra     ← durationMin − durPrincipal (si ≤ 0 → modo mono)
+//      · un slot [m, m+dur) es válido si ALGÚN candidato del principal
+//        está libre en [m, m+durPrincipal) Y el segundo profesional está
+//        libre en [m+durPrincipal, m+dur), cada uno dentro de SU horario.
+//      · el filtro `idStaff` del servicio principal se aplica SOLO al
+//        tramo A: el segundo no ejecuta el principal, ejecuta complementos.
+//      · si el segundo no trabaja ese día → huecos:[] motivo:'cerrado'.
+//
+//    ─── (E) crearReservaPublica: reparto SIN tocar el motor compartido ───
+//    Acepta `staffExtraId`. Si no llega / 'any' / igual al principal →
+//    comportamiento idéntico. Si llega concreto: se valida contra
+//    StaffConfig (activo y no recurso interno), el 'any' del PRINCIPAL se
+//    resuelve con `durPrincipal` (su tramo real, no el total), y la guardia
+//    defensiva de horario valida el tramo A contra el principal y el tramo
+//    B contra el segundo.
+//
+//    El reparto de fases se aplica DESPUÉS de crear el pack, aquí mismo,
+//    con patrón READ-MERGE-UPDATE sobre KamisuiteReservations. NO se toca
+//    `crearPackReserva` (recepcionProLogic): ese motor lo comparten
+//    Recepción PRO Desktop y Lite Mobile, y esta capacidad es exclusiva del
+//    cliente que reserva online. El motor de packs queda intacto en
+//    producción, sin despliegue ni riesgo asociado.
+//
+//    El bloque de reparto es NO-BLOCKING: si fallara, la reserva ya está
+//    creada y queda íntegra con el profesional principal.
+//
+//    ─── POR QUÉ NO HACE FALTA CAMPO NUEVO EN CMS ───
+//    `KamisuiteReservations.fases[].staffId` YA existe como override por
+//    fase (lo escribe el drag&drop de Recepción PRO V2) y este mismo
+//    archivo YA lo respeta al calcular ocupación: `f.staffId || r.staffId`
+//    en las dos expansiones de reservas (motor de huecos y
+//    resolverStaffLibre). Una reserva con fases repartidas entre dos
+//    estilistas ya se interpreta correctamente aguas abajo.
 //
 // v0.8.0: 🕐 FIX GRAVE — reservas online que desbordaban el horario de
 //    cierre del staff. Tres cambios coordinados. Solo afecta al widget
@@ -454,7 +562,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.8.0';
+const VERSION = '0.9.0';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 const CMS_CATALOGO   = 'ServiceCatalog';
@@ -601,6 +709,104 @@ function calcularBaseDurationCascada(it, porSetupUid) {
     // tipo:'exclusivo' → chip rojo, opcional
     // otros tipos → ignorar (defensivo)
   }
+  return total;
+}
+
+// v0.9.0 — Devuelve la duración (min) del TRAMO DEL PROFESIONAL PRINCIPAL,
+// es decir, desde el inicio de la cita hasta el PUNTO DE CORTE a partir del
+// cual las fases pasan al segundo profesional (el de los complementos).
+//
+// Mismo recorrido y mismo criterio literal que `calcularBaseDurationCascada`
+// (y que `construirFasesPack` en recepcionProLogic), pero deteniéndose en el
+// corte. Regla acordada con Jal el 3-ago-2026, traducción estructural de la
+// línea 1854 de coloracionLogic V1 (`fase.fase === 'LAVADO' ? principal : extras`):
+//
+//   · CON PROCESO en el mapeo → el tramo del principal incluye todo hasta
+//     el final de la PRIMERA pieza que ocupa después del proceso (el
+//     "lavado" de V1). Se corta ahí.
+//     Si justo después del proceso lo primero que aparece es una pieza
+//     ELEGIBLE por el cliente (CASO C opcional, exclusivo, o CASO B con
+//     variantes), NO se suma: el corte queda al terminar el proceso.
+//     Criterio defensivo — el tramo del principal nunca contiene piezas
+//     que dependan de la elección del cliente, y por eso esta duración es
+//     exacta sin conocer las variantes elegidas.
+//
+//   · SIN PROCESO → el tramo del principal termina justo ANTES de la
+//     primera pieza elegible del mapeo. Si el mapeo no tiene ninguna pieza
+//     elegible, el tramo del principal es toda la cascada base (los
+//     complementos elegidos se encolan detrás y van al segundo).
+//
+//   · Sin mapeoFases (servicio simple / variantes sin cascada) →
+//     `it.duration`: el principal ejecuta el servicio y los complementos
+//     encolados detrás van al segundo.
+//
+// Devuelve SIEMPRE un número ≥ 0. El llamante calcula
+// `durExtra = durationTotal − durPrincipal` y, si sale ≤ 0, cae a modo
+// mono-profesional (comportamiento v0.8.0 idéntico).
+function calcularDurPrincipalCascada(it, porSetupUid) {
+  const dPrincipal = toNum(it.duration);
+  const mapeo = jsonIn(it.mapeoFases, 'items');
+  if (!Array.isArray(mapeo) || mapeo.length === 0) {
+    return dPrincipal;
+  }
+  const dProcesoPrincipal = toNum(it.minProceso);
+  const tieneAplicacionExplicita = mapeo.some(f => f && f.tipo === 'aplicacion');
+  const recorrido = tieneAplicacionExplicita
+    ? mapeo
+    : [{ tipo: 'aplicacion' }, ...mapeo];
+
+  let total = 0;
+  let procesoVisto = false;
+
+  for (const f of recorrido) {
+    if (!f) continue;
+
+    if (f.tipo === 'aplicacion') {
+      total += dPrincipal;
+      continue;
+    }
+
+    if (f.tipo === 'proceso') {
+      const fm = toNum(f.min);
+      total += (fm > 0) ? fm : dProcesoPrincipal;
+      procesoVisto = true;
+      continue;
+    }
+
+    // Chip rojo (grupo exclusivo) = siempre elegible por el cliente → CORTE.
+    if (f.tipo === 'exclusivo') {
+      return total;
+    }
+
+    if (f.tipo === 'servicio' && typeof f.ref === 'string' && f.ref) {
+      const svc = porSetupUid && porSetupUid[f.ref];
+      if (!svc) continue; // ref huérfano — patrón defensivo de construirFasesPack
+
+      const esObligatoria = (f.obligatorio === true);
+      const svcHasVariants = (svc.hasVariants === true || String(svc.hasVariants) === 'true');
+
+      // Elegible por el cliente: CASO C (opcional) o CASO B (obligatoria
+      // con variantes, el cliente elige cuál). En ambos casos → CORTE.
+      if (!esObligatoria || svcHasVariants) {
+        return total;
+      }
+
+      // CASO A: obligatoria sin variantes (Lavado, Secado). Pieza base.
+      total += toNum(svc.duration);
+      const svcMp = toNum(svc.minProceso);
+      if (svcMp > 0) total += svcMp;
+
+      // Con proceso ya visto, ESTA es la primera pieza que ocupa después
+      // del proceso — el "lavado" de V1. Se queda con el principal y se
+      // corta aquí.
+      if (procesoVisto) return total;
+      continue;
+    }
+
+    // Otros tipos desconocidos → ignorar (defensivo, no invento).
+  }
+
+  // Recorrido completo sin corte: toda la cascada base es del principal.
   return total;
 }
 
@@ -804,7 +1010,12 @@ function adaptarServicio(it, porSetupUid) {
       : 0,
     hasVariants,
     variantes,
-    requiresExtraPro: false,
+    // v0.9.0 — Deja de estar clavado en `false`. El bloque "Profesional
+    // para los complementos" del bundle solo tiene sentido si hay algo que
+    // repartir: sin complementos elegibles, no hay segundo profesional.
+    // El bundle v2.0.17 añade encima la condición de que el cliente haya
+    // MARCADO al menos uno.
+    requiresExtraPro: Array.isArray(complements) && complements.length > 0,
     complements,
     claseServicio: it.claseServicio || '',
     idStaff: idStaffArr,   // v0.6.0 — wixResourceIds permitidos. [] = todos.
@@ -1265,7 +1476,7 @@ async function resolverStaffLibre({ fecha, horaHHmm, durationMin, idStaffPermiti
 
 export const getHuecosDisponibles = webMethod(
   Permissions.Anyone,
-  async ({ fecha, proId, durationMin, idStaffPermitidos } = {}) => {
+  async ({ fecha, proId, durationMin, idStaffPermitidos, proExtraId, principalSetupUid } = {}) => {
     const t0 = Date.now();
     try {
       const dur = toNum(durationMin) || 60;
@@ -1294,10 +1505,20 @@ export const getHuecosDisponibles = webMethod(
         .eq('active', true)
         .limit(100)
         .find({ suppressAuth: true });
-      let candidatos = (rStaff.items || []).filter(it => {
+
+      // v0.9.0 — `activos` = humanos reales del salón, SIN el filtro
+      // idStaff del servicio principal. Se separa para poder resolver el
+      // segundo profesional (tramo de complementos), que NO ejecuta el
+      // servicio principal y por tanto no debe filtrarse por su idStaff.
+      // `candidatos` mantiene EXACTAMENTE el filtro de v0.6.0/v0.8.0.
+      const activos = (rStaff.items || []).filter(it => {
         if (String(it.notes || '').includes(NOTA_RECURSO_INTERNO)) return false;
         const canon = String(it.canonicalName || '').toUpperCase();
         if (canon === 'CUALQUIERA' || canon === 'PROCESO') return false;
+        return true;
+      });
+
+      let candidatos = activos.filter(it => {
         // v0.6.0 — solo staff permitidos para el servicio elegido.
         if (permitidosSet) {
           const sid = it.wixResourceId || it._id;
@@ -1334,6 +1555,94 @@ export const getHuecosDisponibles = webMethod(
       // 3) Rango global [minFrom, maxTo] entre staff abiertos
       const minFrom = Math.min(...disponibles.map(h => h.horario.from));
       const maxTo = Math.max(...disponibles.map(h => h.horario.to));
+
+      // ─────────────────────────────────────────────────────────────
+      // 3-bis) v0.9.0 — MODO DOS TRAMOS (segundo profesional)
+      // ─────────────────────────────────────────────────────────────
+      // Si el cliente eligió un profesional distinto para los complementos,
+      // la cita se parte en dos tramos CONTIGUOS:
+      //     TRAMO A  [m, m+durPrincipal)  → profesional principal
+      //     TRAMO B  [m+durPrincipal, m+dur) → profesional de complementos
+      // El punto de corte lo calcula `calcularDurPrincipalCascada` sobre el
+      // mapeoFases del servicio principal (ver cabecera v0.9.0 (B)).
+      //
+      // `durPrincipal` se mide con EL MISMO mapa `porSetupUid` que usa
+      // `calcularBaseDurationCascada` para `baseDuration` (misma query:
+      // active + uso público). Es deliberado: así `durExtra = dur −
+      // durPrincipal` es coherente con la duración total que el bundle
+      // calculó a partir de ese mismo `baseDuration`, sea cual sea el
+      // contenido del catálogo.
+      //
+      // Cualquier condición que no se cumpla → se cae a MODO MONO, que es
+      // el comportamiento v0.8.0 byte a byte.
+      let durPrincipal = dur;
+      let durExtra = 0;
+      let staffExtraRow = null;
+      let horarioExtra = null;
+
+      const proExtraLimpio = (typeof proExtraId === 'string') ? proExtraId.trim() : '';
+      const quiereDual = !!proExtraLimpio
+        && proExtraLimpio !== 'any'
+        && proExtraLimpio !== proId;
+
+      if (quiereDual) {
+        if (!principalSetupUid) {
+          console.warn(`${TAG} ⚠️ proExtraId recibido sin principalSetupUid → no se puede calcular el corte. Modo mono.`);
+        } else {
+          try {
+            const rCat = await wixData.query(CMS_CATALOGO)
+              .eq('active', true)
+              .hasSome('uso', USOS_PUBLICOS)
+              .limit(1000)
+              .find({ suppressAuth: true });
+            const allCat = rCat.items || [];
+            const porSetupUidCat = {};
+            for (const c of allCat) if (c.setupUid) porSetupUidCat[c.setupUid] = c;
+
+            const svcPrincipal = porSetupUidCat[principalSetupUid];
+            if (!svcPrincipal) {
+              console.warn(`${TAG} ⚠️ principalSetupUid ${principalSetupUid} no encontrado en catálogo → modo mono.`);
+            } else {
+              const dp = calcularDurPrincipalCascada(svcPrincipal, porSetupUidCat);
+              if (dp > 0 && dp < dur) {
+                durPrincipal = dp;
+                durExtra = dur - dp;
+              } else {
+                console.log(`${TAG} ℹ️ Corte no aplicable (durPrincipal=${dp}, durTotal=${dur}) → modo mono.`);
+              }
+            }
+          } catch (splitErr) {
+            console.warn(`${TAG} ⚠️ No se pudo calcular el corte de tramos: ${splitErr.message} → modo mono.`);
+          }
+        }
+      }
+
+      const dual = durExtra > 0;
+
+      if (dual) {
+        // El segundo profesional NO se filtra por el idStaff del servicio
+        // principal: no lo ejecuta. Se busca sobre `activos`.
+        staffExtraRow = activos.find(s =>
+          s.wixResourceId === proExtraLimpio || s._id === proExtraLimpio
+        ) || null;
+
+        if (!staffExtraRow) {
+          return {
+            ok: false, version: VERSION,
+            error: { message: 'El profesional elegido para los complementos no está disponible.' },
+            huecos: []
+          };
+        }
+
+        horarioExtra = leerHorarioStaffEnDia(staffExtraRow, dow);
+        if (!horarioExtra) {
+          console.log(`${TAG} 🚫 ${fecha} dow=${dow}: el profesional de complementos no trabaja ese día`);
+          return {
+            ok: true, version: VERSION, fecha, proId, durationMin: dur,
+            huecos: [], motivo: 'cerrado', abreA: null
+          };
+        }
+      }
 
       // 4) Cargar reservas del día (todas) para cruce
       const startUTC = new Date(new Date(`${fecha}T00:00:00`).getTime() - 3 * 3600000);
@@ -1385,24 +1694,54 @@ export const getHuecosDisponibles = webMethod(
       // Para proId concreto, exige que ese staff esté libre.
       // v0.8.0 — tope superior del staff extendido por graceMin
       // (SalonConfig.closingGraceMin). Con grace=0 → estricto v0.7.9.
+      // v0.9.0 — En MODO DOS TRAMOS cada mitad se valida contra SU
+      // profesional: el principal debe estar libre en [m, m+durPrincipal)
+      // dentro de su horario, y el de complementos en
+      // [m+durPrincipal, m+dur) dentro del suyo. Mismo cruce de dos
+      // conjuntos por la hora exacta de corte que hacía
+      // `consultarDisponibilidadUnificada` en V1 (coloracionLogic, líneas
+      // 923-965). En MODO MONO (durExtra=0) el código es idéntico a v0.8.0.
+      const sidExtra = dual
+        ? (staffExtraRow.wixResourceId || staffExtraRow._id)
+        : null;
+
       const huecos = [];
       for (let m = minFrom; m + dur <= maxTo + graceMin; m += SLOT_STEP) {
+        const mCorte = dual ? (m + durPrincipal) : (m + dur);
+
+        // ── TRAMO A · profesional principal ──
         let alguienLibre = false;
         for (const { staff, horario } of disponibles) {
-          if (m < horario.from || m + dur > horario.to + graceMin) continue;
+          if (m < horario.from || mCorte > horario.to + graceMin) continue;
           const sid = staff.wixResourceId || staff._id;
           // ¿solape con ocupados de ese staff?
           const haySolape = ocupados.some(o =>
             o.staffId && o.staffId === sid &&
-            m < o.endMin && (m + dur) > o.startMin
+            m < o.endMin && mCorte > o.startMin
           );
           if (!haySolape) { alguienLibre = true; break; }
         }
-        if (alguienLibre) huecos.push(fmtHHMM(m));
+        if (!alguienLibre) continue;
+
+        // ── TRAMO B · profesional de complementos ──
+        if (dual) {
+          if (mCorte < horarioExtra.from) continue;
+          if (m + dur > horarioExtra.to + graceMin) continue;
+          const solapeExtra = ocupados.some(o =>
+            o.staffId && o.staffId === sidExtra &&
+            mCorte < o.endMin && (m + dur) > o.startMin
+          );
+          if (solapeExtra) continue;
+        }
+
+        huecos.push(fmtHHMM(m));
       }
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
-      console.log(`${TAG} ✅ huecos ${fecha} dow=${dow} proId=${proId || 'any'} dur=${dur}min: ${huecos.length} slots (abre ${fmtHHMM(minFrom)}, cierra ${fmtHHMM(maxTo)}, grace ${graceMin}min). ${elapsed}s`);
+      const modoLog = dual
+        ? ` | 👥 DOS TRAMOS: principal ${durPrincipal}min + complementos ${durExtra}min con ${staffExtraRow.displayName || staffExtraRow.canonicalName || sidExtra}`
+        : '';
+      console.log(`${TAG} ✅ huecos ${fecha} dow=${dow} proId=${proId || 'any'} dur=${dur}min: ${huecos.length} slots (abre ${fmtHHMM(minFrom)}, cierra ${fmtHHMM(maxTo)}, grace ${graceMin}min)${modoLog}. ${elapsed}s`);
 
       return {
         ok: true, version: VERSION,
@@ -1446,6 +1785,39 @@ export const getHuecosDisponibles = webMethod(
 //     (firstName+email); si no hay nada, error.
 //
 // Devuelve el resultado tal cual de crearPackReserva.
+
+// v0.9.0 — Resuelve la duración del TRAMO DEL PRINCIPAL para una reserva
+// concreta. Misma query y mismo mapa `porSetupUid` que usa
+// `getHuecosDisponibles` en su bloque 3-bis, para que el corte que se
+// valida al crear sea EXACTAMENTE el mismo que se validó al ofrecer la hora.
+//
+// Devuelve null si no se puede resolver (sin setupUid, servicio no
+// encontrado, error de query, o corte fuera de rango) → el llamante cae a
+// modo mono-profesional.
+async function resolverDurPrincipalTramo(principalSetupUid, durTotal) {
+  if (!principalSetupUid || !(durTotal > 0)) return null;
+  try {
+    const rCat = await wixData.query(CMS_CATALOGO)
+      .eq('active', true)
+      .hasSome('uso', USOS_PUBLICOS)
+      .limit(1000)
+      .find({ suppressAuth: true });
+    const allCat = rCat.items || [];
+    const porSetupUidCat = {};
+    for (const c of allCat) if (c.setupUid) porSetupUidCat[c.setupUid] = c;
+
+    const svcPrincipal = porSetupUidCat[principalSetupUid];
+    if (!svcPrincipal) return null;
+
+    const dp = calcularDurPrincipalCascada(svcPrincipal, porSetupUidCat);
+    if (dp > 0 && dp < durTotal) return dp;
+    return null;
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ resolverDurPrincipalTramo no concluyente: ${e.message}`);
+    return null;
+  }
+}
+
 export const crearReservaPublica = webMethod(
   Permissions.Anyone,
   async (payload) => {
@@ -1480,7 +1852,12 @@ export const crearReservaPublica = webMethod(
         // PROCESO no se libera al público en el arranque de V2). Si no
         // llegara (payload antiguo), el resolvedor cae a la duración base
         // del principal como red de seguridad mínima.
-        durationMin = null
+        durationMin = null,
+        // v0.9.0 — Segundo profesional para los complementos (recuperación
+        // del `empleado2Id` de V1). wixResourceId concreto. Si no llega,
+        // llega vacío, llega 'any', o coincide con `staffId` → toda la cita
+        // va al profesional principal, comportamiento v0.8.0 idéntico.
+        staffExtraId = ''
       } = payload || {};
 
       // Validación mínima de campos
@@ -1563,9 +1940,73 @@ export const crearReservaPublica = webMethod(
       let staffIdFinal = (staffId === 'any') ? '' : staffId;
       let staffNameFinal = staffName;
 
+      // ─────────────────────────────────────────────────────────────
+      // v0.9.0 — SEGUNDO PROFESIONAL PARA LOS COMPLEMENTOS
+      // ─────────────────────────────────────────────────────────────
+      // Se resuelve ANTES que el 'any' del principal porque, en modo dos
+      // tramos, el principal solo ocupa [inicio, inicio+durPrincipal) y su
+      // resolución debe hacerse con ESA duración, no con la total.
+      //
+      // El segundo profesional NO se valida contra el `idStaff` del
+      // servicio principal: no lo ejecuta, ejecuta los complementos. Sí se
+      // valida que exista y esté activo en StaffConfig (defensa contra
+      // payload manipulado).
+      const staffExtraLimpio = (typeof staffExtraId === 'string') ? staffExtraId.trim() : '';
+      let staffIdExtraFinal = '';
+      let staffNameExtraFinal = '';
+      let durPrincipalTramo = null;
+
+      if (staffExtraLimpio && staffExtraLimpio !== 'any' && staffExtraLimpio !== staffId) {
+        durPrincipalTramo = await resolverDurPrincipalTramo(principalSetupUid, toNum(durationMin));
+
+        if (durPrincipalTramo == null) {
+          console.warn(`${TAG} ⚠️ staffExtraId recibido pero el corte de tramos no es resoluble → toda la cita al profesional principal.`);
+        } else {
+          try {
+            const rStaffExtra = await wixData.query(CMS_STAFF)
+              .eq('active', true)
+              .limit(100)
+              .find({ suppressAuth: true });
+            const rowExtra = (rStaffExtra.items || []).find(s =>
+              s.wixResourceId === staffExtraLimpio || s._id === staffExtraLimpio
+            );
+            if (!rowExtra) {
+              console.warn(`${TAG} ⚠️ staffExtraId=${staffExtraLimpio} no encontrado/activo en StaffConfig → reserva rechazada.`);
+              return {
+                ok: false, version: VERSION,
+                error: { message: 'El profesional elegido para los complementos no está disponible.' }
+              };
+            }
+            const canonExtra = String(rowExtra.canonicalName || '').toUpperCase();
+            if (String(rowExtra.notes || '').includes(NOTA_RECURSO_INTERNO)
+                || canonExtra === 'CUALQUIERA' || canonExtra === 'PROCESO') {
+              console.warn(`${TAG} ⚠️ staffExtraId=${staffExtraLimpio} es un recurso interno → rechazado.`);
+              return {
+                ok: false, version: VERSION,
+                error: { message: 'El profesional elegido para los complementos no es válido.' }
+              };
+            }
+            staffIdExtraFinal = rowExtra.wixResourceId || rowExtra._id;
+            staffNameExtraFinal = rowExtra.displayName || rowExtra.canonicalName || '';
+            console.log(`${TAG} 👥 Dos tramos: principal ${durPrincipalTramo}min | complementos ${toNum(durationMin) - durPrincipalTramo}min con ${staffNameExtraFinal || staffIdExtraFinal}`);
+          } catch (eExtra) {
+            console.warn(`${TAG} ⚠️ No se pudo resolver el segundo profesional: ${eExtra.message} → toda la cita al principal.`);
+            staffIdExtraFinal = '';
+            staffNameExtraFinal = '';
+            durPrincipalTramo = null;
+          }
+        }
+      }
+
+      // Duración que ocupa el PROFESIONAL PRINCIPAL. En modo mono es la
+      // duración total; en modo dos tramos, solo su tramo.
+      const durTramoPrincipal = (staffIdExtraFinal && durPrincipalTramo != null)
+        ? durPrincipalTramo
+        : toNum(durationMin);
+
       if (staffId === 'any') {
         let idsPermitidosResolver = [];
-        let durResolver = toNum(durationMin);
+        let durResolver = toNum(durTramoPrincipal);
         try {
           const rSvcDur = await wixData.query(CMS_CATALOGO)
             .eq('setupUid', principalSetupUid)
@@ -1635,14 +2076,50 @@ export const crearReservaPublica = webMethod(
           const staffRow = (rStaffFinal.items || []).find(s =>
             s.wixResourceId === staffIdFinal || s._id === staffIdFinal
           );
+
+          // v0.9.0 — En modo dos tramos, el que cierra la cita es el
+          // SEGUNDO profesional. Cada tramo se valida contra su dueño:
+          //   · principal → [inicio, inicio+durTramoPrincipal)
+          //   · extra     → [inicio+durTramoPrincipal, inicio+durTotal)
+          const gDurPrincipal = (staffIdExtraFinal && durPrincipalTramo != null)
+            ? durPrincipalTramo
+            : gDurTotal;
+
+          if (staffIdExtraFinal && durPrincipalTramo != null) {
+            const staffRowExtra = (rStaffFinal.items || []).find(s =>
+              s.wixResourceId === staffIdExtraFinal || s._id === staffIdExtraFinal
+            );
+            if (staffRowExtra) {
+              const [ey, emo, ed] = String(fecha).split('-').map(Number);
+              const edow = new Date(ey, emo - 1, ed).getDay();
+              const eHorario = leerHorarioStaffEnDia(staffRowExtra, edow);
+              if (eHorario) {
+                const eInicioMin = gInicioMin + gDurPrincipal;
+                const eFinMin = gInicioMin + gDurTotal;
+                if (eInicioMin < eHorario.from || eFinMin > eHorario.to + graceMin) {
+                  console.warn(`${TAG} ⚠️ Guardia horario (tramo complementos): ${fmtHHMM(eInicioMin)}–${fmtHHMM(eFinMin)} fuera del horario de ${staffNameExtraFinal || staffIdExtraFinal} (${fmtHHMM(eHorario.from)}–${fmtHHMM(eHorario.to)} +grace ${graceMin}). Reserva rechazada.`);
+                  return {
+                    ok: false,
+                    version: VERSION,
+                    error: { message: 'La reserva excede el horario del profesional de los complementos. Elige otro horario.' }
+                  };
+                }
+              } else {
+                console.warn(`${TAG} ⚠️ Guardia horario: staff extra ${staffIdExtraFinal} sin horario para ese día → guardia del tramo B omitida`);
+              }
+            } else {
+              console.warn(`${TAG} ⚠️ Guardia horario: staff extra ${staffIdExtraFinal} no encontrado en StaffConfig → guardia del tramo B omitida`);
+            }
+          }
+
           if (staffRow) {
             const [gy, gmo, gd] = String(fecha).split('-').map(Number);
             const gdow = new Date(gy, gmo - 1, gd).getDay();
             const gHorario = leerHorarioStaffEnDia(staffRow, gdow);
             if (gHorario) {
-              const gFinMin = gInicioMin + gDurTotal;
+              const gFinMin = gInicioMin + gDurPrincipal;
               if (gFinMin > gHorario.to + graceMin) {
-                console.warn(`${TAG} ⚠️ Guardia horario: ${fecha} ${horaHHmm}+${gDurTotal}min = ${fmtHHMM(gFinMin)} desborda staff.to ${fmtHHMM(gHorario.to)} +grace ${graceMin} = ${fmtHHMM(gHorario.to + graceMin)}. Reserva rechazada.`);
+                console.warn(`${TAG} ⚠️ Guardia horario: ${fecha} ${horaHHmm}+${gDurPrincipal}min = ${fmtHHMM(gFinMin)} desborda staff.to ${fmtHHMM(gHorario.to)} +grace ${graceMin} = ${fmtHHMM(gHorario.to + graceMin)}. Reserva rechazada.`);
                 return {
                   ok: false,
                   version: VERSION,
@@ -1694,6 +2171,89 @@ export const crearReservaPublica = webMethod(
       const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
       if (resultado?.ok) {
         console.log(`${TAG} ✅ crearReservaPublica: reservaId=${resultado.reservaId} | ${resultado.precioTotal}€ | ${elapsed}s`);
+
+        // ─────────────────────────────────────────────────────────────
+        // v0.9.0 — REPARTO ENTRE DOS PROFESIONALES (fases del tramo B)
+        // ─────────────────────────────────────────────────────────────
+        // Se hace AQUÍ, en el backend del widget público, y NO dentro de
+        // crearPackReserva: ese motor lo comparten Recepción PRO Desktop y
+        // Lite Mobile, y esta capacidad es exclusiva del cliente que
+        // reserva online. Así el motor de packs queda intacto en producción.
+        //
+        // Patrón READ-MERGE-UPDATE (regla de oro del proyecto:
+        // `wixData.update` reemplaza el documento entero, nunca se pasa un
+        // objeto parcial): se lee el registro completo recién insertado, se
+        // modifican SOLO los `staffId` de las fases del tramo B y se
+        // devuelve el documento entero con esa única diferencia.
+        //
+        // Las sessions de Wix Bookings NO se tocan: se crean en el
+        // scheduleId del ancla de familia y no llevan staff — el estilista
+        // real vive únicamente en el CMS. El campo `fases[].staffId` ya
+        // existe como override por fase (lo escribe el drag&drop de V2) y
+        // lo respeta el motor de huecos de este mismo archivo
+        // (`f.staffId || r.staffId`), así que la reserva repartida se
+        // interpreta bien en ocupación y en el calendario desde el minuto uno.
+        //
+        // REGLA DE CORTE (la misma que validó getHuecosDisponibles al
+        // ofrecer la hora, para que lo reservado coincida con lo comprobado):
+        //   · CON fase PROCESO → el principal conserva todo hasta el final
+        //     de la PRIMERA fase que ocupa después del proceso (el "lavado"
+        //     de V1). Lo posterior → segundo profesional.
+        //   · SIN fase PROCESO → el principal conserva todo hasta antes de
+        //     la primera fase 'COMPLEMENTO'. De ahí al final → segundo.
+        //
+        // Todo el bloque va en try/catch NO-BLOCKING: la reserva ya está
+        // creada y es válida. Si el reparto fallara, la cita queda íntegra
+        // con el profesional principal (degradación segura, nunca una
+        // reserva rota ni perdida).
+        if (staffIdExtraFinal && resultado.reservaId) {
+          try {
+            const regReserva = await wixData.get('KamisuiteReservations', resultado.reservaId, { suppressAuth: true });
+            const fasesReserva = jsonIn(regReserva?.fases, 'items');
+
+            if (Array.isArray(fasesReserva) && fasesReserva.length) {
+              let idxCorte = -1;
+
+              const idxProceso = fasesReserva.findIndex(f => f && f.tipo === 'proceso');
+              if (idxProceso >= 0) {
+                let idxLavado = -1;
+                for (let i = idxProceso + 1; i < fasesReserva.length; i++) {
+                  if (fasesReserva[i] && fasesReserva[i].ocupa === true) { idxLavado = i; break; }
+                }
+                if (idxLavado >= 0 && idxLavado + 1 < fasesReserva.length) {
+                  idxCorte = idxLavado + 1;
+                }
+              } else {
+                const idxComp = fasesReserva.findIndex(f => f && f.fase === 'COMPLEMENTO');
+                if (idxComp >= 0) idxCorte = idxComp;
+              }
+
+              if (idxCorte >= 0) {
+                let nFases = 0;
+                for (let i = idxCorte; i < fasesReserva.length; i++) {
+                  if (!fasesReserva[i]) continue;
+                  fasesReserva[i].staffId = staffIdExtraFinal;
+                  nFases++;
+                }
+
+                // MERGE: documento completo + solo las fases cambiadas.
+                const regActualizado = Object.assign({}, regReserva, {
+                  fases: { items: fasesReserva }
+                });
+                await wixData.update('KamisuiteReservations', regActualizado, { suppressAuth: true });
+
+                // Reflejar el reparto en lo que se devuelve al widget.
+                resultado.fases = fasesReserva;
+
+                console.log(`${TAG} 👥 Reparto aplicado: ${nFases} fase/s desde índice ${idxCorte} → ${staffNameExtraFinal || staffIdExtraFinal} (resto: ${staffNameFinal || staffIdFinal})`);
+              } else {
+                console.log(`${TAG} ℹ️ Segundo profesional elegido pero la cita no tiene tramo posterior que repartir → todo al principal.`);
+              }
+            }
+          } catch (repErr) {
+            console.warn(`${TAG} ⚠️ No se pudo aplicar el reparto de profesionales (la reserva ${resultado.reservaId} queda íntegra con ${staffNameFinal || staffIdFinal}): ${repErr.message}`);
+          }
+        }
 
         // ─────────────────────────────────────────────────────────────
         // v0.5.0 — CENTRALITA DE COMUNICACIONES
