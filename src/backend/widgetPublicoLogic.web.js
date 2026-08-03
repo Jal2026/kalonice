@@ -1,8 +1,35 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.9.0
+// VERSION: 0.9.1
 // FECHA: 3 de agosto de 2026
+//
+// v0.9.1: 📨 COMPLEMENTOS Y SU PROFESIONAL EN LA CONFIRMACIÓN AL CLIENTE.
+//    Hasta ahora el mensaje decía solo el servicio principal y el
+//    profesional principal: una cita "Tinte Completo + Corte de pelo con
+//    Ricardo y Alejandra" llegaba al cliente como "Tinte Completo /
+//    Ricardo", perdiendo la mitad de la información.
+//
+//    La plantilla de WhatsApp (whatsappLogic → TEMPLATE_CONFIRMACION) usa
+//    8 parámetros POSICIONALES aprobados por Meta ({{1}} nombreCliente,
+//    {{2}} brandName, {{3}} servicios, {{4}} estilista, {{5}} fechaHora,
+//    {{6}} address, {{7}} invoiceEmail, {{8}} phone). Un {{9}} nuevo
+//    exigiría plantilla nueva y aprobación de Meta, así que la información
+//    se incorpora dentro de {{3}} y {{4}}:
+//        📌 Servicio: Tinte Completo + Corte de pelo
+//        👤 Personal: Ricardo · Corte de pelo con Alejandra
+//
+//    Fuente: `resultado.fases`, ya con el reparto de v0.9.0 aplicado. Solo
+//    se listan las fases 'COMPLEMENTO' (las que el cliente eligió); las
+//    INCLUIDAS de cascada (lavado, secado) NO se listan porque no las
+//    eligió y van embebidas en el precio del servicio.
+//
+//    Sin complementos, o sin segundo profesional, el texto queda
+//    EXACTAMENTE igual que en v0.9.0. Las mismas cadenas alimentan el
+//    email (variables `servicios` / `profesional`), así que ambos canales
+//    quedan cubiertos con un solo cambio. Todo se normaliza a una línea:
+//    los parámetros de plantilla de WhatsApp no admiten saltos de línea
+//    ni espacios múltiples.
 // ARCHIVO: backend/widgetPublicoLogic.web.js
 //
 // v0.9.0: 👥 SEGUNDO PROFESIONAL PARA LOS COMPLEMENTOS (recuperación de
@@ -562,7 +589,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.9.0';
+const VERSION = '0.9.1';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 const CMS_CATALOGO   = 'ServiceCatalog';
@@ -2292,6 +2319,55 @@ export const crearReservaPublica = webMethod(
               } catch (_) { /* sin nombre, va sin */ }
             }
           }
+
+          // ─────────────────────────────────────────────────────────────
+          // v0.9.1 — COMPLEMENTOS Y SU PROFESIONAL EN LA NOTIFICACIÓN
+          // ─────────────────────────────────────────────────────────────
+          // La plantilla de WhatsApp (whatsappLogic → TEMPLATE_CONFIRMACION)
+          // tiene 8 parámetros POSICIONALES fijos aprobados por Meta:
+          //   {{1}} nombreCliente  {{2}} brandName  {{3}} servicios
+          //   {{4}} estilista      {{5}} fechaHora  {{6}} address
+          //   {{7}} invoiceEmail   {{8}} phone
+          // Añadir un {{9}} exigiría crear plantilla nueva y pasar por
+          // aprobación de Meta. Por eso los complementos y su profesional
+          // se incorporan DENTRO de {{3}} y {{4}}, que es donde el cliente
+          // ya lee el servicio y la persona.
+          //
+          // Fuente de datos: `resultado.fases`, ya con el reparto aplicado.
+          // Solo se listan las fases 'COMPLEMENTO' (las que el cliente
+          // eligió). Las fases INCLUIDAS de cascada (lavado, secado) NO se
+          // listan: no las eligió y van embebidas en el servicio.
+          //
+          // Los parámetros de plantilla de WhatsApp no admiten saltos de
+          // línea ni espacios múltiples, así que todo se normaliza a una
+          // sola línea antes de enviarse.
+          const unaLinea = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+
+          const fasesFinales = Array.isArray(resultado?.fases) ? resultado.fases : [];
+          const fasesComp = fasesFinales.filter(f => f && f.fase === 'COMPLEMENTO' && f.label);
+
+          if (fasesComp.length) {
+            const labelsComp = [...new Set(fasesComp.map(f => unaLinea(f.label)).filter(Boolean))];
+            if (labelsComp.length) {
+              serviciosStr = `${serviciosStr} + ${labelsComp.join(' + ')}`;
+            }
+
+            // Si hubo segundo profesional, decir QUÉ complementos hace él.
+            if (staffIdExtraFinal && staffNameExtraFinal) {
+              const suyos = [...new Set(
+                fasesComp
+                  .filter(f => f.staffId && f.staffId === staffIdExtraFinal)
+                  .map(f => unaLinea(f.label))
+                  .filter(Boolean)
+              )];
+              if (suyos.length) {
+                estilistaStr = `${estilistaStr} · ${suyos.join(' y ')} con ${staffNameExtraFinal}`;
+              }
+            }
+          }
+
+          serviciosStr = unaLinea(serviciosStr);
+          estilistaStr = unaLinea(estilistaStr);
 
           // 3) Fecha bonita DD/MM/YYYY (formato V1 esperado por driver WhatsApp).
           const [yy, mm2, dd] = String(fecha).split('-');
