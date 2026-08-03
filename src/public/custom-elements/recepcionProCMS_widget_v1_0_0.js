@@ -1,7 +1,30 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.76  ·  Popup ALMACÉN (papelera y sacar de almacén)
+ * VERSION: 1.1.77  ·  Popup FICHA TÉCNICA (histórico de color)
+ *
+ * v1.1.77 (3 ago 2026) — POPUP FICHA TÉCNICA en la barra superior, junto
+ *   a ALMACÉN y ESPECIALES. Consulta el histórico de color del sistema
+ *   anterior (2.019 tickets de 2026, 318 fórmulas técnicas) sin salir de
+ *   Recepción. Requiere page code v1.0.35 y memoriaLegacyLogic v1.0.3.
+ *
+ *   ⚠️ SIN DATOS ECONÓMICOS. Es la razón de existir de este popup: los
+ *   informes con dinero son de gerencia; la sala necesita la técnica.
+ *   El filtro está en el BACKEND (getFichaTecnicaCliente no envía
+ *   importes). Aquí no hay nada que ocultar porque nada llega.
+ *
+ *   Cliente precargado: _openModal guarda el último cliente cuya cita se
+ *   abrió (_ftUltimoCliente). Al pulsar el botón, si hay uno, se carga
+ *   directo; el buscador sigue disponible para cambiar. Se guarda al
+ *   abrir la cita, no al cerrarla, porque el modal tapa la barra y el
+ *   flujo real es: abrir cita → cerrar → consultar ficha.
+ *
+ *   Cambio ADITIVO y aislado: clases .ks-fichatec y .ft-*, mensajes
+ *   propios (ftBuscarCliente/getFichaTecnica → ftClientesEncontrados/
+ *   fichaTecnicaData). No se toca el calendario, el cobro, el arqueo,
+ *   el cierre, ESPECIALES ni el ALMACÉN.
+ *
+ * v1.1.76  ·  Popup ALMACÉN (papelera y sacar de almacén)
  * FECHA: 1 de agosto de 2026 (v1.1.75: 2 de agosto de 2026)
  * ---------------------------------------------------------------------
  * v1.1.76 (2 ago 2026) — POPUP ALMACÉN en la barra superior, junto a
@@ -1411,6 +1434,47 @@ button { font-family: inherit; cursor: pointer; }
   padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer;
 }
 .ks-especiales:hover { filter: brightness(1.06); }
+/* ── v1.1.77 · Botón y modal FICHA TÉCNICA ── */
+.ks-fichatec {
+  border: 1px solid #7d5bb5; background: #7d5bb5; color: #fff;
+  padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  margin-right: 8px;
+}
+.ks-fichatec:hover { filter: brightness(1.08); }
+.ft-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.ft-modal { background: #fff; border-radius: 14px; width: min(760px,96vw); max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.ft-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 20px; border-bottom: 1px solid var(--ks-line); }
+.ft-title { font-size: 15px; font-weight: 700; color: var(--ks-ink); }
+.ft-sub { font-size: 12px; color: var(--ks-ink3); margin-top: 2px; }
+.ft-x { border: none; background: transparent; font-size: 19px; cursor: pointer; color: #9ca3af; line-height: 1; }
+.ft-search { padding: 13px 20px; border-bottom: 1px solid var(--ks-line); }
+.ft-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--ks-line); border-radius: 8px; font-size: 13px; font-family: inherit; }
+.ft-results { border: 1px solid var(--ks-line); border-radius: 8px; margin-top: 6px; max-height: 190px; overflow: auto; }
+.ft-cli { padding: 9px 12px; border-bottom: 1px solid var(--ks-line); cursor: pointer; }
+.ft-cli:last-child { border-bottom: none; }
+.ft-cli:hover { background: var(--ks-paper2); }
+.ft-cli-name { font-size: 13px; font-weight: 600; color: var(--ks-ink); }
+.ft-cli-tel { font-size: 12px; color: var(--ks-ink3); }
+.ft-body { padding: 15px 20px; overflow: auto; flex: 1; }
+.ft-kpis { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.ft-kpi { flex: 1; min-width: 96px; border: 1px solid var(--ks-line); border-radius: 8px; padding: 9px 11px; }
+.ft-kpi-l { font-size: 10.5px; font-weight: 600; color: var(--ks-ink3); text-transform: uppercase; letter-spacing: .3px; }
+.ft-kpi-v { font-size: 17px; font-weight: 800; color: var(--ks-ink); line-height: 1.2; }
+.ft-sec { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--ks-ink3); margin: 16px 0 8px; }
+.ft-habit { display: flex; gap: 6px; flex-wrap: wrap; }
+.ft-tag { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 1px solid var(--ks-line); border-radius: 999px; font-size: 12px; color: var(--ks-ink); }
+.ft-tag b { color: var(--ks-accent-ink); font-weight: 700; }
+.ft-visita { border: 1px solid var(--ks-line); border-radius: 10px; padding: 11px 13px; margin-bottom: 9px; }
+.ft-vh { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.ft-vfecha { font-size: 13px; font-weight: 700; color: var(--ks-ink); }
+.ft-vof { font-size: 11.5px; font-weight: 600; color: #fff; background: var(--ks-ink); padding: 2px 8px; border-radius: 999px; }
+.ft-vsrv { font-size: 12.5px; color: var(--ks-ink2); }
+.ft-formula { margin-top: 8px; background: #fbf7ec; border: 1px solid #e6d9b4; border-left: 3px solid var(--ks-accent); border-radius: 8px; padding: 9px 11px; font-size: 13px; line-height: 1.5; color: var(--ks-ink); white-space: pre-wrap; word-break: break-word; }
+.ft-empty { text-align: center; padding: 30px 16px; color: var(--ks-ink3); font-size: 13px; }
+.ft-foot { padding: 11px 20px; border-top: 1px solid var(--ks-line); font-size: 11px; color: #9ca3af; }
+.ft-toggle { border: 1px solid var(--ks-line); background: #fff; border-radius: 999px; padding: 5px 12px; font-size: 11.5px; font-weight: 600; cursor: pointer; font-family: inherit; color: var(--ks-ink2); }
+.ft-toggle.on { background: var(--ks-accent); border-color: var(--ks-accent); color: #fff; }
+
 /* ── v1.1.76 · Botón y modal ALMACÉN ── */
 .ks-almacen {
   border: 1px solid #1c9c93; background: #1c9c93; color: #fff;
@@ -2808,6 +2872,8 @@ button { font-family: inherit; cursor: pointer; }
         case 'clientesEncontrados': this._renderCliResults(p.clientes || []); break;
         // v1.1.69 — ESPECIALES (venta manual)
         case 'espClientesEncontrados': this._renderEspCli(p.clientes || []); break;
+        case 'ftClientesEncontrados': this._renderFtCli(p.clientes || []); break;
+        case 'fichaTecnicaData':      this._onFichaTecnica(p); break;
         case 'espClienteCreado': this._onEspClienteCreado(p.data); break;
         // v1.1.76 — ALMACÉN
         case 'almacenData':     this._onAlmData(p); break;
@@ -3128,6 +3194,7 @@ button { font-family: inherit; cursor: pointer; }
             </div>
             <div class="ks-brandhint">Recepción PRO · agenda operativa · CMS-first</div>
             <div class="ks-brandactions">
+              <button class="ks-fichatec" id="ftBtn">🎨 FICHA TÉCNICA</button>
               <button class="ks-almacen" id="almBtn">🗄️ ALMACÉN</button>
               <button class="ks-especiales" id="espBtn">✦ ESPECIALES</button>
               <button class="ks-automodel">Modelo automático</button>
@@ -3251,6 +3318,10 @@ button { font-family: inherit; cursor: pointer; }
       // v1.1.76 — ALMACÉN: papelera y sacar de almacén
       const almBtnEl = root.getElementById('almBtn');
       if (almBtnEl) almBtnEl.addEventListener('click', () => this._openAlmacen());
+
+      // v1.1.77 — FICHA TÉCNICA
+      const ftBtnEl = root.getElementById('ftBtn');
+      if (ftBtnEl) ftBtnEl.addEventListener('click', () => this._openFichaTecnica());
 
       // ── Datepicker (V1) ──
       const openDp = (e) => { e.stopPropagation(); this._openDatePicker(); };
@@ -4982,6 +5053,12 @@ button { font-family: inherit; cursor: pointer; }
     // ═══════════════════════════════════════════════════
     _openModal(r) {
       this._modalReserva = r;
+      // v1.1.77 — cliente para precargar la FICHA TÉCNICA. Se guarda al
+      // ABRIR la cita: el modal tapa la barra, así que el flujo real es
+      // abrir cita → cerrar → pulsar Ficha Técnica.
+      if (r && r.clientName && r.family !== 'BLOQUEO') {
+        this._ftUltimoCliente = { nombre: r.clientName, telefono: r.clientPhone || '' };
+      }
       this._disc = 0;
       this._discMode = 'pct';
       this._canjeActivo = null;
@@ -7361,6 +7438,163 @@ button { font-family: inherit; cursor: pointer; }
         if (it.total <= 0) this._almProductos.splice(i, 1);
       }
       this._renderAlmacen();
+    }
+
+
+    // ═══════════════════════════════════════════════════
+    // v1.1.77 — FICHA TÉCNICA (histórico de color)
+    // ═══════════════════════════════════════════════════
+    // Consulta del histórico del sistema anterior para la sala.
+    // NO muestra dinero porque el backend NO lo envía: ver
+    // getFichaTecnicaCliente en memoriaLegacyLogic v1.0.3.
+
+    _openFichaTecnica() {
+      this._ftCliente = null;
+      this._ftData = null;
+      this._ftCargando = false;
+      this._ftSoloFormulas = false;
+      const root = this.shadowRoot;
+      root.getElementById('ftScrim')?.remove();
+      const scrim = document.createElement('div');
+      scrim.className = 'ft-scrim';
+      scrim.id = 'ftScrim';
+      root.appendChild(scrim);
+      this._renderFt();
+
+      // Precarga con el cliente de la última cita abierta, si lo hay.
+      const u = this._ftUltimoCliente;
+      if (u && (u.telefono || u.nombre)) this._ftCargar(u.nombre, u.telefono);
+    }
+
+    _closeFichaTecnica() {
+      this.shadowRoot.getElementById('ftScrim')?.remove();
+    }
+
+    _ftCargar(nombre, telefono) {
+      this._ftCliente = { nombre: nombre || '', telefono: telefono || '' };
+      this._ftData = null;
+      this._ftCargando = true;
+      this._renderFt();
+      this._sendToPage('getFichaTecnica', {
+        telefono: telefono || '',
+        clientName: nombre || ''
+      });
+    }
+
+    _onFichaTecnica(p) {
+      this._ftCargando = false;
+      this._ftData = (p && p.data) ? p.data : { ok: false };
+      this._renderFt();
+    }
+
+    _renderFtCli(clientes) {
+      const box = this.shadowRoot.getElementById('ftResults');
+      if (!box) return;
+      if (!clientes.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
+      box.style.display = 'block';
+      box.innerHTML = clientes.map(c => `
+        <div class="ft-cli" data-tel="${esc(c.telefono || '')}" data-nom="${esc(c.nombreCompleto || '')}">
+          <div class="ft-cli-name">${esc(c.nombreCompleto || '—')}</div>
+          <div class="ft-cli-tel">${esc(c.telefono || 'Sin teléfono')}</div>
+        </div>`).join('');
+      box.querySelectorAll('.ft-cli').forEach(el => {
+        el.addEventListener('click', () => {
+          const q = this.shadowRoot.getElementById('ftQuery');
+          if (q) q.value = '';
+          box.innerHTML = ''; box.style.display = 'none';
+          this._ftCargar(el.getAttribute('data-nom'), el.getAttribute('data-tel'));
+        });
+      });
+    }
+
+    _ftFecha(ymd) {
+      if (!ymd || ymd.length < 10) return '—';
+      const M = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+      return Number(ymd.slice(8,10)) + ' ' + (M[Number(ymd.slice(5,7)) - 1] || '') + ' ' + ymd.slice(0,4);
+    }
+
+    _renderFt() {
+      const scrim = this.shadowRoot.getElementById('ftScrim');
+      if (!scrim) return;
+      const cli = this._ftCliente;
+      const d = this._ftData;
+
+      let cuerpo = '';
+      if (this._ftCargando) {
+        cuerpo = `<div class="ft-empty">Buscando el historial…</div>`;
+      } else if (!cli) {
+        cuerpo = `<div class="ft-empty">Busca una clienta para ver su historial de color.</div>`;
+      } else if (!d || !d.ok) {
+        cuerpo = `<div class="ft-empty">No se ha podido consultar el historial.</div>`;
+      } else if (!d.encontrado) {
+        cuerpo = `<div class="ft-empty">Sin historial anterior para <b>${esc(cli.nombre)}</b>.<br>Es clienta nueva o entró ya con el sistema actual.</div>`;
+      } else {
+        const c = d.cliente || {};
+        const habituales = d.habituales || [];
+        let visitas = d.visitas || [];
+        if (this._ftSoloFormulas) visitas = visitas.filter(v => v.formula);
+
+        cuerpo = `
+          <div class="ft-kpis">
+            <div class="ft-kpi"><div class="ft-kpi-l">Visitas</div><div class="ft-kpi-v">${c.visitas || 0}</div></div>
+            <div class="ft-kpi"><div class="ft-kpi-l">Fórmulas</div><div class="ft-kpi-v">${c.formulas || 0}</div></div>
+            <div class="ft-kpi"><div class="ft-kpi-l">Primera</div><div class="ft-kpi-v" style="font-size:13px">${esc(this._ftFecha(c.primeraVisita))}</div></div>
+            <div class="ft-kpi"><div class="ft-kpi-l">Última</div><div class="ft-kpi-v" style="font-size:13px">${esc(this._ftFecha(c.ultimaVisita))}</div></div>
+          </div>
+          ${habituales.length ? `<div class="ft-sec">Lo que se le hace</div><div class="ft-habit">${
+            habituales.map(h => `<span class="ft-tag">${esc(h.servicio || h.codigo)} <b>×${h.veces}</b></span>`).join('')
+          }</div>` : ''}
+          <div class="ft-sec" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+            <span>Historial (${visitas.length})</span>
+            <button class="ft-toggle ${this._ftSoloFormulas ? 'on' : ''}" id="ftToggle">Solo con fórmula</button>
+          </div>
+          ${visitas.length ? visitas.map(v => `
+            <div class="ft-visita">
+              <div class="ft-vh">
+                <span class="ft-vfecha">${esc(this._ftFecha(v.fecha))}</span>
+                ${v.hora ? `<span class="ft-cli-tel">${esc(v.hora)}</span>` : ''}
+                ${v.profesional ? `<span class="ft-vof">${esc(v.profesional)}</span>` : ''}
+              </div>
+              <div class="ft-vsrv">${esc((v.servicios || []).map(x => x.servicio || x.codigo).join(' + ') || '—')}</div>
+              ${v.formula ? `<div class="ft-formula">${esc(v.formula)}</div>` : ''}
+            </div>`).join('') : `<div class="ft-empty">Sin visitas con fórmula anotada.</div>`}
+        `;
+      }
+
+      scrim.innerHTML = `
+        <div class="ft-modal">
+          <div class="ft-head">
+            <div>
+              <div class="ft-title">🎨 Ficha técnica${cli && cli.nombre ? ' · ' + esc(cli.nombre) : ''}</div>
+              <div class="ft-sub">Historial de color del sistema anterior</div>
+            </div>
+            <button class="ft-x" id="ftClose">✕</button>
+          </div>
+          <div class="ft-search">
+            <input class="ft-input" id="ftQuery" type="search" placeholder="Buscar clienta por nombre o teléfono…" autocomplete="off">
+            <div class="ft-results" id="ftResults" style="display:none"></div>
+          </div>
+          <div class="ft-body">${cuerpo}</div>
+          <div class="ft-foot">Solo consulta técnica. Los datos económicos están en Histórico de Facturación.</div>
+        </div>`;
+
+      scrim.querySelector('#ftClose')?.addEventListener('click', () => this._closeFichaTecnica());
+      scrim.addEventListener('click', (e) => { if (e.target === scrim) this._closeFichaTecnica(); });
+
+      const q = scrim.querySelector('#ftQuery');
+      if (q) {
+        q.addEventListener('input', () => {
+          const val = q.value.trim();
+          clearTimeout(this._ftBuscarTimer);
+          if (val.length < 2) { this._renderFtCli([]); return; }
+          this._ftBuscarTimer = setTimeout(() => this._sendToPage('ftBuscarCliente', { query: val }), 250);
+        });
+      }
+
+      scrim.querySelector('#ftToggle')?.addEventListener('click', () => {
+        this._ftSoloFormulas = !this._ftSoloFormulas;
+        this._renderFt();
+      });
     }
 
     // ═══════════════════════════════════════════════════
