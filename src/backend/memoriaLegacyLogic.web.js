@@ -1,11 +1,28 @@
 // =====================================================
 // KAMISUITE — Backend: MEMORIA (histórico legacy SABDE)
 // =====================================================
-// VERSION: 1.0.2
+// VERSION: 1.0.3
 // FECHA:   3 de agosto de 2026
 // ARCHIVO: backend/memoriaLegacyLogic.web.js
 //
 // CHANGELOG
+//   v1.0.3 (3-Ago-2026) — NUEVO getFichaTecnicaCliente().
+//     Ficha TÉCNICA para el personal de sala (botón en la barra de
+//     Recepción PRO, junto a ALMACÉN y ESPECIALES).
+//
+//     ⚠️ SIN NINGÚN DATO ECONÓMICO. Requisito explícito de Jal: a los
+//     informes con dinero solo accede la gerencia; la sala necesita la
+//     información técnica y nada más.
+//
+//     El filtrado es EN EL BACKEND, no en el widget. Esta función no
+//     construye ni envía importe, método de pago, gasto acumulado ni
+//     ticket medio en ningún nivel del payload. Ocultarlo por CSS o
+//     en el render sería inútil: cualquiera lo vería en el inspector
+//     del navegador. Lo que no sale del backend no existe en el cliente.
+//
+//     Devuelve por visita: fecha, hora, profesional, nombres de los
+//     servicios y la fórmula literal. Nada más.
+//
 //   v1.0.2 (3-Ago-2026) — Producto identificado por referencia.
 //     El CSV v3 resuelve el nombre real de cada producto cruzando el
 //     NroProd del ticket con la columna Prod del listado de almacén de
@@ -104,12 +121,13 @@
 //   getMemoriaServicio()       → evolución de un código de servicio
 //   getMemoriaFormulas()       → buscador de texto sobre fórmulas
 //   getMemoriaDiagnostico()    → field IDs reales + conteos (soporte)
+//   getFichaTecnicaCliente()   → historial TÉCNICO sin datos económicos
 // =====================================================
 
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '1.0.2';
+const VERSION = '1.0.3';
 const TAG = `[MemoriaLegacy][${VERSION}]`;
 
 const CMS_TICKETS = 'KamisuiteLegacyTickets';
@@ -1053,6 +1071,107 @@ export const getMemoriaDiagnostico = webMethod(
     } catch (e) {
       console.error(`${TAG} ❌ getMemoriaDiagnostico:`, e);
       return { ok: false, error: safeErr(e) };
+    }
+  }
+);
+
+// =====================================================
+// 8. getFichaTecnicaCliente — historial técnico para la sala
+// =====================================================
+// Consumida desde el botón FICHA TÉCNICA de la barra de Recepción PRO.
+//
+// ⚠️ CONTRATO INVIOLABLE: el payload NO contiene importes, métodos de
+// pago, gasto acumulado, ticket medio ni ningún otro dato económico.
+// Es la única función de este backend pensada para uso general del
+// personal; el resto sirven informes de gerencia.
+//
+// Si alguna vez hay que añadir un campo aquí, la pregunta previa es:
+// ¿un dato económico se podría deducir de él? Si la respuesta no es un
+// no rotundo, no se añade.
+//
+// Búsqueda por teléfono (identidad real en KAMISUITE, Guía V2 §14) o
+// por número de cliente legacy. El teléfono se normaliza quitando
+// espacios y separadores, mismo criterio que el buscador de clientes
+// de Recepción PRO (pagecode v1.0.28).
+// =====================================================
+
+export const getFichaTecnicaCliente = webMethod(
+  Permissions.SiteMember,
+  async (opts = {}) => {
+    try {
+      const { telefono = '', clientId = null, soloConFormula = false, refresh = false } = opts || {};
+      if (!telefono && (clientId === null || clientId === '')) {
+        return { ok: false, error: { message: 'Falta telefono o clientId' } };
+      }
+
+      const { tickets } = await getData(refresh);
+      const telBusca = txt(telefono).replace(/[\s\-()+.]/g, '');
+
+      const suyos = tickets.filter(t => {
+        if (clientId !== null && clientId !== '' && toNum(clientId) === t.clientId) return true;
+        if (telBusca) {
+          const tel = t.clientPhone.replace(/[\s\-()+.]/g, '');
+          if (tel && tel === telBusca) return true;
+        }
+        return false;
+      }).sort((a, b) => (b.fecha + b.hora).localeCompare(a.fecha + a.hora));
+
+      if (!suyos.length) {
+        return { ok: true, encontrado: false, cliente: null, visitas: [] };
+      }
+
+      const ref = suyos[0];
+      const fechas = suyos.map(t => t.fecha).filter(Boolean).sort();
+      const conFormula = suyos.filter(t => !!t.formula);
+
+      // Servicios más repetidos, por NOMBRE y número de veces. Sin importes.
+      const frecuencia = new Map();
+      for (const t of suyos) {
+        for (const l of t.lineas) {
+          if (!l.codigo) continue;
+          if (l.grupo === GRUPO_VENTA) continue; // el producto no es técnica
+          const k = claveServicio(l);
+          const f = frecuencia.get(k) || { codigo: l.codigo, servicio: l.servicio, veces: 0 };
+          f.veces++;
+          frecuencia.set(k, f);
+        }
+      }
+
+      const fuente = soloConFormula ? conFormula : suyos;
+
+      // Proyección explícita campo a campo. NO se hace spread del ticket:
+      // un `...t` colaría importe, método de pago y desglose de cobro.
+      const visitas = fuente.map(t => ({
+        fecha: t.fecha,
+        hora: t.hora,
+        profesional: t.staff,
+        variosProfesionales: t.staffMultiple,
+        servicios: t.lineas
+          .filter(l => l.grupo !== GRUPO_VENTA)
+          .map(l => ({ codigo: l.codigo, servicio: l.servicio, grupo: l.grupo })),
+        formula: t.formula
+      }));
+
+      return {
+        ok: true,
+        encontrado: true,
+        version: VERSION,
+        cliente: {
+          clientId: ref.clientId,
+          clientName: ref.clientName,
+          clientPhone: suyos.map(t => t.clientPhone).find(Boolean) || '',
+          visitas: suyos.length,
+          formulas: conFormula.length,
+          primeraVisita: fechas[0] || '',
+          ultimaVisita: fechas[fechas.length - 1] || ''
+        },
+        habituales: [...frecuencia.values()].sort((a, b) => b.veces - a.veces).slice(0, 8),
+        visitas
+      };
+
+    } catch (e) {
+      console.error(`${TAG} ❌ getFichaTecnicaCliente:`, e);
+      return { ok: false, error: safeErr(e), visitas: [] };
     }
   }
 );
