@@ -3,8 +3,22 @@
  * BUNDLE para Wix Custom Element (todo-en-uno)
  * =====================================================================
  * Tag name:  kami-reserva
- * VERSION:   2.0.17 (bundle)
+ * VERSION:   2.0.18 (bundle)
  * FECHA:     3 de agosto de 2026
+ *
+ * v2.0.18 — DESTACAR el bloque "Profesional para los complementos".
+ *   Solo estética, cero cambios funcionales sobre v2.0.17.
+ *   El bloque se pintaba suelto, al mismo nivel visual que los
+ *   complementos de arriba, y pasaba desapercibido.
+ *   · Nuevo contenedor `.kr-extrapro`: perímetro de 1px, fondo de acento y
+ *     radio grande, envolviendo título + switch + chips.
+ *   · Título en negrita (`.kr-extrapro__title`, --kr-w-bold).
+ *   · La fila del switch pasa a fondo liso (--kr-surface) para contrastar
+ *     sobre el acento.
+ *   · Usa EXCLUSIVAMENTE tokens ya declarados en :host
+ *     (--kr-accent-soft, --kr-accent-line, --kr-radius-lg, --kr-w-bold,
+ *     --kr-surface, --kr-line, --kr-ink), así que respeta la piel de cada
+ *     salón: ni un color fijo.
  *
  * v2.0.17 — SEGUNDO PROFESIONAL PARA LOS COMPLEMENTOS (recuperado de V1).
  *   Backend pareja: widgetPublicoLogic v0.9.0. Motor final:
@@ -564,6 +578,27 @@ window.KR_STYLES = `
 .kr-switch:checked { background: var(--kr-accent); }
 .kr-switch:checked::after { transform: translateX(19px); }
 .kr-subselect { margin-top: 4px; }
+
+/* ---- bloque destacado: profesional para los complementos ------------- */
+/* v2.0.18 — Perímetro + fondo de acento para que no se confunda con los
+   complementos de arriba. Usa SOLO tokens ya declarados en :host, así que
+   respeta la piel (skin) de cada salón sin color fijo alguno. */
+.kr-extrapro {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px 16px 18px;
+  border-radius: var(--kr-radius-lg);
+  border: 1px solid var(--kr-accent-line);
+  background: var(--kr-accent-soft);
+}
+.kr-extrapro__title {
+  font-size: var(--kr-fs-sm);
+  font-weight: var(--kr-w-bold);
+  color: var(--kr-ink);
+  letter-spacing: -.005em;
+}
+/* La fila del switch pasa a fondo liso para contrastar sobre el acento */
+.kr-extrapro .kr-switchrow { background: var(--kr-surface); border-color: var(--kr-line); }
+.kr-extrapro .kr-subselect { margin-top: 2px; }
 
 /* ---- hours grid ------------------------------------------------------ */
 .kr-hours-head {
@@ -2362,7 +2397,12 @@ window.KR_applySkin = function (el, name) {
       }
 
       this.proExtraField.hidden = false;
-      this.proExtraField.appendChild(el("label", "kr-label", "Profesional para los complementos"));
+
+      // v2.0.18 — Todo el bloque va dentro de un contenedor con perímetro y
+      // fondo de acento, y el título en negrita. Antes se pintaba suelto,
+      // al mismo nivel visual que los complementos, y pasaba desapercibido.
+      const box = el("div", "kr-extrapro");
+      box.appendChild(el("label", "kr-label kr-extrapro__title", "Profesional para los complementos"));
       const row = el("div", "kr-switchrow");
       row.innerHTML = `<div class="kr-switchrow__txt">El mismo del servicio principal
         <small>Mantener a una sola persona en toda la cita</small></div>`;
@@ -2381,10 +2421,10 @@ window.KR_applySkin = function (el, name) {
         this._renderSummary();
       });
       row.appendChild(sw);
-      this.proExtraField.appendChild(row);
+      box.appendChild(row);
       if (!this.state.sameExtra) {
         const sub = el("div", "kr-pros kr-subselect");
-        this.proExtraField.appendChild(sub);
+        box.appendChild(sub);
         this._proChips(sub, this.state.proExtra, id => {
           if (this.state.proExtra === id) return;   // no-op si no cambia
           this.state.proExtra = id;
@@ -2395,6 +2435,7 @@ window.KR_applySkin = function (el, name) {
           this._renderSummary();
         });
       }
+      this.proExtraField.appendChild(box);
     }
 
     // v2.0.17 — wixResourceId del SEGUNDO profesional a enviar al backend.
