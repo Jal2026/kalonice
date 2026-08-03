@@ -1,7 +1,34 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.77  ·  Popup FICHA TÉCNICA (histórico de color)
+ * VERSION: 1.1.79  ·  FICHA TÉCNICA — fix del cliente precargado
+ *
+ * v1.1.79 (3 ago 2026) — FIX: el popup se reabría siempre con el cliente
+ *   de la última CITA abierta, ignorando el que el operador acabara de
+ *   seleccionar en el aside. Seleccionar cliente en el aside escribe en
+ *   this._cliente y no pasa por _openModal, así que _ftUltimoCliente no
+ *   se actualizaba y el popup quedaba clavado en el cliente anterior.
+ *
+ *   Orden de precarga ahora:
+ *     1) this._cliente  — el del aside. Es lo que el operador tiene
+ *        delante en el paso 1 del asistente; manda sobre lo demás.
+ *     2) this._ftUltimoCliente — última cita abierta en el calendario.
+ *     3) ninguno → el popup abre con el buscador vacío.
+ *
+ *   Solo cambia _openFichaTecnica(). Backend y page code sin tocar.
+ *
+ * v1.1.78  ·  Popup FICHA TÉCNICA — historial de color destacado
+ *
+ * v1.1.78 (3 ago 2026) — FICHA TÉCNICA: las fórmulas suben a su propio
+ *   bloque, delante del historial de visitas. En v1.1.77 iban dentro de
+ *   cada visita, y como solo el 15,7% de los tickets tiene fórmula
+ *   anotada, obligaba a rebuscar por el historial para encontrarlas.
+ *   Mismo criterio que el widget MEMORIA: Historial de color primero,
+ *   todas las visitas después. Se elimina el toggle 'Solo con fórmula',
+ *   que deja de tener sentido con los dos bloques separados.
+ *   Solo cambia _renderFt(). Backend y page code sin tocar.
+ *
+ * v1.1.77  ·  Popup FICHA TÉCNICA (histórico de color)
  *
  * v1.1.77 (3 ago 2026) — POPUP FICHA TÉCNICA en la barra superior, junto
  *   a ALMACÉN y ESPECIALES. Consulta el histórico de color del sistema
@@ -1471,9 +1498,11 @@ button { font-family: inherit; cursor: pointer; }
 .ft-vsrv { font-size: 12.5px; color: var(--ks-ink2); }
 .ft-formula { margin-top: 8px; background: #fbf7ec; border: 1px solid #e6d9b4; border-left: 3px solid var(--ks-accent); border-radius: 8px; padding: 9px 11px; font-size: 13px; line-height: 1.5; color: var(--ks-ink); white-space: pre-wrap; word-break: break-word; }
 .ft-empty { text-align: center; padding: 30px 16px; color: var(--ks-ink3); font-size: 13px; }
+.ft-color { border: 1px solid #e6d9b4; background: #fdfbf5; border-radius: 10px; padding: 11px 13px; margin-bottom: 9px; }
+.ft-color-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.ft-color-srv { font-size: 12px; color: var(--ks-ink3); margin-top: 6px; }
+.ft-nocolor { border: 1px dashed var(--ks-line); border-radius: 10px; padding: 16px; text-align: center; color: var(--ks-ink3); font-size: 12.5px; }
 .ft-foot { padding: 11px 20px; border-top: 1px solid var(--ks-line); font-size: 11px; color: #9ca3af; }
-.ft-toggle { border: 1px solid var(--ks-line); background: #fff; border-radius: 999px; padding: 5px 12px; font-size: 11.5px; font-weight: 600; cursor: pointer; font-family: inherit; color: var(--ks-ink2); }
-.ft-toggle.on { background: var(--ks-accent); border-color: var(--ks-accent); color: #fff; }
 
 /* ── v1.1.76 · Botón y modal ALMACÉN ── */
 .ks-almacen {
@@ -7452,7 +7481,6 @@ button { font-family: inherit; cursor: pointer; }
       this._ftCliente = null;
       this._ftData = null;
       this._ftCargando = false;
-      this._ftSoloFormulas = false;
       const root = this.shadowRoot;
       root.getElementById('ftScrim')?.remove();
       const scrim = document.createElement('div');
@@ -7461,9 +7489,19 @@ button { font-family: inherit; cursor: pointer; }
       root.appendChild(scrim);
       this._renderFt();
 
-      // Precarga con el cliente de la última cita abierta, si lo hay.
-      const u = this._ftUltimoCliente;
-      if (u && (u.telefono || u.nombre)) this._ftCargar(u.nombre, u.telefono);
+      // v1.1.79 — Precarga por orden de proximidad al operador:
+      // 1º el cliente del aside (lo que tiene delante ahora mismo),
+      // 2º el de la última cita abierta en el calendario.
+      // Sin este orden el popup se quedaba pegado al cliente anterior.
+      let pre = null;
+      const cliAside = this._cliente;
+      if (cliAside && cliAside.nombre) {
+        pre = { nombre: cliAside.nombre, telefono: cliAside.telefono || '' };
+      } else {
+        const u = this._ftUltimoCliente;
+        if (u && (u.telefono || u.nombre)) pre = u;
+      }
+      if (pre) this._ftCargar(pre.nombre, pre.telefono);
     }
 
     _closeFichaTecnica() {
@@ -7531,8 +7569,12 @@ button { font-family: inherit; cursor: pointer; }
       } else {
         const c = d.cliente || {};
         const habituales = d.habituales || [];
-        let visitas = d.visitas || [];
-        if (this._ftSoloFormulas) visitas = visitas.filter(v => v.formula);
+        const visitas = d.visitas || [];
+
+        // v1.1.78 — las fórmulas van PRIMERO y en bloque propio. Es el
+        // dato por el que se abre este popup; enterrarlo dentro del
+        // historial obliga a rebuscar (solo ~16% de visitas lo tienen).
+        const conFormula = visitas.filter(v => v.formula);
 
         cuerpo = `
           <div class="ft-kpis">
@@ -7541,13 +7583,24 @@ button { font-family: inherit; cursor: pointer; }
             <div class="ft-kpi"><div class="ft-kpi-l">Primera</div><div class="ft-kpi-v" style="font-size:13px">${esc(this._ftFecha(c.primeraVisita))}</div></div>
             <div class="ft-kpi"><div class="ft-kpi-l">Última</div><div class="ft-kpi-v" style="font-size:13px">${esc(this._ftFecha(c.ultimaVisita))}</div></div>
           </div>
+
+          <div class="ft-sec">Historial de color (${conFormula.length})</div>
+          ${conFormula.length ? conFormula.map(v => `
+            <div class="ft-color">
+              <div class="ft-color-h">
+                <span class="ft-vfecha">${esc(this._ftFecha(v.fecha))}</span>
+                ${v.profesional ? `<span class="ft-vof">${esc(v.profesional)}</span>` : ''}
+              </div>
+              <div class="ft-formula">${esc(v.formula)}</div>
+              <div class="ft-color-srv">${esc((v.servicios || []).map(x => x.servicio || x.codigo).join(' + ') || '')}</div>
+            </div>`).join('')
+            : `<div class="ft-nocolor">Sin fórmulas anotadas en el sistema anterior.</div>`}
+
           ${habituales.length ? `<div class="ft-sec">Lo que se le hace</div><div class="ft-habit">${
             habituales.map(h => `<span class="ft-tag">${esc(h.servicio || h.codigo)} <b>×${h.veces}</b></span>`).join('')
           }</div>` : ''}
-          <div class="ft-sec" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-            <span>Historial (${visitas.length})</span>
-            <button class="ft-toggle ${this._ftSoloFormulas ? 'on' : ''}" id="ftToggle">Solo con fórmula</button>
-          </div>
+
+          <div class="ft-sec">Todas sus visitas (${visitas.length})</div>
           ${visitas.length ? visitas.map(v => `
             <div class="ft-visita">
               <div class="ft-vh">
@@ -7556,8 +7609,7 @@ button { font-family: inherit; cursor: pointer; }
                 ${v.profesional ? `<span class="ft-vof">${esc(v.profesional)}</span>` : ''}
               </div>
               <div class="ft-vsrv">${esc((v.servicios || []).map(x => x.servicio || x.codigo).join(' + ') || '—')}</div>
-              ${v.formula ? `<div class="ft-formula">${esc(v.formula)}</div>` : ''}
-            </div>`).join('') : `<div class="ft-empty">Sin visitas con fórmula anotada.</div>`}
+            </div>`).join('') : `<div class="ft-empty">Sin visitas registradas.</div>`}
         `;
       }
 
@@ -7591,10 +7643,6 @@ button { font-family: inherit; cursor: pointer; }
         });
       }
 
-      scrim.querySelector('#ftToggle')?.addEventListener('click', () => {
-        this._ftSoloFormulas = !this._ftSoloFormulas;
-        this._renderFt();
-      });
     }
 
     // ═══════════════════════════════════════════════════
