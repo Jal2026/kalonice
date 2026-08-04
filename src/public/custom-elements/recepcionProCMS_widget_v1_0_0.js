@@ -1,7 +1,62 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.80  ·  Informe del día — detalle de ESPECIALES vendidos
+ * VERSION: 1.1.81  ·  Armado múltiple, cantidad y variantes al añadir
+ *
+ * v1.1.81 (4 ago 2026) — ARMADO MÚLTIPLE + CANTIDAD + VARIANTES AL AÑADIR.
+ *   Tres cosas que ahorran pasos en el mostrador, sobre una única cita.
+ *
+ *   1) CANTIDAD en el popup de servicio. Caso real: una madre trae dos
+ *      niños al mismo corte. Antes había que repetir el proceso entero
+ *      (armar, clicar calendario, y otra vez). Ahora se elige cantidad 2
+ *      y los dos cortes se encadenan uno detrás del otro según duración.
+ *
+ *   2) VARIOS SERVICIOS armados antes de pintar. El popup, si ya hay algo
+ *      armado, cambia el botón a "＋ Añadir a la cita". La cabecera del
+ *      calendario muestra la lista completa y el orden de colocación.
+ *      Al encadenar líneas NO se ofrecen complementos opcionales ni
+ *      grupos exclusivos (premisa de diseño: elegirlos por línea haría el
+ *      popup inmanejable). Sí se mantienen las fases OBLIGATORIAS con
+ *      variantes (CASO B), porque sin esa elección el motor no puede
+ *      construir el servicio.
+ *
+ *   3) Selector "Mismo profesional" / "Elegir por servicio" en la
+ *      cabecera, visible solo cuando hay más de una línea. Con "mismo
+ *      profesional" un único clic coloca toda la cita. Con "elegir por
+ *      servicio" el operador clica una columna y hora por cada servicio.
+ *
+ *   ARQUITECTURA — es UNA SOLA CITA, no varias:
+ *     · Línea 1  → 'crearReserva'    (crearPackReserva) crea la fila.
+ *     · Líneas 2+ → 'agregar-servicio' (agregarServicioReserva) se suman a
+ *       ESA fila, exactamente igual que el botón "+ Servicio adicional"
+ *       del modal de cita, que es como se viene haciendo desde la V1.
+ *   Resultado: un total, un cobro unificado y UN SOLO WhatsApp/email al
+ *   cliente — la centralita de comunicaciones solo la dispara
+ *   crearPackReserva; agregarServicioReserva no notifica nada.
+ *   En modo "elegir por servicio", tras añadir la línea sus fases se
+ *   reubican en la columna elegida con el contrato existente 'mover-fase',
+ *   SIEMPRE de una en una: moverFase reescribe la fila entera y dos
+ *   movimientos en paralelo se pisarían.
+ *
+ *   4) "+ SERVICIO ADICIONAL" DEL MODAL DE CITA — ahora con elección de
+ *      VARIANTE. Antes solo viajaba el setupUid: un servicio con variantes
+ *      (Corte Mujer M/L/XL) se añadía siempre a precio y duración BASE, y
+ *      un servicio con fases obligatorias con variantes (Botox →
+ *      Planchado M/L/XL) fallaba con "Falta elegir variante de: …" sin
+ *      forma de añadirlo. Corregido en las tres capas.
+ *      Además, el botón "Añadir" vuelve a habilitarse si el backend
+ *      devuelve error (antes había que cerrar el modal para reintentar).
+ *
+ *   REQUIERE: backend recepcionProLogic v1.0.43 y page code v1.0.36.
+ *   Desplegar el backend y el page code ANTES que este widget: sin ellos,
+ *   varianteSel y complementosSetupUid se ignoran y las líneas con
+ *   variantes entrarían a precio base.
+ *
+ *   NO se toca: cobro, descuentos, canje de bonos, facturación, cierre,
+ *   arqueo, ALMACÉN, ESPECIALES, ficha técnica, bloqueos, drag&drop de
+ *   fases, login PIN, ni el flujo de una sola línea (idéntico a v1.1.80).
+ *
+ * v1.1.80  ·  Informe del día — detalle de ESPECIALES vendidos
  *
  * v1.1.80 (4 ago 2026) — CIERRE FINANCIERO: nueva sección "🎟️ Especiales
  *   vendidos hoy" con el detalle de cada venta manual de Bono / Tarjeta
@@ -1353,7 +1408,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.75]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.81]';   // v1.1.81 — venía rezagado en v1.1.75
 
   // ─── helpers ───
   function esc(s) {
@@ -1370,6 +1425,11 @@
 
   const CLASE_LABEL = { simple_unico: 'Simple', simple_variantes: 'Variantes', complejo_fases: 'Cascada', complejo_proceso: 'Cascada' };
   const ROLE_SHORT = { principal: 'P', complemento: 'C', ambos: 'P·C' };
+
+  // v1.1.81 — tope de repeticiones de una misma línea del armado. 10 es
+  // holgado para el caso real (familias) y evita que un dedo pegado al ＋
+  // genere una cadena interminable de llamadas al backend.
+  const CANT_MAX_LINEA = 10;
 
   // calendario
   const CAL_START = 9, CAL_END = 21, SLOT_MIN = 30;
@@ -1673,6 +1733,19 @@ button { font-family: inherit; cursor: pointer; }
 .leg-paid::before { background: oklch(0.72 0.16 150); }
 .leg-pending::before { background: var(--ks-accent); }
 .leg-block::before { background: repeating-linear-gradient(135deg, oklch(0.62 0.13 350 / .5) 0 3px, transparent 3px 6px); border-radius: 2px; }
+/* v1.1.81 — stepper de cantidad del popup de detalle */
+.ks-qty-row { display: flex; align-items: center; gap: 10px; }
+.ks-qty-btn { width: 40px; min-width: 40px; justify-content: center; font-size: 16px; font-weight: 700; }
+.ks-qty-val { min-width: 30px; text-align: center; font-weight: 700; font-size: 15px; color: var(--ks-ink); }
+/* v1.1.81 — cabecera del armado múltiple */
+.ks-armed-wrap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ks-armed-count { font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: 6px; color: #fff; background: var(--ks-accent); }
+.ks-armed-list { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.ks-armed-item { font-size: 10.5px; font-weight: 600; padding: 3px 8px; border-radius: 6px; color: var(--ks-ink2); background: var(--ks-paper2); border: 1px solid var(--ks-line2); }
+.ks-armed-item.is-now { color: var(--ks-ink); border-color: var(--ks-accent); }
+.ks-armed-mode { display: flex; align-items: center; gap: 0; border: 1px solid var(--ks-line2); border-radius: 7px; overflow: hidden; }
+.ks-armed-modebtn { font-family: inherit; font-size: 10.5px; font-weight: 600; padding: 4px 9px; border: 0; cursor: pointer; color: var(--ks-ink2); background: var(--ks-paper2); }
+.ks-armed-modebtn.active { color: #fff; background: var(--ks-ink); }
 
 /* ============================ PANEL ============================ */
 .ks-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
@@ -2344,6 +2417,29 @@ button { font-family: inherit; cursor: pointer; }
       this._staff = [];
       this._reservas = [];
       this._armed = null;              // servicio armado para colocar
+      // v1.1.81 — ARMADO MÚLTIPLE. `_armed` sigue siendo la línea que se
+      // está colocando ahora (todo el render existente lo lee tal cual).
+      // Las líneas siguientes esperan en `_armedQueue` y se añaden a la
+      // MISMA cita con `agregar-servicio`, que es lo que ya hace el botón
+      // "+ Servicio adicional" del modal: una fila, un total, un cobro,
+      // un solo WhatsApp (la centralita solo la dispara crearPackReserva).
+      this._armedQueue = [];           // líneas pendientes tras la actual
+      this._armedStaffMode = 'same';   // 'same' = todo al mismo profesional
+                                       // 'each' = elegir columna por servicio
+      this._packReservaId = null;      // id de la cita en curso (líneas 2..N)
+      this._packStaffId = null;        // columna donde se colocó la línea 1
+      this._chainActivo = false;       // distingue cadena de armado del
+                                       // "+ Servicio adicional" del modal
+      this._pendingMove = null;        // {staffId, mins} destino de la línea
+      this._moveQueue = [];            // movimientos de fase pendientes,
+                                       // SIEMPRE secuenciales: wixData.update
+                                       // reemplaza el documento entero y dos
+                                       // moverFase en paralelo se pisarían.
+      this._cantidad = 1;              // cantidad elegida en el popup
+      this._chainMoving = false;       // reubicando fases de la cadena
+      this._addSvcUid = '';            // "+ Servicio adicional": selección
+      this._addSvcVarIdx = 0;
+      this._addSvcComplSel = {};
       this._reservando = false;
       this._pagando = false;
       this._modalReserva = null;
@@ -2729,6 +2825,23 @@ button { font-family: inherit; cursor: pointer; }
         case 'reservaCreada':
           this._reservando = false;
           if (p.ok) {
+            // v1.1.81 — ¿quedan líneas del armado múltiple? Entonces esta
+            // reserva es la cita CONTENEDORA y el resto de servicios se
+            // añaden dentro de ella (un total, un cobro, un WhatsApp).
+            if (this._armedQueue.length && p.reservaId) {
+              this._packReservaId = p.reservaId;
+              this._chainActivo = true;
+              this._armed = this._armedQueue.shift();
+              this._renderArmedHint();
+              if (this._armedStaffMode === 'same') {
+                this._reservando = true;
+                this._enviarAgregarServicio(this._armed, null);
+              } else {
+                this._toast(`Cita creada · elige columna para ${this._armed.servicio.label}`);
+                this._sendToPage('getReservas', { fecha: this._fecha });
+              }
+              break;
+            }
             this._toast(`Reserva creada · ${p.precioTotal}€`);
             this._desarmar();
             this._sendToPage('getReservas', { fecha: this._fecha });
@@ -2857,6 +2970,16 @@ button { font-family: inherit; cursor: pointer; }
           else this._toast('Error: ' + (p.error || 'no se pudo reprogramar'));
           break;
         case 'fase-movida':
+          // v1.1.81 — si la cadena del armado está reubicando las fases del
+          // servicio recién añadido, encadenar el siguiente movimiento antes
+          // de nada. Van de uno en uno a propósito (ver _enviarSiguienteMovimiento).
+          if (this._chainActivo && this._chainMoving) {
+            if (!p.ok) this._toast('Aviso: no se pudo colocar una fase (' + (p.error || '') + ')');
+            if (this._moveQueue.length) { this._enviarSiguienteMovimiento(); break; }
+            this._chainMoving = false;
+            this._avanzarCadena();
+            break;
+          }
           // v1.1.29 — drag&drop por fase
           if (p.ok) { this._toast('Fase movida ✓'); this._sendToPage('getReservas', { fecha: this._fecha }); }
           else this._toast('Error: ' + (p.error || 'no se pudo mover la fase'));
@@ -2875,9 +2998,37 @@ button { font-family: inherit; cursor: pointer; }
           else this._toast('Error: ' + (p.error || 'no se pudo añadir complemento'));
           break;
         case 'servicio-agregado':
+          // v1.1.81 — dos orígenes posibles para esta respuesta:
+          //   · cadena del armado múltiple (_chainActivo) → seguir la cadena
+          //   · botón "+ Servicio adicional" del modal → comportamiento v1.1.30
+          if (this._chainActivo) {
+            this._reservando = false;
+            if (!p.ok) {
+              // La cita creada NO se toca: se corta la cadena y se avisa de
+              // qué servicio ha fallado, con el motivo del backend.
+              this._toast('Error añadiendo servicio: ' + (p.error || 'desconocido'));
+              this._desarmar();
+              this._sendToPage('getReservas', { fecha: this._fecha });
+              break;
+            }
+            {
+              const mv = this._pendingMove;
+              this._pendingMove = null;
+              if (mv) this._prepararMovimientos(p.fasesNuevas, mv);
+            }
+            if (this._moveQueue.length) { this._enviarSiguienteMovimiento(); break; }
+            this._avanzarCadena();
+            break;
+          }
           // v1.1.30 — + Servicio adicional
           if (p.ok) { this._toast(`Servicio añadido: ${p.label} (+${p.precio}€)`); this._closeSubModal(); this._closeModal(); this._sendToPage('getReservas', { fecha: this._fecha }); }
-          else this._toast('Error: ' + (p.error || 'no se pudo añadir servicio'));
+          else {
+            this._toast('Error: ' + (p.error || 'no se pudo añadir servicio'));
+            // v1.1.81 — reactivar el botón: antes quedaba deshabilitado tras
+            // un error y había que cerrar el modal para reintentar.
+            const bAdd = this.shadowRoot.getElementById('svOk');
+            if (bAdd) bAdd.disabled = false;
+          }
           break;
         case 'producto-agregado':
           // v1.1.16 legacy — ya no se usa, mantenemos por compatibilidad
@@ -3866,7 +4017,7 @@ button { font-family: inherit; cursor: pointer; }
     }
     _tryParse(s) { try { return JSON.parse(s); } catch (e) { return []; } }
 
-    _openDetail(svc, x, y) { this._detail = svc; this._variantIdx = 0; this._complSel = {}; this._exclusivosSel = {}; this._renderDetail(x, y); }
+    _openDetail(svc, x, y) { this._detail = svc; this._variantIdx = 0; this._complSel = {}; this._exclusivosSel = {}; this._cantidad = 1; this._renderDetail(x, y); }
     _closeDetail() { this._detail = null; const r = this.shadowRoot; r.getElementById('detailScrim')?.remove(); r.getElementById('detailPop')?.remove(); }
 
     _renderDetail(x, y) {
@@ -3898,7 +4049,19 @@ button { font-family: inherit; cursor: pointer; }
           <div class="ks-cascade-legend"><span class="ks-cascade-legitem"><span class="ks-leg-sw work"></span>Ocupado</span><span class="ks-cascade-legitem"><span class="ks-leg-sw proceso"></span>PROCESO libre</span><span class="ks-cascade-total">${total} min</span></div>
           <p class="ks-detail-note">Durante el <strong>PROCESO</strong> la columna no se ocupa: el profesional queda libre para otra cita.</p></div>` : '';
 
-      const comps = Array.isArray(s.complementos) ? s.complementos : [];
+      // v1.1.81 — ¿Estamos AÑADIENDO una línea a un armado ya iniciado?
+      // Si _armed existe, este popup no arma una cita nueva: encola otro
+      // servicio dentro de la misma cita.
+      const enCola = !!this._armed;
+
+      const compsAll = Array.isArray(s.complementos) ? s.complementos : [];
+      // v1.1.81 — En modo "añadir a la cita" los complementos OPCIONALES no
+      // se ofrecen: elegirlos línea a línea haría el popup inmanejable
+      // (premisa de diseño). Los OBLIGATORIOS con variantes (CASO B, tipo
+      // Planchado M/L/XL dentro del Botox) SÍ se mantienen: sin esa
+      // elección el motor no puede construir las fases del servicio y la
+      // línea fallaría con "Falta elegir variante de: …".
+      const comps = enCola ? compsAll.filter(c => c && c.required) : compsAll;
       // v1.1.44 — Complementos. Dos casos:
       //   · Sin variantes → botón toggle (sí/no), como siempre.
       //   · Con variantes → una fila por variante (chips). Si el complemento
@@ -3906,7 +4069,7 @@ button { font-family: inherit; cursor: pointer; }
       //     variante para poder armar (no hay "no añadir"). Si es opcional,
       //     elegir una variante lo añade; volver a pulsarla lo quita.
       const complHTML = comps.length ? `
-        <div class="ks-detail-block"><div class="ks-detail-blocklbl">Complementos</div>
+        <div class="ks-detail-block"><div class="ks-detail-blocklbl">Complementos${enCola ? ' <span class="ks-detail-blocklbl-hint">solo obligatorios al encadenar</span>' : ''}</div>
           ${comps.map(c => {
             const cvars = Array.isArray(c.variantes) ? c.variantes : [];
             if (c.hasVariants && cvars.length) {
@@ -3943,7 +4106,9 @@ button { font-family: inherit; cursor: pointer; }
             .map((f, idx) => ({ f, idx }))
             .filter(x => x.f && x.f.tipo === 'exclusivo' && Array.isArray(x.f.refs) && x.f.refs.length > 0)
         : [];
-      const exclHTML = exclusivos.length ? `
+      // v1.1.81 — los grupos exclusivos son elección opcional: se ocultan
+      // al encadenar líneas, por la misma premisa que los complementos.
+      const exclHTML = (exclusivos.length && !enCola) ? `
         <div class="ks-detail-block"><div class="ks-detail-blocklbl">Grupos exclusivos <span class="ks-detail-blocklbl-hint">elige uno o ninguno</span></div>
           ${exclusivos.map(({ f, idx }) => {
             const groupKey = 'exc:' + idx;
@@ -3967,6 +4132,19 @@ button { font-family: inherit; cursor: pointer; }
             </div>`;
           }).join('')}</div>` : '';
 
+      // v1.1.81 — CANTIDAD. Caso real: una madre trae dos niños al mismo
+      // corte. Cantidad 2 = el servicio se encadena dos veces detrás de sí
+      // mismo según su duración, dentro de la MISMA cita: un total, un
+      // cobro, un solo aviso al cliente.
+      const cantidadHTML = `
+        <div class="ks-detail-block"><div class="ks-detail-blocklbl">Cantidad</div>
+          <div class="ks-qty-row">
+            <button class="ks-variant ks-qty-btn" id="dQtyMinus" aria-label="Quitar uno">−</button>
+            <span class="ks-qty-val" id="dQtyVal">${this._cantidad}</span>
+            <button class="ks-variant ks-qty-btn" id="dQtyPlus" aria-label="Añadir uno">＋</button>
+            <span class="ks-dur" id="dQtyHint">${this._cantidad > 1 ? this._cantidad + ' pases encadenados' : 'un solo pase'}</span>
+          </div></div>`;
+
       const scrim = document.createElement('div'); scrim.className = 'ks-detail-scrim'; scrim.id = 'detailScrim';
       scrim.addEventListener('click', () => this._closeDetail());
       const pop = document.createElement('div'); pop.className = 'ks-detail'; pop.id = 'detailPop'; pop.style.setProperty('--fam', fam);
@@ -3980,11 +4158,13 @@ button { font-family: inherit; cursor: pointer; }
           <div class="ks-detail-tags"><span class="ks-clasetag ${cascade ? 'is-cascade' : (s.claseServicio === 'simple_variantes' ? 'is-variants' : '')}">${cascade ? '⛓ ' : ''}${CLASE_LABEL[s.claseServicio] || 'Simple'}</span><span class="ks-detail-dur">${s.duration || 0} min</span>${s.price ? `<span class="ks-detail-price">${s.price}€</span>` : ''}</div>
         </div>
         <div class="ks-detail-body">
-          ${variantHTML}${complHTML}${exclHTML}
-          <p class="ks-detail-note ks-detail-note-simple">Pulsa <strong>Armar servicio</strong> y haz clic en la columna del empleado y la hora en el calendario.</p>
+          ${variantHTML}${complHTML}${exclHTML}${cantidadHTML}
+          <p class="ks-detail-note ks-detail-note-simple">${enCola
+            ? 'Se añadirá a la cita que estás montando, detrás del servicio anterior según su duración.'
+            : 'Pulsa <strong>Armar servicio</strong> y haz clic en la columna del empleado y la hora en el calendario.'}</p>
           <div class="ks-detail-uid">setupUid · <code>${esc(s.setupUid)}</code></div>
         </div>
-        <div class="ks-detail-foot"><button class="ks-detail-cancel" id="dCancel">Cancelar</button><button class="ks-detail-add" id="dAdd">Armar servicio</button></div>`;
+        <div class="ks-detail-foot"><button class="ks-detail-cancel" id="dCancel">Cancelar</button><button class="ks-detail-add" id="dAdd">${enCola ? '＋ Añadir a la cita' : 'Armar servicio'}</button></div>`;
       root.appendChild(scrim); root.appendChild(pop);
       // v1.1.18 — Reposicionar verticalmente si la altura real desborda
       // la ventana (caso típico con muchos complementos asignados).
@@ -4040,12 +4220,37 @@ button { font-family: inherit; cursor: pointer; }
           b.classList.toggle('active', b === btn);
         });
       }));
+      // v1.1.81 — stepper de cantidad. No re-renderiza el popup entero
+      // (perdería el scroll y las variantes marcadas): solo repinta el
+      // número y la coletilla.
+      {
+        const val = pop.querySelector('#dQtyVal');
+        const hint = pop.querySelector('#dQtyHint');
+        const pinta = () => {
+          if (val) val.textContent = String(this._cantidad);
+          if (hint) hint.textContent = this._cantidad > 1 ? `${this._cantidad} pases encadenados` : 'un solo pase';
+        };
+        pop.querySelector('#dQtyMinus')?.addEventListener('click', () => {
+          this._cantidad = Math.max(1, (Number(this._cantidad) || 1) - 1); pinta();
+        });
+        pop.querySelector('#dQtyPlus')?.addEventListener('click', () => {
+          this._cantidad = Math.min(CANT_MAX_LINEA, (Number(this._cantidad) || 1) + 1); pinta();
+        });
+      }
       pop.querySelector('#dAdd').addEventListener('click', () => this._armarServicio());
     }
 
     _armarServicio() {
       if (!this._detail) return;
       if (!this._cliente || !this._cliente.nombre) { this._toast('Selecciona o crea un cliente primero'); return; }
+      // v1.1.81 — El servicio A MEDIDA va por otro circuito
+      // ('servicio-medida' → crearReservaMedida) y no participa en la
+      // cadena de agregar-servicio. No se encadena nada sobre él: si se
+      // permitiera, las líneas encoladas quedarían huérfanas.
+      if (this._armed && this._armed.medida) {
+        this._toast('Coloca primero el servicio a medida · luego añade el resto');
+        return;
+      }
 
       // v1.1.44 — Construir la lista de complementos elegidos. Cada entrada de
       // _complSel puede ser:
@@ -4109,21 +4314,123 @@ button { font-family: inherit; cursor: pointer; }
         });
       }
 
-      this._armed = { servicio: this._detail, variantIdx: this._variantIdx, complementosSetupUid };
+      // v1.1.81 — ARMADO MÚLTIPLE + CANTIDAD.
+      // La línea armada se repite `cantidad` veces. La PRIMERA de todas
+      // ocupa this._armed (crea la cita con crearPackReserva, con sus
+      // variantes y complementos). Las demás esperan en _armedQueue y se
+      // añaden a esa misma cita con `agregar-servicio`.
+      const cantidad = Math.max(1, Math.min(CANT_MAX_LINEA, Number(this._cantidad) || 1));
+      const linea = {
+        servicio: this._detail,
+        variantIdx: this._variantIdx,
+        complementosSetupUid
+      };
+
+      let nuevas = 0;
+      for (let i = 0; i < cantidad; i++) {
+        // Copia superficial por línea: cada una viaja al backend por
+        // separado y no deben compartir el array de complementos.
+        const copia = {
+          servicio: linea.servicio,
+          variantIdx: linea.variantIdx,
+          complementosSetupUid: complementosSetupUid.slice()
+        };
+        if (!this._armed) this._armed = copia;
+        else this._armedQueue.push(copia);
+        nuevas++;
+      }
+
       this._closeDetail();
       this._renderArmedHint();
       this._renderCalendar();
       this._updateSteps();
-      this._toast('Servicio armado · clic en el calendario para colocar');
+
+      const totalLineas = 1 + this._armedQueue.length;
+      if (totalLineas > 1) {
+        // _toast usa textContent: nada que escapar, y esc() metería entidades.
+        this._toast(`${linea.servicio.label} ×${nuevas} · ${totalLineas} servicios en la cita`);
+      } else {
+        this._toast('Servicio armado · clic en el calendario para colocar');
+      }
     }
-    _desarmar() { this._armed = null; this._renderArmedHint(); this._renderCalendar(); this._updateSteps(); }
+
+    // v1.1.81 — Limpia TODO el armado (línea actual + cola + estado de la
+    // cadena en curso). Se llama al cancelar y al terminar de colocar.
+    _desarmar() {
+      this._armed = null;
+      this._armedQueue = [];
+      this._packReservaId = null;
+      this._packStaffId = null;
+      this._chainActivo = false;
+      this._chainMoving = false;
+      this._pendingMove = null;
+      this._moveQueue = [];
+      this._reservando = false;
+      this._renderArmedHint();
+      this._renderCalendar();
+      this._updateSteps();
+    }
+
     _renderArmedHint() {
       const el = this.shadowRoot.getElementById('armedHint');
       if (!el) return;
-      el.innerHTML = this._armed
-        ? `<span class="ks-legchip leg-pending" style="padding-left:9px">Colocando: ${esc(this._armed.servicio.label)}</span><button class="ks-tool" id="armedCancel" title="Cancelar">✕</button>`
-        : '';
-      const c = this.shadowRoot.getElementById('armedCancel'); if (c) c.addEventListener('click', () => this._desarmar());
+      if (!this._armed) { el.innerHTML = ''; return; }
+
+      const pendientes = this._armedQueue.length;
+      const total = 1 + pendientes;
+
+      if (total === 1) {
+        // Caso clásico de una sola línea: hint idéntico al de siempre.
+        el.innerHTML = `<span class="ks-legchip leg-pending" style="padding-left:9px">Colocando: ${esc(this._armed.servicio.label)}</span><button class="ks-tool" id="armedCancel" title="Cancelar">✕</button>`;
+      } else {
+        // v1.1.81 — varias líneas: número de orden, lista completa y
+        // selector de profesional. El chip resaltado es el que se coloca
+        // con el siguiente clic en el calendario.
+        const colocadas = this._packReservaId ? (total - pendientes - 1) : 0;
+        const items = [this._armed].concat(this._armedQueue)
+          .map((l, i) => `<span class="ks-armed-item ${i === 0 ? 'is-now' : ''}">${esc(l.servicio.label)}</span>`)
+          .join('');
+        el.innerHTML = `
+          <div class="ks-armed-wrap">
+            <span class="ks-armed-count">${colocadas + 1} / ${colocadas + total}</span>
+            <div class="ks-armed-list">${items}</div>
+            <div class="ks-armed-mode" title="¿Todos los servicios con el mismo profesional?">
+              <button class="ks-armed-modebtn ${this._armedStaffMode === 'same' ? 'active' : ''}" id="armedModeSame">Mismo profesional</button>
+              <button class="ks-armed-modebtn ${this._armedStaffMode === 'each' ? 'active' : ''}" id="armedModeEach">Elegir por servicio</button>
+            </div>
+            <button class="ks-tool" id="armedCancel" title="Cancelar armado">✕</button>
+          </div>`;
+      }
+
+      const c = this.shadowRoot.getElementById('armedCancel');
+      if (c) c.addEventListener('click', () => this._cancelarArmado());
+      const bSame = this.shadowRoot.getElementById('armedModeSame');
+      const bEach = this.shadowRoot.getElementById('armedModeEach');
+      // El modo se puede cambiar mientras no haya empezado la cadena: una
+      // vez creada la cita, cambiar de criterio a media colocación solo
+      // genera confusión.
+      if (bSame) bSame.addEventListener('click', () => {
+        if (this._packReservaId) { this._toast('La cita ya está empezada · termina de colocarla'); return; }
+        this._armedStaffMode = 'same'; this._renderArmedHint();
+      });
+      if (bEach) bEach.addEventListener('click', () => {
+        if (this._packReservaId) { this._toast('La cita ya está empezada · termina de colocarla'); return; }
+        this._armedStaffMode = 'each'; this._renderArmedHint();
+      });
+    }
+
+    // v1.1.81 — Cancelar desde la cabecera. Si la cita YA se creó y quedan
+    // líneas por colocar, el ✕ no borra nada del calendario: la cita creada
+    // se queda como está y solo se descarta lo que faltaba por añadir. Se
+    // avisa para que el operador no crea que ha cancelado la cita entera.
+    _cancelarArmado() {
+      const habiaCita = !!this._packReservaId;
+      const pendientes = this._armedQueue.length + (this._armed ? 1 : 0);
+      this._desarmar();
+      if (habiaCita && pendientes > 0) {
+        this._toast(`Cita creada · se descartan ${pendientes} servicio(s) sin colocar`);
+        this._sendToPage('getReservas', { fecha: this._fecha });
+      }
     }
 
     // ═══════════════════════════════════════════════════
@@ -4942,6 +5249,16 @@ button { font-family: inherit; cursor: pointer; }
       const firstName = parts.shift() || ''; const lastName = parts.join(' ');
       const esProvisional = !!cli.esProvisional;
 
+      // v1.1.81 — Si la cita YA está creada, esta línea del armado no crea
+      // una cita nueva: se añade a la que está en curso (modo "elegir por
+      // servicio", donde el operador clica una columna por cada servicio).
+      // El aviso de teléfono/email no se repite: ya se dio al crearla.
+      if (this._packReservaId) {
+        this._reservando = true;
+        this._enviarAgregarServicio(this._armed, { staffId, horaHHmm });
+        return;
+      }
+
       // v1.1.33 — Warning falta teléfono y/o email.
       // No bloquea pero pide confirmación explícita: ese cliente no
       // recibirá WhatsApp ni email de confirmación/recordatorio. No se
@@ -4980,21 +5297,12 @@ button { font-family: inherit; cursor: pointer; }
       // v1.1.43 — incluir la variante elegida del principal (si el servicio
       // tiene variantes). El backend (crearPackReserva v1.0.25) usa su
       // precio/duración en vez del base. Sin variante → null (precio base).
-      let varianteSel = null;
-      {
-        const sv = a.servicio || {};
-        const vars = Array.isArray(sv.variantes) ? sv.variantes : [];
-        const vi = Number(a.variantIdx) || 0;
-        if (sv.hasVariants && vars.length && vars[vi]) {
-          const v = vars[vi];
-          varianteSel = {
-            idx: vi,
-            label: (v && (v.label || v.nombre)) ? String(v.label || v.nombre) : '',
-            price: Number(v && v.precio != null ? v.precio : (v && v.price)) || 0,
-            duration: Number(v && v.duracion != null ? v.duracion : (v && v.duration)) || 0
-          };
-        }
-      }
+      // v1.1.81 — extracción a _varianteSelDeLinea (misma lógica, ahora
+      // compartida con las líneas que se añaden vía agregar-servicio).
+      const varianteSel = this._varianteSelDeLinea(a);
+      // v1.1.81 — columna donde queda la línea 1: es la de la cita, y la
+      // que heredan las fases añadidas si el modo es "mismo profesional".
+      this._packStaffId = staffId;
       this._sendToPage('crearReserva', { payload: {
         fecha: this._fecha, horaHHmm,
         principalSetupUid: a.servicio.setupUid,
@@ -5006,6 +5314,105 @@ button { font-family: inherit; cursor: pointer; }
         notas: '',
         esProvisional
       }});
+    }
+
+    // ═══════════════════════════════════════════════════
+    // v1.1.81 — CADENA DEL ARMADO MÚLTIPLE
+    //
+    // Línea 1  → crearReserva  (crearPackReserva: crea la cita, dispara la
+    //            única notificación al cliente).
+    // Líneas 2+ → agregar-servicio (agregarServicioReserva: encadena detrás
+    //            de la última fase que ocupa, dentro de la MISMA fila).
+    // Resultado: una cita, un total, un cobro, un WhatsApp.
+    //
+    // En modo 'each' cada línea se coloca donde el operador clique; tras
+    // añadirla se reubican sus fases con `mover-fase` (contrato existente).
+    // ═══════════════════════════════════════════════════
+
+    // Variante elegida de una línea armada, o null si el servicio no tiene
+    // variantes. Misma forma que consume el backend desde v1.0.25.
+    _varianteSelDeLinea(linea) {
+      const sv = (linea && linea.servicio) || {};
+      const vars = Array.isArray(sv.variantes) ? sv.variantes : [];
+      const vi = Number(linea && linea.variantIdx) || 0;
+      if (!sv.hasVariants || !vars.length || !vars[vi]) return null;
+      const v = vars[vi];
+      return {
+        idx: vi,
+        label: (v && (v.label || v.nombre)) ? String(v.label || v.nombre) : '',
+        price: Number(v && v.precio != null ? v.precio : (v && v.price)) || 0,
+        duration: Number(v && v.duracion != null ? v.duracion : (v && v.duration)) || 0
+      };
+    }
+
+    // Envía una línea a la cita en curso. `dest` solo llega en modo 'each'
+    // (columna y hora que ha elegido el operador para ESE servicio).
+    _enviarAgregarServicio(linea, dest) {
+      if (!linea || !this._packReservaId) return;
+      this._pendingMove = (this._armedStaffMode === 'each' && dest) ? { ...dest } : null;
+      this._toast(`Añadiendo ${linea.servicio.label}…`);
+      this._sendToPage('agregar-servicio', {
+        reservaId: this._packReservaId,
+        setupUid: linea.servicio.setupUid,
+        varianteSel: this._varianteSelDeLinea(linea),
+        complementosSetupUid: linea.complementosSetupUid || []
+      });
+    }
+
+    // Prepara la cola de reubicación de las fases recién añadidas,
+    // conservando los desfases internos de la cascada respecto a la hora
+    // elegida. Backend agregarServicioReserva v1.0.43 devuelve `fasesNuevas`
+    // con su índice real dentro del array de fases de la reserva.
+    _prepararMovimientos(fasesNuevas, dest) {
+      const ocup = (Array.isArray(fasesNuevas) ? fasesNuevas : []).filter(f => f && f.ocupa && f.start);
+      if (!ocup.length || !dest) return;
+      const baseMs = Math.min.apply(null, ocup.map(f => new Date(f.start).getTime()));
+      if (!isFinite(baseMs)) return;
+      const [yyyy, mm, dd] = String(this._fecha).split('-').map(Number);
+      const [hh, mi] = String(dest.horaHHmm || '00:00').split(':').map(Number);
+      // Mismo patrón de construcción de ISO que el drag de fase y el
+      // selector de hora (navegador del salón en Madrid).
+      const destinoMs = new Date(yyyy, mm - 1, dd, hh || 0, mi || 0, 0, 0).getTime();
+      this._moveQueue = ocup.map(f => ({
+        faseIndex: f.index,
+        nuevoStartISO: new Date(destinoMs + (new Date(f.start).getTime() - baseMs)).toISOString(),
+        staffId: dest.staffId
+      }));
+      this._chainMoving = this._moveQueue.length > 0;
+    }
+
+    // Los movimientos van de UNO EN UNO. moverFase hace read-merge-update de
+    // la fila completa: dos en paralelo se pisarían y se perdería una fase.
+    _enviarSiguienteMovimiento() {
+      const mv = this._moveQueue.shift();
+      if (!mv) { this._chainMoving = false; this._avanzarCadena(); return; }
+      this._sendToPage('mover-fase', {
+        reservaId: this._packReservaId,
+        faseIndex: mv.faseIndex,
+        nuevoStartISO: mv.nuevoStartISO,
+        nuevoStaffId: mv.staffId
+      });
+    }
+
+    // Pasa a la siguiente línea pendiente, o cierra la cadena.
+    _avanzarCadena() {
+      this._chainMoving = false;
+      if (this._armedQueue.length) {
+        this._armed = this._armedQueue.shift();
+        this._renderArmedHint();
+        if (this._armedStaffMode === 'same') {
+          this._reservando = true;
+          this._enviarAgregarServicio(this._armed, null);
+        } else {
+          this._reservando = false;
+          this._toast(`Elige columna y hora para ${this._armed.servicio.label}`);
+          this._sendToPage('getReservas', { fecha: this._fecha });
+        }
+        return;
+      }
+      this._toast('Cita completa ✓');
+      this._desarmar();
+      this._sendToPage('getReservas', { fecha: this._fecha });
     }
 
     // ═══════════════════════════════════════════════════
@@ -5875,6 +6282,17 @@ button { font-family: inherit; cursor: pointer; }
     // final de la cita existente. La cascada del nuevo servicio (si es
     // complejo) se construye en el backend reutilizando construirFasesPack.
     // Regla pedida por Jal: se encadena después de la última fase ocupante.
+    // ═══════════════════════════════════════════════════
+    // + SERVICIO ADICIONAL (desde el modal de la cita)
+    // v1.1.81 — Ahora con ELECCIÓN DE VARIANTE. Antes solo se mandaba el
+    //   setupUid: un servicio con variantes (Corte Mujer M/L/XL) se añadía
+    //   siempre a precio y duración BASE, y un servicio con fases
+    //   obligatorias con variantes (CASO B: Botox → Planchado M/L/XL)
+    //   fallaba con "Falta elegir variante de: …" y no había manera de
+    //   añadirlo. Requiere backend v1.0.43 y page code v1.0.36.
+    //   Los complementos OPCIONALES no se ofrecen aquí: para eso está el
+    //   botón "⛓ Complemento" del propio modal de la cita.
+    // ═══════════════════════════════════════════════════
     _openAddServicioModal(r) {
       const catalogo = Array.isArray(this._servicios) ? this._servicios : [];
       // Filtrar: tipo principal o ambos, activo, con setupUid
@@ -5886,9 +6304,16 @@ button { font-family: inherit; cursor: pointer; }
         const dur = Number(s.duration) || 0;
         const px = Number(s.price) || 0;
         const claseTag = s.claseServicio === 'complejo_fases' || s.claseServicio === 'complejo_proceso' ? ' · cascada' : '';
-        opts += `<option value="${esc(s.setupUid)}" data-precio="${px}">${esc(s.label)} · ${dur}min · ${px}€${claseTag}</option>`;
+        const varTag = s.hasVariants ? ' · variantes' : '';
+        opts += `<option value="${esc(s.setupUid)}" data-precio="${px}">${esc(s.label)} · ${dur}min · ${px}€${claseTag}${varTag}</option>`;
       });
       const vacio = candidatos.length === 0;
+
+      // Estado de la selección (se reinicia cada vez que se abre)
+      this._addSvcUid = '';
+      this._addSvcVarIdx = 0;
+      this._addSvcComplSel = {};
+
       const box = this._openSubModal(`
         <div class="ks-modal-head"><span class="ks-modal-staff">+ AÑADIR SERVICIO</span><button class="ks-modal-x" id="svX">✕</button></div>
         <div style="margin-top:14px;font-size:13px;color:var(--ks-ink2);">Se añadirá al final de la cita actual y sumará tiempo + precio.</div>
@@ -5897,20 +6322,129 @@ button { font-family: inherit; cursor: pointer; }
           <select id="svSel" style="width:100%;margin-top:6px;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">${opts}</select>
           ${vacio ? '<div style="margin-top:10px;color:#a55b00;font-size:12px;font-style:italic;">No hay servicios principales en el catálogo.</div>' : ''}
         </div>
+        <div id="svOpts" style="margin-top:6px;"></div>
         <div class="ks-modal-foot" style="margin-top:18px;">
           <button class="ks-modal-close" id="svCancel">Cancelar</button>
           <button class="ks-pay" id="svOk" style="background:var(--ks-ink);color:#fff;" ${vacio ? 'disabled' : ''}>Añadir</button>
         </div>`);
       box.querySelector('#svX').addEventListener('click', () => this._closeSubModal());
       box.querySelector('#svCancel').addEventListener('click', () => this._closeSubModal());
+
+      const sel = box.querySelector('#svSel');
+      sel.addEventListener('change', () => {
+        this._addSvcUid = sel.value || '';
+        this._addSvcVarIdx = 0;
+        this._addSvcComplSel = {};
+        this._renderAddServicioOpts(box);
+      });
+
       box.querySelector('#svOk').addEventListener('click', () => {
-        const sel = box.querySelector('#svSel');
-        const setupUid = sel.value;
+        const setupUid = this._addSvcUid || sel.value;
         if (!setupUid) { this._toast('Elige un servicio'); return; }
+        const svc = this._porSetupUid[setupUid];
+        if (!svc) { this._toast('Servicio no encontrado en el catálogo'); return; }
+
+        // Variante del propio servicio
+        const varianteSel = this._varianteSelDeLinea({ servicio: svc, variantIdx: this._addSvcVarIdx });
+
+        // Fases obligatorias con variantes (CASO B): sin elección el motor
+        // no puede construir las fases y el backend rechaza la operación.
+        // Se valida aquí para dar el aviso antes de la ida y vuelta.
+        const comps = Array.isArray(svc.complementos) ? svc.complementos : [];
+        const complementosSetupUid = [];
+        for (const c of comps) {
+          if (!c || !c.required) continue;
+          const cvars = Array.isArray(c.variantes) ? c.variantes : [];
+          if (c.hasVariants && cvars.length) {
+            const elegida = this._addSvcComplSel[c.setupUid];
+            if (!elegida || typeof elegida !== 'object') {
+              this._toast(`Elige una opción de "${c.label}" (obligatorio)`);
+              return;
+            }
+            const v = cvars[elegida.varianteIdx];
+            if (!v) { this._toast(`Opción no válida en "${c.label}"`); return; }
+            complementosSetupUid.push({
+              uid: c.setupUid,
+              varianteId: (typeof v === 'object' && v.tamano_estilo) ? v.tamano_estilo : String(elegida.varianteIdx),
+              varianteLabel: (typeof v === 'object') ? (v.label || v.nombre || '') : String(v),
+              price: (typeof v === 'object') ? Number(v.precio != null ? v.precio : v.price) || 0 : 0,
+              duration: (typeof v === 'object') ? Number(v.duracion != null ? v.duracion : v.duration) || 0 : 0
+            });
+          } else {
+            // Obligatorio sin variantes que aun así llega al widget: se
+            // manda tal cual para que el motor lo materialice.
+            complementosSetupUid.push(c.setupUid);
+          }
+        }
+
         box.querySelector('#svOk').disabled = true;
-        this._sendToPage('agregar-servicio', { reservaId: r._id, setupUid });
+        this._sendToPage('agregar-servicio', {
+          reservaId: r._id,
+          setupUid,
+          varianteSel,
+          complementosSetupUid
+        });
       });
     }
+
+    // v1.1.81 — Bloque de opciones del servicio elegido en "+ Servicio
+    // adicional": variantes del propio servicio y fases obligatorias con
+    // variantes. Se repinta entero en cada cambio (bloque pequeño y aislado).
+    _renderAddServicioOpts(box) {
+      const cont = box.querySelector('#svOpts');
+      if (!cont) return;
+      const svc = this._addSvcUid ? this._porSetupUid[this._addSvcUid] : null;
+      if (!svc) { cont.innerHTML = ''; return; }
+
+      const chip = (label, price, dur, active, attrs) => {
+        const meta = [];
+        if (!isNaN(price)) meta.push(price > 0 ? `${price}€` : 'incluido');
+        if (!isNaN(dur) && dur > 0) meta.push(`${dur}′`);
+        const metaHTML = meta.length ? `<span class="ks-dur">${meta.join(' · ')}</span>` : '';
+        return `<button class="ks-variant ${active ? 'active' : ''}" ${attrs} style="display:flex;justify-content:space-between;align-items:center"><span>${esc(label)}</span>${metaHTML}</button>`;
+      };
+
+      let html = '';
+
+      const vars = Array.isArray(svc.variantes) ? svc.variantes : [];
+      if (svc.hasVariants && vars.length) {
+        html += `<div style="margin-top:12px"><label style="font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--ks-ink2);">VARIANTE</label>
+          <div class="ks-variant-list" style="margin-top:6px">${vars.map((v, i) => {
+            const vLabel = (typeof v === 'string') ? v : (v.label || v.nombre || '');
+            const vPrice = (typeof v === 'object') ? Number(v.precio != null ? v.precio : v.price) : NaN;
+            const vDur = (typeof v === 'object') ? Number(v.duracion != null ? v.duracion : v.duration) : NaN;
+            return chip(vLabel, vPrice, vDur, i === this._addSvcVarIdx, `data-svvi="${i}"`);
+          }).join('')}</div></div>`;
+      }
+
+      const comps = (Array.isArray(svc.complementos) ? svc.complementos : [])
+        .filter(c => c && c.required && c.hasVariants && Array.isArray(c.variantes) && c.variantes.length);
+      for (const c of comps) {
+        const sel = this._addSvcComplSel[c.setupUid];
+        const selIdx = (sel && typeof sel === 'object') ? sel.varianteIdx : -1;
+        html += `<div style="margin-top:12px"><label style="font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--ks-ink2);">⛓ ${esc(c.label)} · OBLIGATORIO</label>
+          <div class="ks-variant-list" style="margin-top:6px">${c.variantes.map((v, vi) => {
+            const vLabel = (typeof v === 'string') ? v : (v.label || v.nombre || '');
+            const vPrice = (typeof v === 'object') ? Number(v.precio != null ? v.precio : v.price) : NaN;
+            const vDur = (typeof v === 'object') ? Number(v.duracion != null ? v.duracion : v.duration) : NaN;
+            return chip(vLabel, vPrice, vDur, vi === selIdx, `data-svcuid="${esc(c.setupUid)}" data-svcvi="${vi}"`);
+          }).join('')}</div></div>`;
+      }
+
+      cont.innerHTML = html;
+
+      cont.querySelectorAll('[data-svvi]').forEach(b => b.addEventListener('click', () => {
+        this._addSvcVarIdx = parseInt(b.getAttribute('data-svvi'), 10) || 0;
+        this._renderAddServicioOpts(box);
+      }));
+      cont.querySelectorAll('[data-svcuid]').forEach(b => b.addEventListener('click', () => {
+        const uid = b.getAttribute('data-svcuid');
+        const vi = parseInt(b.getAttribute('data-svcvi'), 10) || 0;
+        this._addSvcComplSel[uid] = { varianteIdx: vi };
+        this._renderAddServicioOpts(box);
+      }));
+    }
+
     // v1.1.17 — PRODUCTO (modal completo estilo V1: buscador + lista
     // + carrito + métodos de pago + REGISTRAR VENTA). Venta independiente
     // vinculada al packId (reservaId), no se mete en precioTotal.
