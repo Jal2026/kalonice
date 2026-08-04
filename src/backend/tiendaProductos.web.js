@@ -81,6 +81,27 @@
 //       NO se tocan registrarVenta, generarFacturaProducto,
 //       obtenerHistorialVentas, cargarContactosTienda ni el bloque
 //       CMS-first de PaymentReservations.
+// v1.5.12: VARIANTES EN LA TIENDA STANDALONE (registrarVenta).
+//       v1.5.11 dio soporte de variantes SOLO a la venta desde la
+//       Agenda. La Tienda Productos (widget tiendaproductos + page code
+//       Recepción | Tienda Productos) vende por registrarVenta, que
+//       seguía montando catalogReference sin options.variantId → un
+//       producto con variantes (250ml / 1000ml) devolvía EMPTY_CHECKOUT.
+//       (1) registrarVenta acepta variantId + variantLabel OPCIONALES.
+//           Si llega variantId → catalogReference.options.variantId.
+//           Si NO llega y el producto tiene más de una variante →
+//           error 'MISSING_VARIANT' con las variantes disponibles
+//           (mismo contrato que venderProductosDesdeAgenda), en vez del
+//           opaco EMPTY_CHECKOUT de Wix.
+//           variantLabel se concatena al nombre en PaymentReservations:
+//           "🛒 ARTEMISA CHAMPÚ · 250ml (22.45€)".
+//           Sin variantId y producto simple → comportamiento idéntico
+//           a v1.5.11 (100% backwards compatible).
+//       (2) Se reutilizan LITERALMENTE los helpers ya validados
+//           leerVariantesCrudas / normalizarVariante de v1.5.11.
+//       NO se tocan listarProductos, generarFacturaProducto,
+//       obtenerHistorialVentas, cargarContactosTienda,
+//       venderProductosDesdeAgenda ni el bloque CMS-first.
 // =====================================================
 
 import { webMethod, Permissions } from 'wix-web-module';
@@ -93,7 +114,7 @@ import { invoices } from 'wix-billing-backend';
 import { getProductVariants } from 'wix-stores-backend';
 
 const TAG = '[TiendaProductos]';
-const VERSION = "1.5.11";
+const VERSION = "1.5.12";
 
 // AppId de Wix Stores para catalogReference en eCommerce
 const STORES_APP_ID = '215238eb-22a5-4c36-9e7b-e7c08025e04e';
@@ -495,19 +516,57 @@ export const crearContactoTienda = webMethod(
 // v1.4: AÑADIDO parámetro metodoPago (Efectivo/Tarjeta/Bizum)
 // v1.5.7: FIX — validación email + fallback CRM + registro CMS-first
 //         Mismo patrón que venderProductosDesdeAgenda (sección 7)
+// v1.5.12: + variantId / variantLabel opcionales (variantes 250ml/1000ml)
 // Flujo: createCheckout → createOrder → addPayments → PaymentReservations
 // =====================================================
 export const registrarVenta = webMethod(
   Permissions.Anyone,
-  async ({ productId, productName, price, currency, quantity, contactId, contactName, contactEmail, contactPhone, metodoPago }) => {
+  async ({ productId, productName, price, currency, quantity, contactId, contactName, contactEmail, contactPhone, metodoPago, variantId, variantLabel }) => {
     const t0 = Date.now();
     try {
-      console.log(`${TAG} 🛒 Venta: ${productName} x${quantity} @ ${price}${currency || 'EUR'} | ${metodoPago || 'offline'} | contacto: ${contactId || 'anónimo'}`);
+      console.log(`${TAG} 🛒 Venta: ${productName}${variantLabel ? ' · ' + variantLabel : ''} x${quantity} @ ${price}${currency || 'EUR'} | ${metodoPago || 'offline'} | contacto: ${contactId || 'anónimo'} | variantId: ${variantId || '(simple)'}`);
 
       if (!productId) throw new Error('productId es requerido');
       if (!price || price <= 0) throw new Error('price debe ser > 0');
       const qty = quantity || 1;
       const cur = currency || 'EUR';
+
+      // ── 0a. v1.5.12: pre-validación de variantes ──
+      // Wix Stores rechaza el checkout con EMPTY_CHECKOUT (mensaje opaco)
+      // si un producto con variantes gestionadas llega sin variantId.
+      // Mismo contrato de error que venderProductosDesdeAgenda v1.5.11.
+      if (!variantId) {
+        try {
+          const arrVar = await leerVariantesCrudas(productId);
+          if (Array.isArray(arrVar) && arrVar.length > 1) {
+            const variantesDisponibles = arrVar
+              .map(v => normalizarVariante(v, price))
+              .filter(v => v.variantId);
+            console.warn(`${TAG} ⛔ MISSING_VARIANT: ${productName || productId} tiene ${variantesDisponibles.length} variantes y no se envió variantId`);
+            return {
+              ok: false,
+              error: 'MISSING_VARIANT',
+              message: `Selecciona el tamaño/variante de: ${productName || productId}`,
+              missingVariants: [{
+                productId,
+                productName: productName || '',
+                variants: variantesDisponibles
+              }],
+              version: VERSION
+            };
+          }
+        } catch (vErr) {
+          // Si no se pueden leer las variantes, se deja continuar: el
+          // comportamiento es el de v1.5.11 (Wix decidirá).
+          console.warn(`${TAG} ⚠️ Pre-validación de variantes falló para ${productId}:`, vErr.message);
+        }
+      }
+
+      // v1.5.12: nombre mostrado = producto + variante ("· 250ml")
+      const labelVariante = (variantLabel || '').trim();
+      const nombreConVariante = labelVariante
+        ? `${(productName || 'Producto').trim()} · ${labelVariante}`
+        : (productName || 'Producto').trim();
 
       // ── 0. Leer dirección del negocio (dinámica) ──
       let businessAddress;
@@ -556,13 +615,20 @@ export const registrarVenta = webMethod(
       if (emailValido) buyerDetails.email = emailValido;
       if (contactPhone) buyerDetails.phone = contactPhone;
 
+      // v1.5.12: si el producto tiene variantes, Wix exige el variantId
+      // dentro de catalogReference.options. Sin él → EMPTY_CHECKOUT.
+      const catalogReference = {
+        appId: STORES_APP_ID,
+        catalogItemId: productId
+      };
+      if (variantId) {
+        catalogReference.options = { variantId: variantId };
+      }
+
       const checkoutOptions = {
         lineItems: [{
           quantity: qty,
-          catalogReference: {
-            appId: STORES_APP_ID,
-            catalogItemId: productId
-          }
+          catalogReference: catalogReference
         }],
         channelType: "POS",
         checkoutInfo: {
@@ -655,7 +721,8 @@ export const registrarVenta = webMethod(
         } else {
           const subtotal = Math.round(totalImporte * 100) / 100;
           const sufijoQty = qty > 1 ? ` x${qty}` : '';
-          const descripcionProducto = `🛒 ${(productName || 'Producto').trim()}${sufijoQty} (${subtotal}€)`;
+          // v1.5.12: nombreConVariante incluye "· 250ml" cuando aplica
+          const descripcionProducto = `🛒 ${nombreConVariante}${sufijoQty} (${subtotal}€)`;
 
           const ahora = new Date();
           const registroPago = {
@@ -684,7 +751,12 @@ export const registrarVenta = webMethod(
         orderId,
         checkoutId: checkoutResult._id,
         tiempoVenta,
-        metodoPago: metodoPago || 'offline'
+        metodoPago: metodoPago || 'offline',
+        // v1.5.12: eco de la variante vendida (el widget lo usa para la
+        // factura y para el toast, sin recalcularlo)
+        variantId: variantId || '',
+        variantLabel: labelVariante,
+        nombreConVariante
       };
 
     } catch (e) {
