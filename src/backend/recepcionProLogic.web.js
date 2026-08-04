@@ -1,9 +1,22 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.43
+// VERSION: 1.0.44
 // FECHA: 4 de agosto de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.44: 🎚️ VARIANTES TAMBIÉN EN agregarComplementoReserva (botón
+//          "⛓ Complemento" del modal de cita). Mismo agujero que se cerró
+//          en v1.0.43 para agregarServicioReserva: un complemento con
+//          variantes (Peinado M/L/XL, Planchado…) se añadía siempre a
+//          precio y duración BASE porque no había parámetro donde mandar
+//          la elección.
+//          Nuevo parámetro OPCIONAL `varianteSel { label, price, duration }`.
+//          Sin él, comportamiento idéntico a v1.0.43.
+//          El label se compone con la MISMA regla que usa crearPackReserva
+//          desde v1.0.30: si el label de la variante ya empieza por el del
+//          complemento se usa tal cual (evita "Peinado Peinado M"); si no,
+//          se concatenan.
 //
 // v1.0.43: 🎚️ VARIANTES Y COMPLEMENTOS EN agregarServicioReserva.
 //          Hasta ahora esta función recibía solo { reservaId, setupUid,
@@ -939,7 +952,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.43';
+const VERSION = '1.0.44';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -2960,7 +2973,7 @@ export const agregarExtraReserva = webMethod(
 // (si no hay ninguna ocupante, usa fechaReserva).
 export const agregarComplementoReserva = webMethod(
   Permissions.SiteMember,
-  async ({ reservaId, setupUid }) => {
+  async ({ reservaId, setupUid, varianteSel = null }) => {
     try {
       console.log(`${TAG} ⛓ Complemento en ${reservaId}: setupUid=${setupUid}`);
       if (!reservaId || !setupUid) return { ok: false, error: 'Faltan reservaId o setupUid' };
@@ -2978,9 +2991,26 @@ export const agregarComplementoReserva = webMethod(
         .find({ suppressAuth: true });
       if (r2.items.length === 0) return { ok: false, error: 'Complemento no encontrado en catálogo' };
       const svc = r2.items[0];
-      const svcDur = Number(svc.duration) || 0;
-      const svcPrice = Number(svc.price) || 0;
-      const svcLabel = svc.label || 'Complemento';
+      // v1.0.44 — variante elegida: sustituye precio, duración y label.
+      // Sin varianteSel se usan los valores base del catálogo (v1.0.43).
+      const baseLabel = svc.label || 'Complemento';
+      let svcDur = Number(svc.duration) || 0;
+      let svcPrice = Number(svc.price) || 0;
+      let svcLabel = baseLabel;
+      if (varianteSel && typeof varianteSel === 'object') {
+        const vDur = toNum(varianteSel.duration);
+        svcPrice = toNum(varianteSel.price);
+        if (vDur > 0) svcDur = vDur;
+        // Regla de label idéntica a crearPackReserva v1.0.30.
+        const cLabel = baseLabel.trim();
+        const vLabel = varianteSel.label ? String(varianteSel.label).trim() : '';
+        if (vLabel) {
+          svcLabel = (cLabel && vLabel.toLowerCase().startsWith(cLabel.toLowerCase()))
+            ? vLabel
+            : `${cLabel} ${vLabel}`.trim();
+        }
+        console.log(`${TAG} 🎚️ Variante de complemento: ${svcLabel} | ${svcPrice}€ | ${svcDur}min`);
+      }
 
       // Calcular start de la nueva fase
       // v1.0.16 FIX: tomar MAX(end) de las fases ocupantes, no la última
