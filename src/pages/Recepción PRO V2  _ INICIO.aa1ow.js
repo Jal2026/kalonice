@@ -1,10 +1,15 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.38
-// FECHA: 4 de agosto de 2026
+// VERSION: 1.0.39
+// FECHA: 5 de agosto de 2026
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
 //
+// v1.0.39: 📐 Puente `extender-fase` → extenderFase (recepcionProLogic
+//          v1.0.45). Devuelve al asa de resize la EXTENSIÓN RAYADA, ahora
+//          en cualquier fase y no solo al final de la cita. Responde
+//          'fase-extendida'. + import, + handler, + case, + entrada en
+//          LOG_EVENT_MAP. El puente 'redimensionar-fase' se conserva.
 // v1.0.38: 🧾 DOCUMENTOS DE VENTAS SIN CITA (botón TIENDA del widget
 //          v1.1.85). Import de generarTicketVenta, generarFacturaVenta y
 //          obtenerDocumentoVenta de facturacionSalonLogic v1.0.4, con tres
@@ -432,6 +437,7 @@ import {
   quitarItemReserva,
   moverFase,
   redimensionarFase,
+  extenderFase,   // v1.0.39 — extensión rayada por fase
   // v1.0.17 — bloqueos persistentes
   crearBloqueo,
   eliminarBloqueo,
@@ -524,7 +530,7 @@ import {
 // Nombre comprobado contra el resto de imports de este archivo: no colisiona.
 import { getFichaTecnicaCliente } from 'backend/memoriaLegacyLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.38]';
+const TAG = '[RecepcionProCMS v1.0.39]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -560,6 +566,7 @@ const LOG_EVENT_MAP = {
   'quitar-item':           'cambio_reserva',
   'mover-fase':            'cambio_reserva',
   'redimensionar-fase':    'cambio_reserva',
+  'extender-fase':         'cambio_reserva',
   // cobros
   'pagarReserva':          'cobro',
   'vender-productos-cita': 'cobro',
@@ -1500,6 +1507,21 @@ async function handleMoverFase(msg) {
 }
 
 // v1.0.30 — redimensionar la duración de una fase (empuja las posteriores)
+// v1.0.39 — extensión rayada de UNA fase concreta. extMin = 0 la quita.
+async function handleExtenderFase(msg) {
+  try {
+    const r = await extenderFase({
+      reservaId: msg.reservaId,
+      faseIndex: msg.faseIndex,
+      extMin: msg.extMin
+    });
+    sendResponse('fase-extendida', r);
+  } catch (e) {
+    console.error(`${TAG} ❌ extender-fase:`, e);
+    sendResponse('fase-extendida', { ok: false, error: e?.message || 'Error' });
+  }
+}
+
 async function handleRedimensionarFase(msg) {
   try {
     const { reservaId, faseIndex, nuevaDur } = msg || {};
@@ -1835,6 +1857,7 @@ $w.onReady(function () {
         case 'quitar-item':          handleQuitarItem(msg); break;
         case 'mover-fase':           handleMoverFase(msg); break;
         case 'redimensionar-fase':   handleRedimensionarFase(msg); break;
+        case 'extender-fase':        handleExtenderFase(msg); break;
         // v1.0.17 — bloqueos persistentes
         case 'crearBloqueo':         handleCrearBloqueo(msg); break;
         case 'eliminarBloqueo':      handleEliminarBloqueo(msg); break;
