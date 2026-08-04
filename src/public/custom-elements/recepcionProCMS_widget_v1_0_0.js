@@ -1,7 +1,25 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.79  ·  FICHA TÉCNICA — fix del cliente precargado
+ * VERSION: 1.1.80  ·  Informe del día — detalle de ESPECIALES vendidos
+ *
+ * v1.1.80 (4 ago 2026) — CIERRE FINANCIERO: nueva sección "🎟️ Especiales
+ *   vendidos hoy" con el detalle de cada venta manual de Bono / Tarjeta
+ *   PRIME / Tarjeta promocional (concepto + cliente + método + importe y
+ *   línea de total). Hasta ahora esas ventas solo se veían agregadas como
+ *   "ESPECIALES · N cobros" en "Cobrado por staff", sin decir qué se había
+ *   vendido — un bono podía pasarse por alto leyendo el informe.
+ *   Se alimenta de cierre.especiales / cierre.especialesTotal que devuelve
+ *   el backend cierreLogicExtendido v1.1.5. Si el backend no está
+ *   desplegado, los campos llegan undefined y la sección simplemente no se
+ *   pinta (cero regresión).
+ *   También se añade el mismo bloque al texto del botón 📋 COPIAR del
+ *   cierre financiero (_cierreBloqueATexto('fin')).
+ *   NO se toca: rendimiento productivo, métodos de pago, IVA, cobrado por
+ *   staff, productos, externos, arqueo, ESPECIALES (venta), ALMACÉN, ficha
+ *   técnica, calendario, cobro, login PIN ni ningún otro flujo.
+ *
+ * v1.1.79  ·  FICHA TÉCNICA — fix del cliente precargado
  *
  * v1.1.79 (3 ago 2026) — FIX: el popup se reabría siempre con el cliente
  *   de la última CITA abierta, ignorando el que el operador acabara de
@@ -6785,6 +6803,20 @@ button { font-family: inherit; cursor: pointer; }
         h += `</div>`;
       }
 
+      // v1.1.80 — Especiales vendidos hoy (Bono 🎟️ / PRIME ⭐ / Tarjeta 🎁).
+      // Requiere backend cierreLogicExtendido v1.1.5+. Si no está desplegado,
+      // cierre.especiales llega undefined y la sección no se pinta.
+      if (cierre.especiales?.length) {
+        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🎟️ Especiales vendidos hoy</div>`;
+        for (const e of cierre.especiales) {
+          const quien = e.cliente ? ` · <b>${esc(e.cliente)}</b>` : '';
+          const met = e.metodo ? ` <span style="color:#9ca3af;font-size:10px;">${esc(e.metodo)}</span>` : '';
+          h += `<div class="cierre-row"><span class="cierre-nombre">${esc(e.concepto)}${quien}${met}</span><span class="cierre-importe">${eur(e.importe)}</span></div>`;
+        }
+        h += `<div class="cierre-row" style="border-top:1px solid #e2e5ea;margin-top:4px;padding-top:6px;"><span class="cierre-nombre" style="font-weight:700;">Total especiales</span><span class="cierre-importe" style="font-weight:700;">${eur(cierre.especialesTotal || 0)}</span></div>`;
+        h += `</div>`;
+      }
+
       // Comisiones externos
       if (cierre.externos?.length) {
         h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🔗 Comisiones externos</div>`;
@@ -7240,6 +7272,17 @@ button { font-family: inherit; cursor: pointer; }
             const mult = p.cantidad > 1 ? ` ×${p.cantidad}` : '';
             L.push(`- ${p.nombre}${mult}: ${eur(p.total)}`);
           }
+        }
+        // v1.1.80 — Especiales vendidos hoy
+        if (c.especiales && c.especiales.length) {
+          L.push('');
+          L.push('🎟️ Especiales vendidos hoy');
+          for (const e of c.especiales) {
+            const quien = e.cliente ? ` · ${e.cliente}` : '';
+            const met = e.metodo ? ` (${e.metodo})` : '';
+            L.push(`- ${e.concepto}${quien}${met}: ${eur(e.importe)}`);
+          }
+          L.push(`Total especiales: ${eur(c.especialesTotal || 0)}`);
         }
         if (c.externos && c.externos.length) {
           L.push('');
