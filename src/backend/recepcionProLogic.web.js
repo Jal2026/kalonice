@@ -1,9 +1,54 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.42
-// FECHA: 30 de julio de 2026
+// VERSION: 1.0.43
+// FECHA: 4 de agosto de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.43: 🎚️ VARIANTES Y COMPLEMENTOS EN agregarServicioReserva.
+//          Hasta ahora esta función recibía solo { reservaId, setupUid,
+//          precioOverride }. Consecuencias reales que se corrigen aquí:
+//            · Un servicio CON variantes (Corte Mujer M/L/XL) se añadía
+//              siempre a precio y duración BASE — la variante no tenía
+//              por dónde llegar.
+//            · Un servicio con fases CASO B (obligatorias con variantes,
+//              p.ej. Botox → Planchado M/L/XL) devolvía
+//              `Falta elegir variante de: …` y NO se podía añadir nunca.
+//          Ahora acepta dos parámetros nuevos, ambos OPCIONALES:
+//            · varianteSel { idx, label, price, duration } — misma forma
+//              exacta que ya consume crearPackReserva desde v1.0.25.
+//            · complementosSetupUid [] — mismas dos formas que en
+//              crearPackReserva: string '<uid>' (simple) u objeto
+//              { uid, varianteId, varianteLabel, price, duration }.
+//          Sin ellos el comportamiento es IDÉNTICO al de v1.0.42
+//          (retrocompatible con el page code y el widget antiguos).
+//
+//          Dos helpers nuevos, ambos ADITIVOS:
+//            · aplicarVarianteAlPrincipal(principalBase, varianteSel)
+//            · normalizarComplementosElegidos(complementosSetupUid,
+//              porSetupUid)
+//          Contienen la MISMA lógica que crearPackReserva §1-bis y §4.
+//          DECISIÓN EXPLÍCITA: crearPackReserva NO se refactoriza para
+//          usarlos. Es el motor compartido por Recepción PRO, Recepción
+//          LITE Mobile y el widget público (widgetPublicoLogic
+//          .crearReservaPublica); tocarlo para una extracción mecánica
+//          añadiría riesgo a tres superficies sin aportar nada al
+//          usuario. Conceptos Fundacionales §19 y §20: cambio aditivo
+//          preferido sobre cambio destructivo.
+//
+//          agregarServicioReserva además:
+//            · Encola al final los complementos NO consumidos por el
+//              mapeoFases, con el mismo bucle que crearPackReserva §6.
+//            · Suma al precio el de cada complemento elegido y añade una
+//              línea por complemento a serviciosDetail (antes solo se
+//              añadía la línea del servicio principal).
+//            · Devuelve `faseIndexInicio`, `fasesAdded` y `fasesNuevas`
+//              (start/end/dur/ocupa/label) para que el widget pueda
+//              reubicar las fases recién creadas en otra columna con el
+//              contrato ya existente `moverFase`, sin backend nuevo.
+//          Sigue SIN disparar la centralita de comunicaciones: los
+//          servicios añadidos no generan un segundo WhatsApp/email al
+//          cliente. Comportamiento verificado en producción y deliberado.
 //
 // v1.0.42: ⏱️ FRECUENCIA MÍNIMA ENTRE USOS DEL BONO en aplicarCanjeProducto.
 //          Nuevo chequeo en la RAMA BONO, justo tras el de caducidad y
@@ -892,7 +937,9 @@ import { services } from 'wix-bookings.v2';
 import { contacts } from 'wix-crm-backend';
 import wixData from 'wix-data';
 
-const VERSION = '1.0.41';
+// v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
+// en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
+const VERSION = '1.0.43';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -1547,6 +1594,91 @@ function construirFasesPack({ principal, porSetupUid, horaInicioISO, compsPorRef
   }
 
   return { fases, refsConsumidos, faltanVariantes };
+}
+
+// =====================================================
+// HELPERS v1.0.43 — variante del principal y complementos elegidos
+//
+// Ambos replican la lógica que crearPackReserva ya ejecuta en línea
+// (§1-bis "variante aplicada al principal" y §4 "normalizar complementos").
+// Se escriben aquí como funciones para que agregarServicioReserva pueda
+// usar EXACTAMENTE el mismo criterio sin tocar el motor compartido.
+//
+// crearPackReserva NO se refactoriza para llamarlas: es el motor común de
+// Recepción PRO, Recepción LITE Mobile y el widget público. Una extracción
+// mecánica ahí añadiría riesgo a tres superficies sin beneficio funcional.
+// Si algún día se unifican, debe hacerse con despliegue por etapas y
+// verificación en las tres superficies (Conceptos Fundacionales §19).
+// =====================================================
+
+// Devuelve una COPIA del servicio con precio/duración/label de la variante
+// elegida. Sin varianteSel devuelve el objeto original sin tocar (nunca
+// muta el objeto cacheado del catálogo).
+function aplicarVarianteAlPrincipal(principalBase, varianteSel) {
+  if (!principalBase) return principalBase;
+  if (!varianteSel || typeof varianteSel !== 'object') return principalBase;
+
+  const vPrice = toNum(varianteSel.price);
+  const vDur = toNum(varianteSel.duration);
+  const vLabel = varianteSel.label ? String(varianteSel.label) : '';
+
+  const copia = {
+    ...principalBase,
+    price: vPrice,
+    duration: vDur > 0 ? vDur : toNum(principalBase.duration),
+    label: vLabel
+      ? `${principalBase.label || ''} · ${vLabel}`.trim()
+      : (principalBase.label || '')
+  };
+  console.log(`${TAG} 🎚️ Variante aplicada al principal: ${vLabel} | ${vPrice}€ | ${vDur}min`);
+  return copia;
+}
+
+// Normaliza el array de complementos elegidos a {setupUid,label,price,duration}.
+// Acepta las dos formas del contrato existente:
+//   · string '<setupUid>'  → complemento simple, precio/duración del catálogo.
+//   · objeto { uid, varianteId, varianteLabel, price, duration } → con variante.
+// Regla de label idéntica a crearPackReserva v1.0.30 (evita "Peinado Peinado M").
+function normalizarComplementosElegidos(complementosSetupUid, porSetupUid) {
+  const compArray = Array.isArray(complementosSetupUid) ? complementosSetupUid : [];
+  const compsNorm = [];
+
+  for (const item of compArray) {
+    const esObj = item && typeof item === 'object';
+    const uid = esObj ? item.uid : item;
+    const c = porSetupUid[uid];
+    if (!c) {
+      console.warn(`${TAG} ⚠️ Complemento no encontrado: ${uid}`);
+      continue;
+    }
+    if (esObj) {
+      const cLabel = (c.label || '').trim();
+      const vLabel = item.varianteLabel ? String(item.varianteLabel).trim() : '';
+      let labelFinal;
+      if (!vLabel) {
+        labelFinal = cLabel;
+      } else if (cLabel && vLabel.toLowerCase().startsWith(cLabel.toLowerCase())) {
+        labelFinal = vLabel;
+      } else {
+        labelFinal = `${cLabel} ${vLabel}`.trim();
+      }
+      compsNorm.push({
+        setupUid: c.setupUid || '',
+        label: labelFinal,
+        price: toNum(item.price),
+        duration: toNum(item.duration)
+      });
+    } else {
+      compsNorm.push({
+        setupUid: c.setupUid || '',
+        label: c.label || '',
+        price: toNum(c.price),
+        duration: toNum(c.duration)
+      });
+    }
+  }
+
+  return compsNorm;
 }
 
 // =====================================================
@@ -2906,14 +3038,28 @@ export const agregarComplementoReserva = webMethod(
 // v1.0.15: añade un servicio principal NUEVO al final de la cita existente.
 // Reutiliza `construirFasesPack` para armar las fases del nuevo servicio
 // (con cascada completa si es complejo, o una sola fase si es simple).
-//   - reservaId: id de la reserva existente
-//   - setupUid:  setupUid del nuevo servicio (puede ser simple o complejo)
-//   - precioOverride: opcional, si se quiere forzar otro precio (variantes)
 // Regla pedida por Jal: el servicio adicional se ENCADENA al final, después
 // de la última fase ocupante de la cita actual.
+//
+// v1.0.43 — payload ampliado (todo opcional, retrocompatible):
+//   - reservaId: id de la reserva existente                        (req.)
+//   - setupUid:  setupUid del nuevo servicio (simple o complejo)   (req.)
+//   - precioOverride: fuerza el precio del servicio principal añadido.
+//     Si llega, SUSTITUYE al precio de catálogo/variante (comportamiento
+//     previo intacto). Los complementos siguen sumando aparte.
+//   - varianteSel { idx, label, price, duration }: variante elegida del
+//     servicio que se añade. Misma forma que en crearPackReserva v1.0.25.
+//   - complementosSetupUid []: complementos elegidos, en las dos formas
+//     del contrato (string uid | objeto con variante). Es lo que permite
+//     resolver las fases CASO B (obligatorias con variantes) que antes
+//     hacían fallar la operación con `Falta elegir variante de: …`.
+//
+// NO dispara la centralita de comunicaciones (comportamiento existente y
+// deliberado): añadir servicios a una cita no genera un segundo aviso al
+// cliente. El único WhatsApp/email es el de crearPackReserva.
 export const agregarServicioReserva = webMethod(
   Permissions.SiteMember,
-  async ({ reservaId, setupUid, precioOverride }) => {
+  async ({ reservaId, setupUid, precioOverride, varianteSel = null, complementosSetupUid = [] }) => {
     try {
       console.log(`${TAG} ➕ Servicio adicional en ${reservaId}: setupUid=${setupUid}`);
       if (!reservaId || !setupUid) return { ok: false, error: 'Faltan reservaId o setupUid' };
@@ -2929,8 +3075,12 @@ export const agregarServicioReserva = webMethod(
       // Catálogo completo (para resolver refs de mapeoFases si el servicio nuevo
       // es complejo y referencia setupUids de otros servicios)
       const { porSetupUid } = await cargarCatalogoCompleto();
-      const principal = porSetupUid[setupUid];
-      if (!principal) return { ok: false, error: 'Servicio nuevo no encontrado en catálogo' };
+      const principalBase = porSetupUid[setupUid];
+      if (!principalBase) return { ok: false, error: 'Servicio nuevo no encontrado en catálogo' };
+
+      // v1.0.43 — variante elegida del servicio añadido. Sin varianteSel,
+      // `principal` es el objeto de catálogo tal cual (precio/duración base).
+      const principal = aplicarVarianteAlPrincipal(principalBase, varianteSel);
 
       // Hora de inicio del NUEVO servicio = MAX(end) de fases ocupantes
       // v1.0.16 FIX: con drag&drop una fase movida más tarde puede estar
@@ -2952,16 +3102,19 @@ export const agregarServicioReserva = webMethod(
         return { ok: false, error: 'No se puede calcular hora de inicio del servicio adicional' };
       }
 
-      // Construir las fases del nuevo servicio (cascada o simple).
-      // v1.0.29 — construirFasesPack devuelve {fases, refsConsumidos,
-      // faltanVariantes}. Aquí no pasamos compsPorRef: el operador añade
-      // el servicio raíz; las fases CASO A (obligatorias sin variantes,
-      // ej. Lavado/Secado) se autoejecutan — correcto. Las fases CASO B
-      // (obligatorias con variantes, ej. Planchado M/L/XL) provocarían
-      // faltanVariantes y la operación falla; deuda conocida: no hay UI
-      // de elección de variante para servicios añadidos POST-creación.
-      const { fases: fasesNuevas, faltanVariantes: faltanVariantesAdd } = construirFasesPack({
-        principal, porSetupUid, horaInicioISO
+      // v1.0.43 — complementos elegidos normalizados + mapa por ref, que es
+      // lo que consume construirFasesPack para materializar en su posición
+      // las fases tipo:'servicio' del mapeo cuyo ref haya sido elegido.
+      // Con esto quedan cubiertos los tres casos del modelo:
+      //   CASO A (obligatoria sin variantes) → auto-materializa, no cobra.
+      //   CASO B (obligatoria con variantes) → llega elegida, ya no falla.
+      //   CASO C (opcional)                  → solo si viene elegida.
+      const compsNorm = normalizarComplementosElegidos(complementosSetupUid, porSetupUid);
+      const compsPorRef = new Map();
+      for (const c of compsNorm) compsPorRef.set(c.setupUid, c);
+
+      const { fases: fasesNuevas, refsConsumidos, faltanVariantes: faltanVariantesAdd } = construirFasesPack({
+        principal, porSetupUid, horaInicioISO, compsPorRef
       });
       if (Array.isArray(faltanVariantesAdd) && faltanVariantesAdd.length > 0) {
         return { ok: false, error: `Falta elegir variante de: ${faltanVariantesAdd.join(', ')}` };
@@ -2970,6 +3123,30 @@ export const agregarServicioReserva = webMethod(
         return { ok: false, error: 'No se pudieron construir las fases del servicio adicional' };
       }
 
+      // v1.0.43 — Encolar al final los complementos que NO tenían fase en el
+      // mapeoFases del servicio añadido. Mismo bucle que crearPackReserva §6.
+      let cursorISO = fasesNuevas[fasesNuevas.length - 1].end;
+      for (const comp of compsNorm) {
+        if (refsConsumidos.has(comp.setupUid)) continue;  // ya materializado en su posición
+        const durComp = comp.duration;
+        const endCompISO = addMinutes(cursorISO, durComp);
+        fasesNuevas.push({
+          fase: 'COMPLEMENTO',
+          tipo: 'servicio',
+          setupUid: comp.setupUid,
+          label: comp.label,
+          start: cursorISO,
+          end: endCompISO,
+          dur: durComp,
+          ocupa: true
+        });
+        cursorISO = endCompISO;
+      }
+
+      // Índice donde arrancan las fases nuevas dentro del array final. El
+      // widget lo usa para reubicarlas en otra columna vía `moverFase`.
+      const faseIndexInicio = fasesArr.length;
+
       // Concatenar al final
       const fasesFinales = [...fasesArr, ...fasesNuevas];
 
@@ -2977,14 +3154,26 @@ export const agregarServicioReserva = webMethod(
       const durNuevo = fasesNuevas.reduce((s, f) => s + (Number(f.dur) || 0), 0);
       const nuevaDuracionTotal = (Number(registro.duracionTotal) || 0) + durNuevo;
 
-      // Precio: usar precioOverride si llega, o principal.price
-      const precioNuevo = precioOverride != null ? Number(precioOverride) : (Number(principal.price) || 0);
+      // Precio del principal añadido: precioOverride si llega; si no, el de
+      // la variante elegida (ya aplicado en `principal`) o el base.
+      const precioPrincipal = (precioOverride != null)
+        ? Number(precioOverride)
+        : (Number(principal.price) || 0);
+
+      // Detalle (formato V1: nombre|precio|1). v1.0.43: una línea por
+      // complemento elegido, igual que hace crearPackReserva en el alta.
+      const detalleItems = [`${principal.label || 'Servicio'}|${precioPrincipal}|1`];
+      let precioNuevo = precioPrincipal;
+      for (const comp of compsNorm) {
+        precioNuevo += comp.price;
+        detalleItems.push(`${comp.label}|${comp.price}|1`);
+      }
       const nuevoPrecioTotal = (Number(registro.precioTotal) || 0) + precioNuevo;
 
-      // Detalle (formato V1: nombre|precio|1)
       const detalleActual = String(registro.serviciosDetail || '');
-      const nuevoItem = `${principal.label || 'Servicio'}|${precioNuevo}|1`;
-      const detalleNuevo = detalleActual ? `${detalleActual};;${nuevoItem}` : nuevoItem;
+      const detalleNuevo = detalleActual
+        ? `${detalleActual};;${detalleItems.join(';;')}`
+        : detalleItems.join(';;');
 
       registro.fases = { items: fasesFinales };
       registro.duracionTotal = nuevaDuracionTotal;
@@ -2992,7 +3181,7 @@ export const agregarServicioReserva = webMethod(
       registro.serviciosDetail = detalleNuevo;
 
       await wixData.update(CMS_RESERVAS, registro, { suppressAuth: true });
-      console.log(`${TAG} ✅ Servicio añadido: ${principal.label} (+${durNuevo}min, +${precioNuevo}€) | fases nuevas: ${fasesNuevas.length}`);
+      console.log(`${TAG} ✅ Servicio añadido: ${principal.label} (+${durNuevo}min, +${precioNuevo}€) | fases nuevas: ${fasesNuevas.length} | idx ${faseIndexInicio}`);
       return {
         ok: true,
         reservaId,
@@ -3000,7 +3189,20 @@ export const agregarServicioReserva = webMethod(
         precio: precioNuevo,
         duracionTotal: nuevaDuracionTotal,
         precioTotal: nuevoPrecioTotal,
-        fasesAdded: fasesNuevas.length
+        fasesAdded: fasesNuevas.length,
+        // v1.0.43 — geometría de las fases recién creadas, para que el
+        // widget pueda reubicarlas con el contrato existente `moverFase`
+        // (modo "elegir profesional por servicio"). Solo lectura: quien no
+        // lo use no se entera de que existe.
+        faseIndexInicio,
+        fasesNuevas: fasesNuevas.map((f, i) => ({
+          index: faseIndexInicio + i,
+          label: f.label || '',
+          start: f.start,
+          end: f.end,
+          dur: Number(f.dur) || 0,
+          ocupa: !!f.ocupa
+        }))
       };
     } catch (e) {
       console.error(`${TAG} ❌ agregarServicioReserva:`, e.message);
