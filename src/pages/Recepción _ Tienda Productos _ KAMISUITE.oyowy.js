@@ -3,10 +3,20 @@
 // =====================================================
 // Página: Recepción | Tienda Productos
 // Elemento: #widgetTienda (HtmlComponent)
-// Backend: tiendaProductos.web.js v1.4
+// Backend: tiendaProductos.web.js v1.5.12
 // =====================================================
 // v1.3: + crearContactoTienda, contactPhone
 // v1.4: + metodoPago, generarFacturaProducto, obtenerHistorialVentas
+// v1.5: + VARIANTES (250ml / 1000ml).
+//       (1) procesarVenta propaga variantId + variantLabel al backend
+//           registrarVenta v1.5.12. Sin ellos, un producto con variantes
+//           devolvía EMPTY_CHECKOUT desde Wix Stores.
+//       (2) El error 'MISSING_VARIANT' del backend se propaga al widget
+//           con missingVariants[] en lugar de tragarse como error genérico
+//           (mismo patrón que el page code de Recepción PRO v1.0.13).
+//       (3) El mensaje 'sold' devuelve variantLabel y nombreConVariante
+//           para que el widget muestre y facture "PRODUCTO · 250ml".
+//       Productos simples: comportamiento idéntico a v1.4.
 // =====================================================
 
 import { listarProductos, registrarVenta, cargarContactosTienda, crearContactoTienda, generarFacturaProducto, obtenerHistorialVentas } from 'backend/tiendaProductos.web';
@@ -107,10 +117,10 @@ $w.onReady(function () {
     }
   }
 
-  // ── v1.4: MODIFICADO — pasar metodoPago ──
+  // ── v1.5: MODIFICADO — pasar metodoPago + variantId/variantLabel ──
   async function procesarVenta(payload) {
     try {
-      console.log('[TiendaProductos] Venta:', payload.productName, 'x' + payload.quantity, '| cliente:', payload.contactId || 'N/A', '| pago:', payload.metodoPago || 'N/A');
+      console.log('[TiendaProductos] Venta:', payload.productName, 'x' + payload.quantity, '| cliente:', payload.contactId || 'N/A', '| pago:', payload.metodoPago || 'N/A', '| variante:', payload.variantLabel || '(simple)');
 
       const result = await registrarVenta({
         productId: payload.productId,
@@ -122,10 +132,28 @@ $w.onReady(function () {
         contactName: payload.contactName || '',
         contactEmail: payload.contactEmail || '',
         contactPhone: payload.contactPhone || '',
-        metodoPago: payload.metodoPago || ''
+        metodoPago: payload.metodoPago || '',
+        // v1.5: variantes (vacíos en productos simples)
+        variantId: payload.variantId || '',
+        variantLabel: payload.variantLabel || ''
       });
 
       if (!result.ok) {
+        // v1.5: MISSING_VARIANT se propaga con la lista de variantes
+        if (result.error === 'MISSING_VARIANT') {
+          console.warn('[TiendaProductos] MISSING_VARIANT:', result.message);
+          widget.postMessage({
+            type: 'sellError',
+            payload: {
+              productId: payload.productId,
+              error: 'MISSING_VARIANT',
+              message: result.message || 'Selecciona una variante',
+              missingVariants: result.missingVariants || []
+            }
+          });
+          return;
+        }
+
         widget.postMessage({
           type: 'sellError',
           payload: {
@@ -143,7 +171,11 @@ $w.onReady(function () {
           productName: payload.productName,
           orderId: result.orderId,
           tiempoVenta: result.tiempoVenta,
-          metodoPago: result.metodoPago
+          metodoPago: result.metodoPago,
+          // v1.5: eco de la variante vendida
+          variantId: result.variantId || '',
+          variantLabel: result.variantLabel || '',
+          nombreConVariante: result.nombreConVariante || payload.productName
         }
       });
 
