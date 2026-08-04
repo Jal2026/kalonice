@@ -1,5 +1,5 @@
 // =====================================================
-// [RecuperarContactos v1.0.0] - recuperarContactos.web.js
+// [RecuperarContactos v1.0.1] - recuperarContactos.web.js
 //
 // BACKEND ONE-SHOT — RECUPERACIÓN DE CONTACTOS PERDIDOS
 // EN LA IMPORTACIÓN SADPE → WIX CRM (KALÓNICE, agosto 2026)
@@ -69,6 +69,24 @@
 //     Solo 3 fichas conservan email.
 //
 // -----------------------------------------------------------------
+// CHANGELOG
+// -----------------------------------------------------------------
+// v1.0.1 (4-ago-2026) — HOTFIX. La v1.0.0 devolvía 500 en el endpoint.
+//   Dos errores, ambos por no haber copiado el patrón de producción:
+//   · yaExiste() filtraba con .eq('info.phones.phone', telefono).
+//     Wix NO permite query por teléfono — dicho literal en
+//     contactLookup.web.js línea 202. Sustituido por el patrón validado
+//     de contactLookup (líneas 184-199): query por info.name.first
+//     [+ info.name.last] y cruce del teléfono sobre los resultados con
+//     tel9(), leyendo c.info.phones[].
+//   · elevate() se hacía a nivel de MÓDULO. Los tres backends que usan
+//     `contacts` en producción (fichaClienteLogic 1166, crmToolsLogic
+//     103, contactLookup 170/269) lo hacen DENTRO de la función. Movido.
+//   Sin cambios en el LOTE ni en la lógica de alta.
+//
+// v1.0.0 (4-ago-2026) — versión inicial.
+//
+// -----------------------------------------------------------------
 // USO
 // -----------------------------------------------------------------
 //   https://www.peluqueriakalonice.es/_functions/recuperarContactos?desde=0&hasta=50
@@ -89,16 +107,13 @@ import { webMethod, Permissions } from 'wix-web-module';
 import { elevate } from 'wix-auth';
 import { contacts } from 'wix-crm-backend';
 
-const VERSION = 'v1.0.0';
-const TAG = '[RecuperarContactos v1.0.0]';
+const VERSION = 'v1.0.1';
+const TAG = '[RecuperarContactos v1.0.1]';
 
 const ETIQUETA_LOTE = 'Kalonice recuperados';
 
-// Elevate a nivel de módulo — patrón dumpReservasV1.web.js v1.2.0
-const createContactElevated    = elevate(contacts.createContact);
-const findOrCreateLabelElev    = elevate(contacts.findOrCreateLabel);
-const labelContactElevated     = elevate(contacts.labelContact);
-const queryContactsElevated    = elevate(contacts.queryContacts);
+// v1.0.1 — elevate() se hace DENTRO de recuperarContactosCore, NO aquí.
+// Ver CHANGELOG.
 
 // =====================================================
 // LOTE — 766 fichas
@@ -873,159 +888,208 @@ const LOTE = [
   ["MARISA", "JIMENEZ VALLES", "634137799", "", "", "Femenino", "5319"]];
 
 // =====================================================
-// Helper — ¿ya existe este contacto?
-// Query por teléfono; si algún resultado coincide además en
-// nombre+apellido (case-insensitive), se considera ya creado.
-// Patrón de query: crmToolsLogic.web.js (queryContacts + suppressAuth).
+// Helpers
 // =====================================================
-async function yaExiste(telefono, nombre, apellido) {
-  try {
-    const resp = await queryContactsElevated()
-      .eq('info.phones.phone', telefono)
-      .limit(50)
-      .find({ suppressAuth: true });
 
-    const items = resp?.items || [];
+// Últimos 9 dígitos — COPIADO LITERAL de contactLookup.web.js línea 74.
+// Permite cruzar teléfonos guardados con formatos distintos
+// ('660165840' vs '+34 660 16 58 40').
+function tel9(tel) {
+  const d = String(tel || '').replace(/\D/g, '');
+  return d.length >= 9 ? d.slice(-9) : d;
+}
+
+// Normaliza para comparar nombres.
+function norm(s) {
+  return String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// =====================================================
+// yaExiste — control de idempotencia
+//
+// v1.0.1 — CORREGIDO. La v1.0.0 filtraba con
+//   .eq('info.phones.phone', telefono)
+// que NO es válido: contactLookup.web.js línea 202 lo dice literal —
+// "Wix NO permite query por phone". Aquí se usa el patrón que SÍ está
+// validado en producción (contactLookup líneas 184-199):
+//   query por info.name.first [+ info.name.last]
+// y el teléfono se cruza sobre los resultados con tel9(), leyendo
+// c.info.phones[] — igual que hacen contactLookup, coloracionLogic,
+// testCheckout y paymentReservationsLogic.
+//
+// Devuelve el contactId si ya hay un contacto con ese mismo nombre y
+// apellido; si además coincide el teléfono, coincidencia total.
+// =====================================================
+async function yaExiste(elevatedQuery, telefono, nombre, apellido) {
+  try {
+    let q = elevatedQuery().eq('info.name.first', nombre);
+    if (apellido) q = q.eq('info.name.last', apellido);
+    const r = await q.limit(50).find();
+
+    const items = r?.items || [];
     if (items.length === 0) return null;
 
-    const objetivo = `${String(nombre || '').trim()} ${String(apellido || '').trim()}`
-      .trim().toLowerCase().replace(/\s+/g, ' ');
+    const objetivoTel = tel9(telefono);
+    const objetivoNom = norm(`${nombre} ${apellido}`);
 
+    // 1º) coincidencia fuerte: nombre + teléfono
     for (const c of items) {
-      const n = String(c?.info?.name?.first || '').trim();
-      const a = String(c?.info?.name?.last || '').trim();
-      const actual = `${n} ${a}`.trim().toLowerCase().replace(/\s+/g, ' ');
-      if (actual && actual === objetivo) return c._id || c.id || 'existe';
+      const n = norm(`${c?.info?.name?.first || ''} ${c?.info?.name?.last || ''}`);
+      if (n !== objetivoNom) continue;
+      const phones = Array.isArray(c?.info?.phones) ? c.info.phones : [];
+      if (phones.some(p => tel9(p?.phone || p) === objetivoTel)) {
+        return { id: c._id || c.id, motivo: 'NOMBRE_Y_TELEFONO' };
+      }
     }
+
+    // 2º) coincidencia por nombre exacto aunque el teléfono difiera
+    for (const c of items) {
+      const n = norm(`${c?.info?.name?.first || ''} ${c?.info?.name?.last || ''}`);
+      if (n === objetivoNom) return { id: c._id || c.id, motivo: 'SOLO_NOMBRE' };
+    }
+
     return null;
   } catch (e) {
-    console.warn(`${TAG} yaExiste falló para tel=${telefono}: ${e.message}`);
+    console.warn(`${TAG} yaExiste falló (${nombre} ${apellido}): ${e.message}`);
     return null; // ante duda, se intenta crear
   }
 }
 
 // =====================================================
-// webMethod principal
+// recuperarContactosCore — función PURA
+//
+// NO es un webMethod a propósito: http-functions.js corre SIN sesión de
+// miembro y un webMethod con Permissions.SiteMember rechazaría la
+// llamada (aviso literal en la cabecera de http-functions.js, línea 38,
+// mismo criterio que akiraSynthesizeCore de akiraTTS.web.js).
 // =====================================================
 export async function recuperarContactosCore({ desde = 0, hasta = 50, dryRun = false } = {}) {
 
-    const ini = Math.max(0, parseInt(desde, 10) || 0);
-    const fin = Math.min(LOTE.length, parseInt(hasta, 10) || 0);
+  // v1.0.1 — elevate DENTRO de la función, no a nivel de módulo.
+  // Patrón de los tres backends que usan `contacts` en producción:
+  // fichaClienteLogic (línea 1166), crmToolsLogic (línea 103),
+  // contactLookup (líneas 170 y 269).
+  const elevatedQuery  = elevate(contacts.queryContacts);
+  const elevatedCreate = elevate(contacts.createContact);
+  const elevatedLabel  = elevate(contacts.labelContact);
+  const elevatedFindLabel = elevate(contacts.findOrCreateLabel);
 
-    if (fin <= ini) {
-      return { ok: false, version: VERSION, error: `Rango inválido: desde=${ini} hasta=${fin}. Total lote=${LOTE.length}` };
+  const ini = Math.max(0, parseInt(desde, 10) || 0);
+  const fin = Math.min(LOTE.length, parseInt(hasta, 10) || 0);
+
+  if (fin <= ini) {
+    return { ok: false, version: VERSION, error: `Rango inválido: desde=${ini} hasta=${fin}. Total lote=${LOTE.length}` };
+  }
+
+  console.log(`${TAG} INICIO tramo [${ini}, ${fin}) · dryRun=${dryRun} · total lote=${LOTE.length}`);
+
+  // ── Etiqueta del lote — patrón crmToolsLogic líneas 103-113 ──
+  let labelKey = null;
+  if (!dryRun) {
+    try {
+      const resp = await elevatedFindLabel(ETIQUETA_LOTE);
+      labelKey = resp?.label?.key || null;
+      console.log(`${TAG} etiqueta "${ETIQUETA_LOTE}" → key=${labelKey}`);
+    } catch (e) {
+      console.warn(`${TAG} findOrCreateLabel falló: ${e.message} — se continúa sin etiquetar`);
     }
+  }
 
-    console.log(`${TAG} INICIO tramo [${ini}, ${fin}) · dryRun=${dryRun} · total lote=${LOTE.length}`);
+  const detalle = [];
+  let creados = 0, saltados = 0, errores = 0;
 
-    // ── Etiqueta del lote (findOrCreateLabel — patrón crmToolsLogic) ──
-    let labelKey = null;
-    if (!dryRun) {
-      try {
-        const resp = await findOrCreateLabelElev(ETIQUETA_LOTE);
-        labelKey = resp?.label?.key || null;
-        console.log(`${TAG} etiqueta "${ETIQUETA_LOTE}" → key=${labelKey}`);
-      } catch (e) {
-        console.warn(`${TAG} findOrCreateLabel falló: ${e.message} — se continúa sin etiquetar`);
+  for (let i = ini; i < fin; i++) {
+    const [nombre, apellido, telefono, email, birthdate, sexo, numSadpe] = LOTE[i];
+    const ficha = `#${numSadpe} ${nombre} ${apellido}`.trim();
+
+    try {
+      // ── Idempotencia ──
+      const existente = await yaExiste(elevatedQuery, telefono, nombre, apellido);
+      if (existente) {
+        saltados++;
+        detalle.push({ i, sadpe: numSadpe, nombre: ficha, estado: 'YA_EXISTE', motivo: existente.motivo, contactId: existente.id });
+        continue;
       }
-    }
 
-    const detalle = [];
-    let creados = 0, saltados = 0, errores = 0;
-
-    for (let i = ini; i < fin; i++) {
-      const [nombre, apellido, telefono, email, birthdate, sexo, numSadpe] = LOTE[i];
-      const etiquetaFicha = `#${numSadpe} ${nombre} ${apellido}`.trim();
-
-      try {
-        // ── Idempotencia ──
-        const existente = await yaExiste(telefono, nombre, apellido);
-        if (existente) {
-          saltados++;
-          detalle.push({ i, sadpe: numSadpe, nombre: etiquetaFicha, estado: 'YA_EXISTE', contactId: existente });
-          continue;
-        }
-
-        if (dryRun) {
-          creados++;
-          detalle.push({ i, sadpe: numSadpe, nombre: etiquetaFicha, estado: 'DRY_RUN_OK', tel: telefono, email: email || '-', sexo: sexo || '-' });
-          continue;
-        }
-
-        // ── contactInfo — patrón fichaClienteLogic v1.9.11 ──
-        const contactInfo = { name: { first: nombre, last: apellido } };
-        if (email)     contactInfo.emails    = [{ tag: 'MAIN',   email }];
-        if (telefono)  contactInfo.phones    = [{ tag: 'MOBILE', phone: telefono }];
-        if (birthdate) contactInfo.birthdate = birthdate;
-        if (sexo)      contactInfo.extendedFields = { 'custom.sexo': sexo };
-
-        // ── createContact — allowDuplicates SIEMPRE true, sin reintento ──
-        let created;
-        try {
-          created = await createContactElevated(contactInfo, {
-            allowDuplicates: true,
-            suppressAuth: true
-          });
-        } catch (createErr) {
-          const appErr = createErr?.details?.applicationError;
-          console.error(`${TAG} createContact FALLÓ ${etiquetaFicha} · code=${appErr?.code || '-'} · raw=${createErr?.message || ''}`);
-          errores++;
-          detalle.push({ i, sadpe: numSadpe, nombre: etiquetaFicha, estado: 'ERROR_CREATE', code: appErr?.code || 'DESCONOCIDO' });
-          continue;
-        }
-
-        const createdContact = created?.contact || created;
-        const newId = createdContact?._id || createdContact?.id || null;
-        if (!newId) {
-          errores++;
-          detalle.push({ i, sadpe: numSadpe, nombre: etiquetaFicha, estado: 'ERROR_SIN_ID' });
-          continue;
-        }
-
-        // ── Etiquetar — patrón crmToolsLogic (firma plana) ──
-        if (labelKey) {
-          try {
-            await labelContactElevated(newId, [labelKey], { suppressAuth: true });
-          } catch (eLabel) {
-            console.warn(`${TAG} labelContact falló ${etiquetaFicha}: ${eLabel.message}`);
-          }
-        }
-
+      if (dryRun) {
         creados++;
-        detalle.push({ i, sadpe: numSadpe, nombre: etiquetaFicha, estado: 'CREADO', contactId: newId });
-
-      } catch (e) {
-        console.error(`${TAG} EXCEPCIÓN ${etiquetaFicha}: ${e.message}`);
-        errores++;
-        detalle.push({ i, sadpe: numSadpe, nombre: etiquetaFicha, estado: 'ERROR', msg: e.message });
+        detalle.push({ i, sadpe: numSadpe, nombre: ficha, estado: 'DRY_RUN_OK', tel: telefono, email: email || '-', nac: birthdate || '-', sexo: sexo || '-' });
+        continue;
       }
+
+      // ── contactInfo — patrón fichaClienteLogic v1.9.11 línea ~2040 ──
+      const contactInfo = { name: { first: nombre, last: apellido } };
+      if (email)     contactInfo.emails    = [{ tag: 'MAIN',   email }];
+      if (telefono)  contactInfo.phones    = [{ tag: 'MOBILE', phone: telefono }];
+      if (birthdate) contactInfo.birthdate = birthdate;
+      if (sexo)      contactInfo.extendedFields = { 'custom.sexo': sexo };
+
+      // ── createContact — allowDuplicates SIEMPRE true, NUNCA se reintenta ──
+      // (con false Wix crea igualmente Y lanza excepción → reintentar duplica)
+      let created;
+      try {
+        created = await elevatedCreate(contactInfo, {
+          allowDuplicates: true,
+          suppressAuth: true
+        });
+      } catch (createErr) {
+        const appErr = createErr?.details?.applicationError;
+        console.error(`${TAG} createContact FALLÓ ${ficha} · code=${appErr?.code || '-'} · raw=${createErr?.message || ''}`);
+        errores++;
+        detalle.push({ i, sadpe: numSadpe, nombre: ficha, estado: 'ERROR_CREATE', code: appErr?.code || 'DESCONOCIDO', msg: String(createErr?.message || '').slice(0, 200) });
+        continue;
+      }
+
+      const createdContact = created?.contact || created;
+      const newId = createdContact?._id || createdContact?.id || null;
+      if (!newId) {
+        errores++;
+        detalle.push({ i, sadpe: numSadpe, nombre: ficha, estado: 'ERROR_SIN_ID' });
+        continue;
+      }
+
+      // ── Etiquetar — firma plana, patrón crmToolsLogic línea 177 ──
+      if (labelKey) {
+        try {
+          await elevatedLabel(newId, [labelKey], { suppressAuth: true });
+        } catch (eLabel) {
+          console.warn(`${TAG} labelContact falló ${ficha}: ${eLabel.message}`);
+        }
+      }
+
+      creados++;
+      detalle.push({ i, sadpe: numSadpe, nombre: ficha, estado: 'CREADO', contactId: newId });
+
+    } catch (e) {
+      console.error(`${TAG} EXCEPCIÓN ${ficha}: ${e.message}`);
+      errores++;
+      detalle.push({ i, sadpe: numSadpe, nombre: ficha, estado: 'ERROR', msg: String(e.message || '').slice(0, 200) });
     }
+  }
 
-    const siguiente = fin < LOTE.length
-      ? `?desde=${fin}&hasta=${Math.min(LOTE.length, fin + (fin - ini))}${dryRun ? '&dryRun=1' : ''}`
-      : null;
+  const siguiente = fin < LOTE.length
+    ? `?desde=${fin}&hasta=${Math.min(LOTE.length, fin + (fin - ini))}${dryRun ? '&dryRun=1' : ''}`
+    : null;
 
-    console.log(`${TAG} FIN tramo [${ini}, ${fin}) · creados=${creados} saltados=${saltados} errores=${errores}`);
+  console.log(`${TAG} FIN tramo [${ini}, ${fin}) · creados=${creados} saltados=${saltados} errores=${errores}`);
 
-    return {
-      ok: true,
-      version: VERSION,
-      dryRun: !!dryRun,
-      totalLote: LOTE.length,
-      tramo: { desde: ini, hasta: fin },
-      resumen: { creados, saltados, errores },
-      siguienteTramo: siguiente,
-      detalle
-    };
+  return {
+    ok: true,
+    version: VERSION,
+    dryRun: !!dryRun,
+    totalLote: LOTE.length,
+    tramo: { desde: ini, hasta: fin },
+    resumen: { creados, saltados, errores },
+    siguienteTramo: siguiente,
+    detalle
+  };
 }
 
 // =====================================================
 // Envoltorio webMethod — NO lo usa el endpoint HTTP.
-// http-functions.js corre SIN sesión de miembro y un webMethod con
-// Permissions.SiteMember rechazaría la llamada (aviso literal en la
-// cabecera de http-functions.js, línea 38). El endpoint importa
-// recuperarContactosCore. Este export queda por si se quiere invocar
-// desde un page code con sesión iniciada.
+// Queda por si se quiere invocar desde un page code con sesión iniciada.
 // =====================================================
 export const recuperarContactos = webMethod(
   Permissions.SiteMember,
