@@ -1,7 +1,25 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.83  ·  Variantes al añadir complemento
+ * VERSION: 1.1.84  ·  Botón TIENDA — venta de productos sin cita
+ *
+ * v1.1.84 (4 ago 2026) — TIENDA. Botón nuevo en la barra superior, junto a
+ *   FICHA TÉCNICA, para vender productos a quien entra sin cita. Abre el
+ *   MISMO modal de venta que ya existe dentro de la cita: buscador,
+ *   carrito, variantes, métodos de pago y el flujo MISSING_VARIANT. La
+ *   única diferencia es que no viaja packId, así que la venta queda
+ *   registrada contra el contacto y sin cita asociada.
+ *
+ *   Cliente: usa el que esté cargado en el aside. Si no hay ninguno, o el
+ *   que hay es provisional, pide nombre + teléfono o email y da de alta el
+ *   contacto por el circuito existente ('crearCliente'), encadenando
+ *   después la venta. NO hay venta anónima: venderProductosDesdeAgenda
+ *   aborta sin contactId porque genera un pedido real de tienda.
+ *
+ *   Gated con _puede('cobrar'), igual criterio que el resto de acciones
+ *   con dinero. Cero backend nuevo y cero cambios en el page code.
+ *
+ * v1.1.83  ·  Variantes al añadir complemento
  *
  * v1.1.83 (4 ago 2026) — El modal "⛓ Complemento" del modal de cita ya
  *   permite elegir VARIANTE. Antes solo mandaba el setupUid y un
@@ -1425,7 +1443,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.83]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.84]';
 
   // ─── helpers ───
   function esc(s) {
@@ -1577,6 +1595,13 @@ button { font-family: inherit; cursor: pointer; }
   margin-right: 8px;
 }
 .ks-fichatec:hover { filter: brightness(1.08); }
+/* ── v1.1.84 · Botón TIENDA (venta de productos sin cita) ── */
+.ks-tienda {
+  border: 1px solid #0f766e; background: #0f766e; color: #fff;
+  padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  margin-right: 8px;
+}
+.ks-tienda:hover { filter: brightness(1.08); }
 .ft-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
 .ft-modal { background: #fff; border-radius: 14px; width: min(760px,96vw); max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
 .ft-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 20px; border-bottom: 1px solid var(--ks-line); }
@@ -2473,6 +2498,7 @@ button { font-family: inherit; cursor: pointer; }
       this._addSvcComplSel = {};
       this._addCmpUid = '';            // "⛓ Complemento": selección
       this._addCmpVarIdx = 0;
+      this._tiendaEsperandoCliente = false;  // alta de cliente desde TIENDA
       this._reservando = false;
       this._pagando = false;
       this._modalReserva = null;
@@ -3120,8 +3146,23 @@ button { font-family: inherit; cursor: pointer; }
         case 'tarjetaEmitido': this._onEspEmitido('tarjeta', p.data); break;
         case 'clienteCreado': {
           const r = p.data || {};
-          if (r.ok && r.cliente) { this._closeBlankForm(); this._seleccionarCliente(r.cliente); this._toast('Cliente creado'); }
-          else { this._toast('Error: ' + (r.error?.message || 'no se pudo crear')); }
+          if (r.ok && r.cliente) {
+            this._closeBlankForm();
+            this._seleccionarCliente(r.cliente);
+            this._toast('Cliente creado');
+            // v1.1.84 — si el alta venía del botón TIENDA, encadenar la venta.
+            if (this._tiendaEsperandoCliente) {
+              this._tiendaEsperandoCliente = false;
+              this._abrirVentaTienda();
+            }
+          } else {
+            this._toast('Error: ' + (r.error?.message || 'no se pudo crear'));
+            if (this._tiendaEsperandoCliente) {
+              this._tiendaEsperandoCliente = false;
+              const bTd = this.shadowRoot.getElementById('tdOk');
+              if (bTd) bTd.disabled = false;
+            }
+          }
           break;
         }
         // v1.1.33 — Respuesta al editar contacto.
@@ -3430,6 +3471,7 @@ button { font-family: inherit; cursor: pointer; }
             </div>
             <div class="ks-brandhint">Recepción PRO · agenda operativa · CMS-first</div>
             <div class="ks-brandactions">
+              <button class="ks-tienda" id="tiendaBtn">🛍 TIENDA</button>
               <button class="ks-fichatec" id="ftBtn">🎨 FICHA TÉCNICA</button>
               <button class="ks-almacen" id="almBtn">🗄️ ALMACÉN</button>
               <button class="ks-especiales" id="espBtn">✦ ESPECIALES</button>
@@ -3558,6 +3600,9 @@ button { font-family: inherit; cursor: pointer; }
       // v1.1.77 — FICHA TÉCNICA
       const ftBtnEl = root.getElementById('ftBtn');
       if (ftBtnEl) ftBtnEl.addEventListener('click', () => this._openFichaTecnica());
+      // v1.1.84 — TIENDA: venta de productos a alguien que entra sin cita.
+      const tiendaBtnEl = root.getElementById('tiendaBtn');
+      if (tiendaBtnEl) tiendaBtnEl.addEventListener('click', () => this._openTiendaModal());
 
       // ── Datepicker (V1) ──
       const openDp = (e) => { e.stopPropagation(); this._openDatePicker(); };
@@ -6539,20 +6584,96 @@ button { font-family: inherit; cursor: pointer; }
     // v1.1.17 — PRODUCTO (modal completo estilo V1: buscador + lista
     // + carrito + métodos de pago + REGISTRAR VENTA). Venta independiente
     // vinculada al packId (reservaId), no se mete en precioTotal.
-    _openAddProductoModal(r) {
-      // Cliente provisional: no se pueden vender productos sin contactId
+    // ═══════════════════════════════════════════════════
+    // v1.1.84 — TIENDA · venta de productos SIN CITA
+    //
+    // Reutiliza íntegro el modal de venta desde cita (buscador, carrito,
+    // variantes, métodos de pago, MISSING_VARIANT). La única diferencia es
+    // que no viaja `packId`: la venta queda registrada contra el contacto,
+    // sin cita asociada.
+    //
+    // Cliente: se toma el que esté cargado en el aside. Si no hay ninguno,
+    // o el que hay es provisional, se pide nombre + teléfono o email y se
+    // crea el contacto al vuelo (mismo circuito que "+ Cliente nuevo").
+    // No hay venta anónima: venderProductosDesdeAgenda exige contactId
+    // porque genera un pedido real de tienda.
+    // ═══════════════════════════════════════════════════
+    _openTiendaModal() {
+      if (!this._puede('cobrar')) { this._toast('No tienes permiso para esta acción'); return; }
+      const cli = this._cliente;
+      if (cli && cli.contactId && !cli.esProvisional) { this._abrirVentaTienda(); return; }
+      this._openTiendaClienteForm();
+    }
+
+    // Mini-formulario de identificación. Se prerrellena con lo que haya
+    // en el aside (caso típico: cliente provisional con solo el nombre).
+    _openTiendaClienteForm() {
+      const cli = this._cliente || {};
+      const partes = String(cli.nombre || '').trim().split(' ');
+      const nomPrev = partes.shift() || '';
+      const apePrev = partes.join(' ');
+      const box = this._openSubModal(`
+        <div class="ks-modal-head"><span class="ks-modal-staff">🛍 TIENDA · CLIENTE</span><button class="ks-modal-x" id="tdX">✕</button></div>
+        <div style="margin-top:14px;font-size:13px;color:var(--ks-ink2);">La venta se registra a nombre de un cliente. Indica sus datos para darlo de alta.</div>
+        <div style="margin-top:14px;display:grid;gap:8px">
+          <input id="tdNombre" placeholder="Nombre *" value="${esc(nomPrev)}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">
+          <input id="tdApellido" placeholder="Apellidos" value="${esc(apePrev)}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">
+          <input id="tdTelefono" placeholder="Teléfono" value="${esc(cli.telefono || '')}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">
+          <input id="tdEmail" placeholder="Email" value="${esc(cli.email || '')}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">
+        </div>
+        <div style="margin-top:10px;font-size:11.5px;color:var(--ks-ink3);">Nombre y, al menos, teléfono o email.</div>
+        <div class="ks-modal-foot" style="margin-top:16px;">
+          <button class="ks-modal-close" id="tdCancel">Cancelar</button>
+          <button class="ks-pay" id="tdOk" style="background:var(--ks-ink);color:#fff;">Continuar</button>
+        </div>`);
+      box.querySelector('#tdX').addEventListener('click', () => this._closeSubModal());
+      box.querySelector('#tdCancel').addEventListener('click', () => this._closeSubModal());
+      box.querySelector('#tdOk').addEventListener('click', () => {
+        const nombre = box.querySelector('#tdNombre').value.trim();
+        const apellido = box.querySelector('#tdApellido').value.trim();
+        const telefono = box.querySelector('#tdTelefono').value.trim();
+        const email = box.querySelector('#tdEmail').value.trim();
+        if (!nombre) { this._toast('El nombre es obligatorio'); return; }
+        if (!telefono && !email) { this._toast('Indica teléfono o email'); return; }
+        box.querySelector('#tdOk').disabled = true;
+        // Bandera: al llegar 'clienteCreado' se abre la venta directamente.
+        this._tiendaEsperandoCliente = true;
+        this._sendToPage('crearCliente', { nombre, apellido, telefono, email });
+      });
+    }
+
+    // Abre el modal de venta con el cliente cargado y SIN cita asociada.
+    _abrirVentaTienda() {
+      const cli = this._cliente;
+      if (!cli || !cli.contactId) { this._toast('Falta identificar al cliente'); return; }
+      this._closeSubModal();
+      this._openAddProductoModal({
+        _id: '',                       // sin cita → el page code manda packId vacío
+        contactId: cli.contactId,
+        clientName: cli.nombre || '',
+        clientEmail: cli.email || '',
+        clientPhone: cli.telefono || ''
+      }, { titulo: `🛍 TIENDA · ${esc(cli.nombre || '')}` });
+    }
+
+    // v1.1.84 — `opts.titulo` permite reutilizar este mismo modal desde el
+    // botón TIENDA (venta sin cita). Sin opts, comportamiento de siempre.
+    _openAddProductoModal(r, opts) {
+      // Sin contactId no hay venta: venderProductosDesdeAgenda crea un
+      // pedido real de tienda contra un contacto y aborta sin él.
       const esProvisional = !r.contactId;
       if (esProvisional) {
         this._toast('Cliente provisional · convierte el cliente primero para vender productos');
         return;
       }
+      const tituloModal = (opts && opts.titulo) ? opts.titulo : `🛍 AÑADIR PRODUCTO · ${esc(r.clientName || '')}`;
       this._pendingProdReserva = r;
       this._productoCart = [];
       this._productoSearchQ = '';
       this._productoMetodoPago = 'Efectivo';
       this._productosCache = this._productosCache || null;
       const box = this._openSubModal(`
-        <div class="ks-modal-head"><span class="ks-modal-staff">🛍 AÑADIR PRODUCTO · ${esc(r.clientName || '')}</span><button class="ks-modal-x" id="pdX">✕</button></div>
+        <div class="ks-modal-head"><span class="ks-modal-staff">${tituloModal}</span><button class="ks-modal-x" id="pdX">✕</button></div>
         <div id="pdBody" style="margin-top:14px;font-size:13px;color:var(--ks-ink2);">Cargando catálogo…</div>
       `);
       box.id = 'subModalProducto';
