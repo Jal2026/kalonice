@@ -1,10 +1,14 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.36
+// VERSION: 1.0.37
 // FECHA: 4 de agosto de 2026
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
 //
+// v1.0.37: 🎚️ handleAgregarComplemento propaga `varianteSel` al backend
+//          agregarComplementoReserva v1.0.44. Mismo motivo que en v1.0.36
+//          con los servicios: sin ese campo, un complemento con variantes
+//          se añadía siempre a precio y duración base. Campo opcional.
 // v1.0.36: 🎚️ handleAgregarServicio propaga `varianteSel` y
 //          `complementosSetupUid` al backend agregarServicioReserva
 //          v1.0.43. Sin esos dos campos el servicio añadido entraba
@@ -506,7 +510,7 @@ import {
 // Nombre comprobado contra el resto de imports de este archivo: no colisiona.
 import { getFichaTecnicaCliente } from 'backend/memoriaLegacyLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.36]';
+const TAG = '[RecepcionProCMS v1.0.37]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -1468,10 +1472,12 @@ async function handleAgregarExtra(msg) {
   }
 }
 
+// v1.0.37 — + varianteSel (opcional). Lo envía el widget v1.1.83 desde el
+// modal "⛓ Complemento" cuando el complemento elegido tiene variantes.
 async function handleAgregarComplemento(msg) {
   try {
-    const { reservaId, setupUid } = msg || {};
-    const r = await agregarComplementoReserva({ reservaId, setupUid });
+    const { reservaId, setupUid, varianteSel } = msg || {};
+    const r = await agregarComplementoReserva({ reservaId, setupUid, varianteSel: varianteSel || null });
     sendResponse('complemento-agregado', r);
   } catch (e) {
     console.error(`${TAG} ❌ agregar-complemento:`, e);
