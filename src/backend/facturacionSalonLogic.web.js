@@ -1,10 +1,25 @@
 // =============================================================
 // facturacionSalonLogic.web.js
 // KAMISUITE V2 — Módulo de Facturación del Salón a sus Clientes
-// VERSION: 1.0.4
-// TAG: facturacion-salon-v1.0.4
+// VERSION: 1.0.5
+// TAG: facturacion-salon-v1.0.5
 // =============================================================
 // CHANGELOG:
+// v1.0.5 (2026-08-04) — La RAZÓN SOCIAL va al campo nativo del contacto
+//   - Se escribía en el extended field 'invoices.company', que no existe:
+//     Wix guarda la empresa en la propiedad NATIVA `info.company` del
+//     contacto (documentación de extended fields: nombre, empresa,
+//     teléfonos, direcciones y emails son propiedades por defecto). El CIF
+//     sí es extended field, creado por la app Wix Invoices.
+//     Consecuencia real: ninguna razón social se ha guardado nunca.
+//   - Riesgo colateral corregido: ambas escrituras iban en la MISMA
+//     llamada a updateContact, así que un rechazo de la clave inexistente
+//     se llevaba por delante también el CIF, con el error tragado en el
+//     catch. Ahora son dos llamadas independientes.
+//   - Lectura: la razón social se toma de `info.company`, con el extended
+//     field legacy como respaldo por si alguna ficha lo tuviera.
+//   - Cambio contenido en `_resolverDatosReceptor`. Nada más se toca.
+//
 // v1.0.4 (2026-08-04) — Documentos de VENTAS SIN CITA (botón TIENDA)
 //   - Problema: toda la emisión estaba anclada a `reservaId`. Una venta de
 //     productos de mostrador (Recepción PRO → TIENDA) no crea reserva, así
@@ -168,7 +183,7 @@ import { jsPDF } from 'jspdf';
 // CONSTANTES
 // -------------------------------------------------------------
 
-const VERSION = '1.0.4';
+const VERSION = '1.0.5';
 const TAG = `[FacturacionSalon][${VERSION}]`;
 
 const COL_INVOICES    = 'Invoices';
@@ -185,7 +200,11 @@ const DEFAULT_VAT_RATE       = 21;
 const DEFAULT_INVOICE_SERIES = 'F';
 const DEFAULT_TICKET_SERIES  = 'T';
 const FIELD_VAT_ID_CRM       = 'invoices.vatId';   // system field Wix Invoices
-const FIELD_LEGAL_NAME_CRM   = 'invoices.company'; // system field Wix Invoices (razón social)
+// v1.0.5 — 'invoices.company' NO existe como extended field en Wix. La
+// razón social es propiedad nativa del contacto (info.company). La
+// constante se conserva solo para LEER fichas antiguas que pudieran
+// tenerlo; nunca se escribe en ella.
+const FIELD_LEGAL_NAME_CRM   = 'invoices.company'; // legacy — solo lectura
 
 const MODO_TICKET  = 'ticket';
 const MODO_FACTURA = 'factura';
@@ -697,16 +716,31 @@ async function _resolverDatosReceptor({ contactId, vatId, legalName }) {
   // Caso 1: el operador acaba de añadirlos → persistir y devolver.
   if (vId) {
     if (contactId) {
+      // v1.0.5 — DOS escrituras SEPARADAS, a propósito:
+      //   · CIF/NIF  → extended field 'invoices.vatId' (campo de la app
+      //     Wix Invoices, visible en la ficha bajo "Facturas de Wix").
+      //   · Razón social → info.company, que es propiedad NATIVA del
+      //     contacto, no un extended field.
+      // Antes iban en la misma llamada y la razón social viajaba como
+      // extended field 'invoices.company', que no existe. Si Wix rechazaba
+      // esa clave, tumbaba la llamada entera y el CIF tampoco se guardaba.
+      // Separadas, un fallo no arrastra al otro.
+      const updateContactElev = elevate(contacts.updateContact);
       try {
-        const updateContactElev = elevate(contacts.updateContact);
-        const ext = { [FIELD_VAT_ID_CRM]: vId };
-        if (lName) ext[FIELD_LEGAL_NAME_CRM] = lName;
         await updateContactElev(contactId, {
-          info: { extendedFields: { items: ext } }
+          info: { extendedFields: { items: { [FIELD_VAT_ID_CRM]: vId } } }
         });
-        console.log(`${TAG} ✅ vatId/legalName persistidos en CRM ${contactId.substring(0, 8)}`);
+        console.log(`${TAG} ✅ vatId persistido en CRM ${contactId.substring(0, 8)}`);
       } catch (e) {
         console.warn(`${TAG} ⚠️ No se pudo persistir vatId en CRM: ${e.message}. Continuando con la emisión.`);
+      }
+      if (lName) {
+        try {
+          await updateContactElev(contactId, { info: { company: lName } });
+          console.log(`${TAG} ✅ Razón social persistida en info.company de ${contactId.substring(0, 8)}`);
+        } catch (e) {
+          console.warn(`${TAG} ⚠️ No se pudo persistir la razón social: ${e.message}. Continuando con la emisión.`);
+        }
       }
     }
     return { ok: true, vatId: vId, legalName: lName };
@@ -723,17 +757,24 @@ async function _resolverDatosReceptor({ contactId, vatId, legalName }) {
   const ef = contact?.info?.extendedFields || {};
   // Soporta tanto el formato plano (key→value) como items[].
   let efVat = ef[FIELD_VAT_ID_CRM] || '';
-  let efLegal = ef[FIELD_LEGAL_NAME_CRM] || '';
+  let efLegal = ef[FIELD_LEGAL_NAME_CRM] || '';   // legacy, casi siempre vacío
   if (!efVat && Array.isArray(ef.items)) {
     for (const it of ef.items) {
       if (it.key === FIELD_VAT_ID_CRM) efVat = it.value || '';
       if (it.key === FIELD_LEGAL_NAME_CRM) efLegal = it.value || '';
     }
   }
+  // v1.0.5 — la razón social se lee del campo nativo. El extended field
+  // legacy queda como respaldo por si alguna ficha lo tuviera.
+  const companyNativo = String(contact?.info?.company || '').trim();
   if (!efVat) {
     return { ok: false, error: 'Cliente sin CIF/NIF en su ficha — añádelo antes de emitir factura completa.' };
   }
-  return { ok: true, vatId: String(efVat), legalName: String(efLegal || '') };
+  return {
+    ok: true,
+    vatId: String(efVat),
+    legalName: companyNativo || String(efLegal || '')
+  };
 }
 
 // =============================================================
