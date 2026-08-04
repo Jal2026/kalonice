@@ -57,6 +57,30 @@
 //           para devolver invoiceId al widget → botón "Ver" vs "Factura".
 //       (3) venderProductosDesdeAgenda: graba invoiceId en el registro
 //           CMS al insertar + fullName en customer del invoice.
+// v1.5.11: SOPORTE DE VARIANTES (tamaños de bote 250ml / 1000ml).
+//       Causa del EMPTY_CHECKOUT al vender desde la agenda un producto
+//       con variantes: Wix Stores exige catalogReference.options.variantId
+//       cuando el producto tiene variantes gestionadas. El widget
+//       recepcionProCMS v1.1.25+ y el page code v1.0.13 ya lo soportaban;
+//       este backend se había quedado en v1.5.10 sin devolver variantes.
+//       (1) listarProductos: devuelve por producto
+//           variants:[{variantId,label,choices,price,sku,inStock}] y
+//           manageVariants:true SOLO cuando hay más de una variante.
+//           Sin variantes → respuesta idéntica a v1.5.10 (variants:[]).
+//       (2) venderProductosDesdeAgenda: acepta variantId + variantLabel
+//           por item. Si llega variantId → catalogReference.options.
+//           Pre-validación: item sin variantId cuyo producto tiene >1
+//           variante → error 'MISSING_VARIANT' con las variantes
+//           disponibles, en vez del opaco EMPTY_CHECKOUT de Wix.
+//           variantLabel se añade al nombre en PaymentReservations y
+//           en la factura: "🛒 ARTEMISA CHAMPÚ · 250ml (22.45€)".
+//       Patrón getProductVariants copiado literal de
+//       tiendaEdicionLogic.web.js (líneas 187/243/703 de este mismo
+//       salón): elevate(getProductVariants)(productId) y lectura
+//       defensiva Array.isArray(res) ? res : (res?.items || []).
+//       NO se tocan registrarVenta, generarFacturaProducto,
+//       obtenerHistorialVentas, cargarContactosTienda ni el bloque
+//       CMS-first de PaymentReservations.
 // =====================================================
 
 import { webMethod, Permissions } from 'wix-web-module';
@@ -66,9 +90,10 @@ import { checkout, orderTransactions, orders } from 'wix-ecom-backend';
 import { generalInfo } from 'wix-site-backend';
 import { contacts } from 'wix-crm-backend';
 import { invoices } from 'wix-billing-backend';
+import { getProductVariants } from 'wix-stores-backend';
 
 const TAG = '[TiendaProductos]';
-const VERSION = "1.5.10";
+const VERSION = "1.5.11";
 
 // AppId de Wix Stores para catalogReference en eCommerce
 const STORES_APP_ID = '215238eb-22a5-4c36-9e7b-e7c08025e04e';
@@ -107,9 +132,101 @@ function formatearContacto(contact) {
 }
 
 // =====================================================
+// UTILIDADES DE VARIANTES (v1.5.11)
+// =====================================================
+// Patrón copiado literal de tiendaEdicionLogic.web.js (mismo salón,
+// en producción): elevate(getProductVariants)(productId), y lectura
+// defensiva del resultado porque Wix V1 devuelve unas veces el array
+// directo y otras {items:[...]}.
+//
+// Wix Stores crea SIEMPRE al menos una variante por producto (la
+// "default variant") aunque manageVariants sea false. Por eso el
+// criterio de "producto con variantes reales" es: MÁS DE UNA variante.
+// =====================================================
+
+async function leerVariantesCrudas(productId) {
+  const elevatedGetVariants = elevate(getProductVariants);
+  const vResult = await elevatedGetVariants(productId);
+  return Array.isArray(vResult) ? vResult : (vResult?.items || []);
+}
+
+// Normaliza una variante cruda de Wix al contrato que consume el
+// widget recepcionProCMS: {variantId, label, choices, price, sku, inStock}
+function normalizarVariante(v, precioProducto) {
+  const variantId = v?._id || v?.id || '';
+  const choices = v?.choices || v?.variant?.choices || {};
+
+  // label = valores de las choices ("250ml", "1000ml", "Rojo · L")
+  let label = '';
+  try {
+    const vals = Object.values(choices).filter(x => x !== null && x !== undefined && String(x).trim() !== '');
+    label = vals.map(x => String(x).trim()).join(' · ');
+  } catch (_) { label = ''; }
+  if (!label) label = 'Variante';
+
+  // Precio: en Wix V1 la variante expone priceData.price. Se leen los
+  // paths conocidos en cascada y, como último recurso, el precio del
+  // producto padre (nunca undefined hacia el widget).
+  const price = Number(
+    v?.variant?.priceData?.price
+    ?? v?.variant?.price
+    ?? v?.priceData?.price
+    ?? v?.price
+    ?? precioProducto
+    ?? 0
+  ) || 0;
+
+  const sku = v?.variant?.sku ?? v?.sku ?? '';
+
+  // Stock: si el seguimiento de inventario está apagado, inStock viene
+  // true y quantity null. Se respeta el booleano si existe.
+  let inStock = true;
+  const invStatus = v?.variant?.inventoryStatus || v?.inventoryStatus || null;
+  if (invStatus && typeof invStatus.inStock === 'boolean') {
+    inStock = invStatus.inStock;
+  } else if (typeof v?.inStock === 'boolean') {
+    inStock = v.inStock;
+  } else if (invStatus && typeof invStatus.quantity === 'number') {
+    inStock = invStatus.quantity > 0;
+  }
+
+  return { variantId, label, choices, price: Math.round(price * 100) / 100, sku: String(sku || ''), inStock };
+}
+
+// Devuelve {variants:[], manageVariants:bool} para un producto.
+// NUNCA lanza: si la lectura falla, el producto se comporta como simple
+// (exactamente igual que en v1.5.10).
+async function obtenerVariantesNormalizadas(productId, precioProducto) {
+  try {
+    const arr = await leerVariantesCrudas(productId);
+    if (!Array.isArray(arr) || arr.length <= 1) {
+      return { variants: [], manageVariants: false };
+    }
+    const variants = arr
+      .map(v => normalizarVariante(v, precioProducto))
+      .filter(v => v.variantId);
+    return { variants, manageVariants: variants.length > 1 };
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ getProductVariants FAIL para ${productId}:`, e.message);
+    return { variants: [], manageVariants: false };
+  }
+}
+
+// Ejecuta tareas en tandas para no saturar la API de Wix.
+async function enTandas(lista, tamano, fn) {
+  const out = [];
+  for (let i = 0; i < lista.length; i += tamano) {
+    const tanda = lista.slice(i, i + tamano);
+    const res = await Promise.all(tanda.map(fn));
+    out.push(...res);
+  }
+  return out;
+}
+
+// =====================================================
 // 1. LISTAR PRODUCTOS (vía wixData — Stores/Products)
 // =====================================================
-// ── SIN CAMBIOS v1.4 ──
+// ── v1.5.11: + variants[] y manageVariants por producto ──
 export const listarProductos = webMethod(
   Permissions.Anyone,
   async () => {
@@ -173,9 +290,78 @@ export const listarProductos = webMethod(
           description: prod.description || '',
           ribbon: prod.ribbon || '',
           collections: prodCollections,
-          productPageUrl: prod.productPageUrl || ''
+          productPageUrl: prod.productPageUrl || '',
+          // v1.5.11 — se rellenan más abajo. Por defecto, producto simple.
+          variants: [],
+          manageVariants: false
         };
       });
+
+      // ─────────────────────────────────────────────────────────────
+      // v1.5.11 — VARIANTES (tamaños de bote 250ml / 1000ml ...)
+      // ─────────────────────────────────────────────────────────────
+      // Wix exige catalogReference.options.variantId al vender un
+      // producto con variantes. Para que el widget pueda ofrecerlas,
+      // aquí se leen y se adjuntan.
+      //
+      // Candidatos: productos marcados en la colección como
+      // manageVariants o con productOptions. Si la fila de
+      // Stores/Products no expone esos campos (no hay ningún
+      // candidato), se recorren TODOS los productos como red de
+      // seguridad — es la única forma de garantizar que un producto
+      // con dos tamaños se detecta.
+      // ─────────────────────────────────────────────────────────────
+      try {
+        const t0v = Date.now();
+
+        const tieneOpciones = (prod) => {
+          if (prod?.manageVariants === true) return true;
+          const po = prod?.productOptions;
+          if (!po) return false;
+          if (Array.isArray(po)) return po.length > 0;
+          if (typeof po === 'object') return Object.keys(po).length > 0;
+          return false;
+        };
+
+        let candidatos = items.filter(tieneOpciones);
+        let modo = 'campos';
+        if (candidatos.length === 0) {
+          candidatos = items;
+          modo = 'barrido completo';
+        }
+        console.log(`${TAG} 🔎 Variantes: ${candidatos.length} candidato(s) [${modo}]`);
+
+        // Log diagnóstico de la estructura cruda (una sola vez), mismo
+        // patrón que tiendaEdicionLogic usa para el coste por variante.
+        if (candidatos.length) {
+          try {
+            const muestra = await leerVariantesCrudas(candidatos[0]._id);
+            if (muestra.length) {
+              console.log(`${TAG} 🔎 sample variant: ${JSON.stringify(muestra[0]).substring(0, 400)}`);
+            }
+          } catch (_) {}
+        }
+
+        const porId = new Map(lista.map(p => [p.id, p]));
+
+        await enTandas(candidatos, 8, async (prod) => {
+          const destino = porId.get(prod._id);
+          if (!destino) return null;
+          const { variants, manageVariants } = await obtenerVariantesNormalizadas(prod._id, destino.price);
+          if (manageVariants) {
+            destino.variants = variants;
+            destino.manageVariants = true;
+            console.log(`${TAG} 🎚 ${destino.name}: ${variants.length} variantes → ${variants.map(v => `${v.label} ${v.price}€`).join(' | ')}`);
+          }
+          return null;
+        });
+
+        const conVar = lista.filter(p => p.manageVariants).length;
+        console.log(`${TAG} ✅ Variantes resueltas: ${conVar} producto(s) con variantes (${((Date.now() - t0v) / 1000).toFixed(1)}s)`);
+      } catch (varErr) {
+        // Best-effort: si falla, la respuesta es la de v1.5.10.
+        console.warn(`${TAG} ⚠️ Bloque de variantes falló (catálogo devuelto sin variantes):`, varErr.message);
+      }
 
       lista.forEach(p => {
         console.log(`${TAG} 📌 ${p.name} | ${p.id} | ${p.price} | stock:${p.inStock}`);
@@ -856,6 +1042,47 @@ export const venderProductosDesdeAgenda = webMethod(
         if (!it.price || it.price <= 0) throw new Error(`Item ${it.productName || it.productId}: price debe ser > 0`);
       }
 
+      // ── 0b. v1.5.11: pre-validación de variantes ──
+      // Wix Stores rechaza el checkout con EMPTY_CHECKOUT (mensaje
+      // opaco) si un producto con variantes llega sin variantId. Aquí
+      // se detecta antes y se devuelve MISSING_VARIANT con la lista de
+      // variantes, que el page code v1.0.13 propaga al widget.
+      const missingVariants = [];
+      for (const it of items) {
+        if (it.variantId) continue;
+        try {
+          const arr = await leerVariantesCrudas(it.productId);
+          if (Array.isArray(arr) && arr.length > 1) {
+            missingVariants.push({
+              productId: it.productId,
+              productName: it.productName || '',
+              variants: arr.map(v => normalizarVariante(v, it.price)).filter(v => v.variantId)
+            });
+          }
+        } catch (vErr) {
+          // Si no se pueden leer las variantes, se deja continuar: el
+          // comportamiento es el de v1.5.10 (Wix decidirá).
+          console.warn(`${TAG} ⚠️ Pre-validación de variantes falló para ${it.productId}:`, vErr.message);
+        }
+      }
+      if (missingVariants.length) {
+        console.warn(`${TAG} ⛔ MISSING_VARIANT: ${missingVariants.map(m => m.productName || m.productId).join(', ')}`);
+        return {
+          ok: false,
+          error: 'MISSING_VARIANT',
+          message: `Selecciona el tamaño/variante de: ${missingVariants.map(m => m.productName || m.productId).join(', ')}`,
+          missingVariants,
+          version: VERSION
+        };
+      }
+
+      // v1.5.11: nombre mostrado = producto + variante ("· 250ml")
+      const nombreConVariante = (it) => {
+        const base = (it.productName || 'Producto').trim();
+        const lbl = (it.variantLabel || '').trim();
+        return lbl ? `${base} · ${lbl}` : base;
+      };
+
       const cur = currency || 'EUR';
       const totalItems = items.reduce((acc, it) => acc + (it.quantity || 1), 0);
       const totalImporte = items.reduce((acc, it) => acc + (parseFloat(it.price) * (it.quantity || 1)), 0);
@@ -917,13 +1144,21 @@ export const venderProductosDesdeAgenda = webMethod(
       if (emailValido) buyerInfo.email = emailValido;
 
       const checkoutOptions = {
-        lineItems: items.map(it => ({
-          quantity: it.quantity || 1,
-          catalogReference: {
+        lineItems: items.map(it => {
+          // v1.5.11: si el item trae variantId, Wix lo exige dentro de
+          // catalogReference.options. Sin él → EMPTY_CHECKOUT.
+          const catalogReference = {
             appId: STORES_APP_ID,
             catalogItemId: it.productId
+          };
+          if (it.variantId) {
+            catalogReference.options = { variantId: it.variantId };
           }
-        })),
+          return {
+            quantity: it.quantity || 1,
+            catalogReference
+          };
+        }),
         channelType: 'POS',
         buyerNote: `[KAMISUITE]${JSON.stringify({
           packId: packId || '',
@@ -995,7 +1230,7 @@ export const venderProductosDesdeAgenda = webMethod(
           const qty = it.quantity || 1;
           const baseImponible = Math.round((precioConIVA / IVA_DIVISOR) * 100) / 100;
           return {
-            name: (it.productName || 'Producto').trim(),
+            name: nombreConVariante(it),
             description: `POS · ${metodoPago || 'Offline'}${orderId ? ' · Pedido ' + orderId.substring(0, 8) : ''}`,
             price: baseImponible,
             quantity: qty,
@@ -1084,7 +1319,7 @@ export const venderProductosDesdeAgenda = webMethod(
         } else {
           // Construir descripción: "🛒 Producto1 (X€), 🛒 Producto2 (Y€)"
           const descripcionProductos = items.map(it => {
-            const nombre = (it.productName || 'Producto').trim();
+            const nombre = nombreConVariante(it);   // v1.5.11: "MARCA · 250ml"
             const qty = it.quantity || 1;
             const precioUnit = parseFloat(it.price) || 0;
             const subtotal = Math.round(precioUnit * qty * 100) / 100;
