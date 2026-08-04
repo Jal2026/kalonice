@@ -1,5 +1,5 @@
 // =====================================================
-// HTTP FUNCTIONS - Descarga Excel/PDF + WhatsApp Webhook + AKIRA 
+// HTTP FUNCTIONS - Descarga Excel/PDF + WhatsApp Webhook + AKIRA  
 // =====================================================
 // Archivo: backend/http-functions.js
 // URLs:
