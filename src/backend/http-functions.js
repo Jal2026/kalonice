@@ -8,9 +8,22 @@
 //   https://www.hair-times.com/_functions/whatsappWebhook  (GET=verificación, POST=mensajes entrantes)
 //   https://www.hair-times.com/_functions/akiraAsk         (POST=pregunta a AKIRA)
 //   https://www.hair-times.com/_functions/akiraTts         (POST=voz de AKIRA)
+//   https://www.peluqueriakalonice.es/_functions/recuperarContactos?token=...&desde=0&hasta=50
+//                                                          (GET=recuperación one-shot, KALÓNICE)
 //
 // CHANGELOG
 // ---------
+// v1.4.0 (4-Ago-2026)
+//   - Añadido GET get_recuperarContactos() — recuperación one-shot de
+//     las 766 fichas que el importador del Dashboard descartó por móvil
+//     compartido en la importación SADPE del 06-jun-2026 (KALÓNICE).
+//   - Llama a recuperarContactosCore (función PURA) de
+//     backend/recuperarContactos.web.js, NO al webMethod: este archivo
+//     corre sin sesión de miembro. Mismo criterio que akiraSynthesizeCore.
+//   - Protegido con TOKEN_RECUPERACION en query string.
+//   - BLOQUE DESECHABLE: se elimina al cerrar la recuperación, junto con
+//     backend/recuperarContactos.web.js. Mismo trato que dumpReservasV1.
+//   - Aditivo puro: Excel, PDF, WhatsApp, AKIRA y dumpReservasV1 intactos.
 // v1.3.0 (17-Jul-2026)
 //   - Añadido POST post_akiraTts() — voz de AKIRA (Google Cloud TTS)
 //   - Añadido import de akiraSynthesize desde backend/akiraTTS.web
@@ -40,6 +53,8 @@ import { askAkiraCore } from 'backend/akiraLogic.web';
 import { akiraSynthesizeCore } from 'backend/akiraTTS.web';
 
 const COLECCION_PAGOS = 'PaymentReservations';
+// v1.4.0 — token del endpoint one-shot de recuperación (bloque desechable)
+const TOKEN_RECUPERACION = 'KL-REC-2026-0804';
 const TAG_WA = '[WhatsApp Webhook]';
 const TAG_AKIRA = '[AKIRA HTTP]';
 
@@ -690,6 +705,62 @@ export async function get_dumpReservasV1(request) {
 
     } catch (error) {
         console.error('[HTTP] Error dumpReservasV1:', error);
+        return serverError({ body: error.message });
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GET: Recuperar Contactos — one-shot recuperación SADPE (KALÓNICE, ago 2026)
+//
+// URL:
+//   https://www.peluqueriakalonice.es/_functions/recuperarContactos
+//        ?token=KL-REC-2026-0804&desde=0&hasta=50[&dryRun=1]
+//
+// Recrea las 766 fichas que el importador del Dashboard descartó porque su
+// móvil ya existía en el CRM (grupos familiares que comparten número).
+// Procesa el tramo [desde, hasta) y devuelve JSON con el detalle ficha a
+// ficha y la URL del tramo siguiente.
+//
+// Es IDEMPOTENTE: antes de crear comprueba teléfono + nombre + apellido.
+// Relanzar un tramo ya hecho devuelve YA_EXISTE y no duplica.
+//
+// Este bloque se ELIMINA tras cerrar la recuperación, junto con el archivo
+// backend/recuperarContactos.web.js. Mismo trato que dumpReservasV1.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function get_recuperarContactos(request) {
+    try {
+        const token = request.query.token || '';
+        if (token !== TOKEN_RECUPERACION) {
+            return forbidden({ body: 'Token inválido' });
+        }
+
+        const desde  = parseInt(request.query.desde, 10);
+        const hasta  = parseInt(request.query.hasta, 10);
+        const dryRun = request.query.dryRun === '1' || request.query.dryRun === 'true';
+
+        if (Number.isNaN(desde) || Number.isNaN(hasta)) {
+            return badRequest({ body: 'Faltan parámetros desde / hasta (enteros)' });
+        }
+
+        // Import dinámico — mismo patrón que get_dumpReservasV1.
+        // Se importa la función PURA, no el webMethod: este archivo corre
+        // SIN sesión de miembro (ver aviso de akiraSynthesizeCore arriba).
+        const { recuperarContactosCore } = await import('backend/recuperarContactos.web.js');
+        const result = await recuperarContactosCore({ desde, hasta, dryRun });
+
+        if (!result || !result.ok) {
+            return serverError({ body: result?.error || 'Error desconocido en recuperarContactos' });
+        }
+
+        return ok({
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(result, null, 2)
+        });
+
+    } catch (error) {
+        console.error('[HTTP] Error recuperarContactos:', error);
         return serverError({ body: error.message });
     }
 }
