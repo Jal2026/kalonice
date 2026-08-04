@@ -1,5 +1,5 @@
 // =====================================================
-// HTTP FUNCTIONS - Descarga Excel/PDF + WhatsApp Webhook + AKIRA  
+// HTTP FUNCTIONS - Descarga Excel/PDF + WhatsApp Webhook + AKIRA
 // =====================================================
 // Archivo: backend/http-functions.js
 // URLs:
@@ -13,6 +13,12 @@
 //
 // CHANGELOG
 // ---------
+// v1.4.3 (4-Ago-2026)
+//   - get_recuperarContactos: se pasa también `modo` al core
+//     (recuperarContactos.web.js v1.1.0). &modo=nombres normaliza a
+//     formato normal los nombres en MAYÚSCULAS del lote recuperado.
+//     Sin el parámetro, el comportamiento es el de creación de v1.4.2.
+//
 // v1.4.2 (4-Ago-2026)
 //   - get_recuperarContactos: modo &auto=1. Devuelve una página HTML que
 //     se recarga sola con el tramo siguiente (meta refresh) hasta agotar
@@ -755,6 +761,8 @@ export async function get_recuperarContactos(request) {
         // v1.4.1 — skipCheck omite el volcado de la CRM. Solo para tramos ya
         // verificados: sin él NO hay protección contra crear duplicados.
         const skipCheck = request.query.skipCheck === '1' || request.query.skipCheck === 'true';
+        // v1.4.3 — modo: 'crear' (por defecto) o 'nombres'.
+        const modo      = request.query.modo === 'nombres' ? 'nombres' : 'crear';
 
         if (Number.isNaN(desde) || Number.isNaN(hasta)) {
             return badRequest({ body: 'Faltan parámetros desde / hasta (enteros)' });
@@ -766,7 +774,7 @@ export async function get_recuperarContactos(request) {
         const { recuperarContactosCore } = await import('backend/recuperarContactos.web.js');
         const auto = request.query.auto === '1' || request.query.auto === 'true';
 
-        const result = await recuperarContactosCore({ desde, hasta, dryRun, skipCheck });
+        const result = await recuperarContactosCore({ desde, hasta, dryRun, skipCheck, modo });
 
         if (!result || !result.ok) {
             return serverError({ body: result?.error || 'Error desconocido en recuperarContactos' });
@@ -796,6 +804,7 @@ export async function get_recuperarContactos(request) {
             + '?token=' + encodeURIComponent(token)
             + (dryRun ? '&dryRun=1' : '')
             + (skipCheck ? '&skipCheck=1' : '')
+            + (modo === 'nombres' ? '&modo=nombres' : '')
             + '&auto=1&accC=' + accC + '&accS=' + accS + '&accE=' + accE;
         const urlSiguiente = base + '&desde=' + hecho + '&hasta=' + Math.min(total, hecho + tam);
 
@@ -827,13 +836,13 @@ export async function get_recuperarContactos(request) {
             + '.foot{font-size:12px;color:#9a9aae;margin-top:20px;line-height:1.6}'
             + 'ul{font-size:13px;color:#c0392b;padding-left:20px}'
             + '</style></head><body><div class="card">'
-            + '<h1>Recuperando contactos' + (dryRun ? ' (simulación)' : '') + '</h1>'
+            + '<h1>' + (modo === 'nombres' ? 'Normalizando nombres' : 'Recuperando contactos') + (dryRun ? ' (simulación)' : '') + '</h1>'
             + '<p class="sub">' + hecho + ' de ' + total + ' fichas procesadas</p>'
             + '<div class="bar"><div class="fill" style="width:' + pct + '%"></div></div>'
             + '<p class="pct">' + pct + '%</p>'
             + '<div class="grid">'
-            + '<div class="box"><span class="num ok">' + accC + '</span><span class="lbl">Creados</span></div>'
-            + '<div class="box"><span class="num warn">' + accS + '</span><span class="lbl">Ya estaban</span></div>'
+            + '<div class="box"><span class="num ok">' + accC + '</span><span class="lbl">' + (modo === 'nombres' ? 'Corregidos' : 'Creados') + '</span></div>'
+            + '<div class="box"><span class="num warn">' + accS + '</span><span class="lbl">' + (modo === 'nombres' ? 'Ya estaban bien' : 'Ya estaban') + '</span></div>'
             + '<div class="box"><span class="num err">' + accE + '</span><span class="lbl">Errores</span></div>'
             + '</div>'
             + (fallos ? '<ul>' + fallos + '</ul>' : '')
