@@ -1,5 +1,5 @@
-// e=====================================================
-// [RecuperarContactos v1.0.4] - recuperarContactos.web.js
+// =====================================================
+// [RecuperarContactos v1.1.0] - recuperarContactos.web.js
 //
 // BACKEND ONE-SHOT — RECUPERACIÓN DE CONTACTOS PERDIDOS
 // EN LA IMPORTACIÓN SADPE → WIX CRM (KALÓNICE, agosto 2026)
@@ -71,6 +71,26 @@
 // -----------------------------------------------------------------
 // CHANGELOG
 // -----------------------------------------------------------------
+// v1.1.0 (4-ago-2026) — MODO NOMBRES. Las 727 fichas creadas por la
+//   recuperación quedaron EN MAYÚSCULAS, porque SADPE almacena así y se
+//   volcó literal. Se añade un segundo modo que recorre los contactos con
+//   la etiqueta del lote y reescribe el nombre a formato normal
+//   ("INMA HERNANDEZ VILLATORO" → "Inma Hernandez Villatoro").
+//   · Se activa con modo:'nombres'. Sin ese parámetro el comportamiento
+//     es idéntico a v1.0.4 (creación).
+//   · NO se añaden tildes. SADPE guarda sin acentos y ponerlos exigiría
+//     inventar sobre nombres propios. "Hernandez" queda sin tilde.
+//   · Partículas en minúscula (de, del, la, las, los, y, e, da, dos) salvo
+//     al inicio. Romanos (II, III, IV) intactos. Guiones y apóstrofes
+//     respetados (Sanz-Briz, O'Donnell).
+//   · Solo actúa sobre contactos que estén ÍNTEGRAMENTE en mayúsculas.
+//     Si el nombre ya tiene minúsculas, lo deja como está.
+//   · Patrón COPIADO de clienteAreaLogic.web.js updatePerfilCliente
+//     (líneas 1602-1660): READ-MERGE-UPDATE obligatorio — getContact para
+//     obtener revision, luego updateContact({contactId, revision}, info,
+//     {suppressAuth:true}).
+//   · Reutiliza presupuesto, corte con reserva y modo &auto=1.
+//
 // v1.0.4 (4-ago-2026) — GARANTÍA ANTI-504. Cierra la incertidumbre que
 //   arrastraban v1.0.2 y v1.0.3 sobre el timeout de las http-functions.
 //   · PRESUPUESTO_MS baja de 20000 a 9000. Único dato empírico
@@ -160,8 +180,8 @@ import { webMethod, Permissions } from 'wix-web-module';
 import { elevate } from 'wix-auth';
 import { contacts } from 'wix-crm-backend';
 
-const VERSION = 'v1.0.4';
-const TAG = '[RecuperarContactos v1.0.4]';
+const VERSION = 'v1.1.0';
+const TAG = '[RecuperarContactos v1.1.0]';
 
 const ETIQUETA_LOTE = 'Kalonice recuperados';
 
@@ -1014,6 +1034,183 @@ async function leerYaCreados(elevatedQuery, labelKey) {
   return claves;
 }
 
+
+// =====================================================
+// capitalizar — "INMA HERNANDEZ VILLATORO" → "Inma Hernandez Villatoro"
+//
+// v1.1.0. NO añade tildes: SADPE guarda sin acentos y ponerlos exigiría
+// inventar sobre nombres propios.
+// Respeta guiones y apóstrofes (Sanz-Briz, O'Donnell), deja los números
+// romanos intactos y pone en minúscula las partículas salvo al inicio.
+// =====================================================
+const PARTICULAS = new Set(['de', 'del', 'la', 'las', 'lo', 'los', 'y', 'e', 'da', 'das', 'do', 'dos', 'van', 'von', 'di', 'el']);
+const ROMANOS = /^(?:X{0,3})(?:IX|IV|V?I{0,3})$/;
+
+function capitalizar(txt) {
+  const s = String(txt || '').trim().replace(/\s+/g, ' ');
+  if (!s) return '';
+
+  return s.split(' ').map((palabra, idx) => {
+    if (!palabra) return palabra;
+
+    // Números romanos: se dejan tal cual (II, III, IV...)
+    if (palabra.length > 1 && ROMANOS.test(palabra)) return palabra;
+
+    const bajo = palabra.toLowerCase();
+
+    // Partículas en minúscula, salvo si abren el nombre
+    if (idx > 0 && PARTICULAS.has(bajo)) return bajo;
+
+    // Capitaliza cada segmento separado por guion o apóstrofe
+    return bajo.replace(/(^|[-'\u2019])([a-záéíóúüñç])/g, (m, sep, c) => sep + c.toUpperCase());
+  }).join(' ');
+}
+
+// ¿Está el texto íntegramente en mayúsculas?
+function esTodoMayusculas(txt) {
+  const s = String(txt || '');
+  if (!/[A-ZÁÉÍÓÚÜÑ]/.test(s)) return false;
+  return s === s.toUpperCase();
+}
+
+// =====================================================
+// modoNombres — reescribe a formato normal los nombres en mayúsculas
+// de los contactos con la etiqueta del lote.
+//
+// READ-MERGE-UPDATE obligatorio (clienteAreaLogic líneas 1613-1657):
+// getContact → revision → updateContact({contactId, revision}, ...).
+// =====================================================
+async function modoNombres({ elevatedQuery, elevatedFindLabel, t0, desde, hasta, dryRun }) {
+
+  const elevatedGet    = elevate(contacts.getContact);
+  const elevatedUpdate = elevate(contacts.updateContact);
+
+  // Etiqueta del lote
+  let labelKey = null;
+  try {
+    const resp = await elevatedFindLabel(ETIQUETA_LOTE);
+    labelKey = resp?.label?.key || null;
+  } catch (e) {
+    return { ok: false, version: VERSION, error: `No se pudo resolver la etiqueta: ${e.message}` };
+  }
+  if (!labelKey) {
+    return { ok: false, version: VERSION, error: `Etiqueta "${ETIQUETA_LOTE}" no encontrada` };
+  }
+
+  // Volcado de los contactos etiquetados (patrón adserverLogic 204-245)
+  const todos = [];
+  let hasMore = true;
+  let cursorPaging = undefined;
+  while (hasMore) {
+    const qb = elevatedQuery().hasSome('info.labelKeys', [labelKey]).limit(100);
+    const result = cursorPaging ? await cursorPaging.next() : await qb.find({ suppressAuth: true });
+    for (const c of (result.items || [])) {
+      todos.push({
+        id: c._id || c.id,
+        first: c.info?.name?.first || '',
+        last: c.info?.name?.last || ''
+      });
+    }
+    hasMore = result.hasNext && result.hasNext();
+    if (hasMore) cursorPaging = result;
+  }
+
+  const ini = Math.max(0, parseInt(desde, 10) || 0);
+  const fin = Math.min(todos.length, parseInt(hasta, 10) || 0);
+
+  console.log(`${TAG} MODO NOMBRES · etiquetados=${todos.length} · tramo [${ini}, ${fin}) · ${Date.now() - t0} ms`);
+
+  const detalle = [];
+  let creados = 0, saltados = 0, errores = 0;
+  let cortadoEn = null;
+  let iteraciones = 0, msIteraciones = 0;
+  let i = ini;
+
+  for (; i < fin; i++) {
+    const tIter = Date.now();
+    const mediaIter = iteraciones > 0 ? (msIteraciones / iteraciones) : 1500;
+    if ((tIter - t0) + (mediaIter * MARGEN_RESERVA) > PRESUPUESTO_MS) {
+      cortadoEn = i;
+      console.warn(`${TAG} CORTE con reserva en i=${i}`);
+      break;
+    }
+
+    const c = todos[i];
+    const actual = `${c.first} ${c.last}`.trim();
+
+    try {
+      if (!esTodoMayusculas(c.first) && !esTodoMayusculas(c.last)) {
+        saltados++;
+        detalle.push({ i, nombre: actual, estado: 'YA_OK' });
+        continue;
+      }
+
+      const nFirst = capitalizar(c.first);
+      const nLast  = capitalizar(c.last);
+
+      if (nFirst === c.first && nLast === c.last) {
+        saltados++;
+        detalle.push({ i, nombre: actual, estado: 'SIN_CAMBIO' });
+        continue;
+      }
+
+      if (dryRun) {
+        creados++;
+        detalle.push({ i, nombre: actual, estado: 'DRY_RUN_OK', nuevo: `${nFirst} ${nLast}`.trim() });
+        continue;
+      }
+
+      // READ: obtener revision
+      const contacto = await elevatedGet(c.id);
+      if (!contacto || !contacto.revision) {
+        errores++;
+        detalle.push({ i, nombre: actual, estado: 'ERROR_SIN_REVISION' });
+        continue;
+      }
+
+      // UPDATE con revision
+      const identifiers = { contactId: c.id, revision: contacto.revision };
+      await elevatedUpdate(identifiers, { name: { first: nFirst, last: nLast } }, { suppressAuth: true });
+
+      creados++;
+      detalle.push({ i, nombre: actual, estado: 'RENOMBRADO', nuevo: `${nFirst} ${nLast}`.trim() });
+
+    } catch (e) {
+      console.error(`${TAG} EXCEPCIÓN nombres ${actual}: ${e.message}`);
+      errores++;
+      detalle.push({ i, nombre: actual, estado: 'ERROR', msg: String(e.message || '').slice(0, 200) });
+    } finally {
+      iteraciones++;
+      msIteraciones += (Date.now() - tIter);
+    }
+  }
+
+  const procesadoHasta = cortadoEn !== null ? cortadoEn : fin;
+  const tamTramo = fin - ini;
+  const siguiente = procesadoHasta < todos.length
+    ? `?desde=${procesadoHasta}&hasta=${Math.min(todos.length, procesadoHasta + tamTramo)}${dryRun ? '&dryRun=1' : ''}&modo=nombres`
+    : null;
+
+  const ms = Date.now() - t0;
+  console.log(`${TAG} FIN NOMBRES [${ini}, ${procesadoHasta}) · renombrados=${creados} saltados=${saltados} errores=${errores} · ${ms} ms`);
+
+  return {
+    ok: true,
+    version: VERSION,
+    modo: 'nombres',
+    dryRun: !!dryRun,
+    ms,
+    totalLote: todos.length,
+    tramoPedido: { desde: ini, hasta: fin },
+    procesadoHasta,
+    cortadoPorTiempo: cortadoEn !== null,
+    msPorFicha: iteraciones > 0 ? Math.round(msIteraciones / iteraciones) : null,
+    resumen: { creados, saltados, errores },
+    siguienteTramo: siguiente,
+    detalle
+  };
+}
+
 // =====================================================
 // recuperarContactosCore — función PURA
 //
@@ -1022,7 +1219,7 @@ async function leerYaCreados(elevatedQuery, labelKey) {
 // llamada (aviso literal en la cabecera de http-functions.js, línea 38,
 // mismo criterio que akiraSynthesizeCore de akiraTTS.web.js).
 // =====================================================
-export async function recuperarContactosCore({ desde = 0, hasta = 25, dryRun = false, skipCheck = false } = {}) {
+export async function recuperarContactosCore({ desde = 0, hasta = 25, dryRun = false, skipCheck = false, modo = 'crear' } = {}) {
 
   const t0 = Date.now();
 
@@ -1033,6 +1230,11 @@ export async function recuperarContactosCore({ desde = 0, hasta = 25, dryRun = f
   const elevatedCreate    = elevate(contacts.createContact);
   const elevatedLabel     = elevate(contacts.labelContact);
   const elevatedFindLabel = elevate(contacts.findOrCreateLabel);
+
+  // v1.1.0 — desvío al modo de normalización de nombres
+  if (modo === 'nombres') {
+    return modoNombres({ elevatedQuery, elevatedFindLabel, t0, desde, hasta, dryRun });
+  }
 
   const ini = Math.max(0, parseInt(desde, 10) || 0);
   const fin = Math.min(LOTE.length, parseInt(hasta, 10) || 0);
