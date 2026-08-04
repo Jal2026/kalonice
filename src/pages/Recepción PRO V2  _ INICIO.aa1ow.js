@@ -1,10 +1,21 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.34
-// FECHA: 1 de agosto de 2026
+// VERSION: 1.0.36
+// FECHA: 4 de agosto de 2026
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
 //
+// v1.0.36: 🎚️ handleAgregarServicio propaga `varianteSel` y
+//          `complementosSetupUid` al backend agregarServicioReserva
+//          v1.0.43. Sin esos dos campos el servicio añadido entraba
+//          siempre a precio/duración BASE, y los servicios con fases
+//          obligatorias con variantes (CASO B) no se podían añadir.
+//          Es el único cambio funcional: el resto de handlers, cases y
+//          contratos de mensaje quedan intactos. Ambos campos son
+//          opcionales — un widget antiguo que no los mande sigue
+//          funcionando exactamente igual que antes.
+//          También se sincroniza la constante TAG, que venía rezagada
+//          en v1.0.35 respecto a la cabecera.
 // v1.0.34: + POPUP ALMACÉN (widget v1.1.76). Import de listarConsumibles,
 //          tirarPapelera y registrarMovimiento (con alias
 //          registrarMovimientoStock, porque registrarMovimiento ya está
@@ -495,7 +506,7 @@ import {
 // Nombre comprobado contra el resto de imports de este archivo: no colisiona.
 import { getFichaTecnicaCliente } from 'backend/memoriaLegacyLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.35]';
+const TAG = '[RecepcionProCMS v1.0.36]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -1469,10 +1480,20 @@ async function handleAgregarComplemento(msg) {
 }
 
 // v1.0.15 — añadir servicio principal NUEVO al final de la cita existente
+// v1.0.36 — + varianteSel y complementosSetupUid. Los envía el widget
+//   v1.1.81 tanto desde "+ Servicio adicional" del modal de cita como
+//   desde el armado múltiple. Ambos opcionales: si no llegan, el backend
+//   agregarServicioReserva se comporta igual que antes (precio base).
 async function handleAgregarServicio(msg) {
   try {
-    const { reservaId, setupUid, precioOverride } = msg || {};
-    const r = await agregarServicioReserva({ reservaId, setupUid, precioOverride });
+    const { reservaId, setupUid, precioOverride, varianteSel, complementosSetupUid } = msg || {};
+    const r = await agregarServicioReserva({
+      reservaId,
+      setupUid,
+      precioOverride,
+      varianteSel: varianteSel || null,
+      complementosSetupUid: Array.isArray(complementosSetupUid) ? complementosSetupUid : []
+    });
     sendResponse('servicio-agregado', r);
   } catch (e) {
     console.error(`${TAG} ❌ agregar-servicio:`, e);
