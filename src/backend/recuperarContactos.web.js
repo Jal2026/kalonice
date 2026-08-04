@@ -1,5 +1,5 @@
 // =====================================================
-// [RecuperarContactos v1.0.3] - recuperarContactos.web.js
+// [RecuperarContactos v1.0.4] - recuperarContactos.web.js
 //
 // BACKEND ONE-SHOT — RECUPERACIÓN DE CONTACTOS PERDIDOS
 // EN LA IMPORTACIÓN SADPE → WIX CRM (KALÓNICE, agosto 2026)
@@ -71,6 +71,23 @@
 // -----------------------------------------------------------------
 // CHANGELOG
 // -----------------------------------------------------------------
+// v1.0.4 (4-ago-2026) — GARANTÍA ANTI-504. Cierra la incertidumbre que
+//   arrastraban v1.0.2 y v1.0.3 sobre el timeout de las http-functions.
+//   · PRESUPUESTO_MS baja de 20000 a 9000. Único dato empírico
+//     disponible: la ejecución de v1.0.2 devolvió respuesta a los
+//     11.772 ms SIN que Wix la cortara. 9000 queda por debajo de ese
+//     valor verificado → el endpoint no puede agotar el timeout.
+//     20000 era una apuesta por encima de lo medido: criterio erróneo.
+//   · RESERVA DINÁMICA. v1.0.3 comprobaba el reloj ANTES de cada ficha,
+//     pero si quedaban 200 ms y la ficha tardaba 3.000, se desbordaba.
+//     Ahora se mide la duración real de cada iteración y se corta cuando
+//     no quepa OTRA MÁS (media observada × 1.5 de margen). El corte es
+//     siempre anterior al presupuesto, nunca posterior.
+//   · Se devuelve msPorFicha para poder dimensionar el tramo siguiente
+//     con un dato real en lugar de a ojo.
+//   Sin cambios en el LOTE, en la idempotencia por etiqueta ni en la
+//   lógica de alta.
+//
 // v1.0.3 (4-ago-2026) — HOTFIX presupuesto. La v1.0.2 volcaba la CRM
 //   ENTERA (3.855 contactos) en cada llamada: 11.772 ms solo el volcado,
 //   agotaba el presupuesto y procesaba 0 fichas.
@@ -143,8 +160,8 @@ import { webMethod, Permissions } from 'wix-web-module';
 import { elevate } from 'wix-auth';
 import { contacts } from 'wix-crm-backend';
 
-const VERSION = 'v1.0.3';
-const TAG = '[RecuperarContactos v1.0.3]';
+const VERSION = 'v1.0.4';
+const TAG = '[RecuperarContactos v1.0.4]';
 
 const ETIQUETA_LOTE = 'Kalonice recuperados';
 
@@ -930,7 +947,11 @@ const LOTE = [
 // presupuesto, se corta limpiamente y se devuelve el punto exacto donde
 // se quedó, para continuar en la llamada siguiente.
 // =====================================================
-const PRESUPUESTO_MS = 20000;
+const PRESUPUESTO_MS = 9000;
+
+// Margen sobre la duración media observada por ficha. Se corta cuando no
+// quepa otra iteración completa, no cuando ya se haya excedido.
+const MARGEN_RESERVA = 1.5;
 
 // Últimos 9 dígitos — COPIADO LITERAL de contactLookup.web.js línea 74.
 function tel9(tel) {
@@ -1048,11 +1069,20 @@ export async function recuperarContactosCore({ desde = 0, hasta = 25, dryRun = f
   let cortadoEn = null;
   let i = ini;
 
+  // Duración observada de las iteraciones ya ejecutadas.
+  let iteraciones = 0;
+  let msIteraciones = 0;
+
   for (; i < fin; i++) {
-    // ── Corte por presupuesto de tiempo ──
-    if (Date.now() - t0 > PRESUPUESTO_MS) {
+    const tIter = Date.now();
+    const transcurrido = tIter - t0;
+
+    // ── Corte con RESERVA: se para cuando no quepa OTRA ficha más ──
+    // Sin iteraciones previas se usa una estimación prudente inicial.
+    const mediaIter = iteraciones > 0 ? (msIteraciones / iteraciones) : 1500;
+    if (transcurrido + (mediaIter * MARGEN_RESERVA) > PRESUPUESTO_MS) {
       cortadoEn = i;
-      console.warn(`${TAG} CORTE por tiempo en i=${i} (${Date.now() - t0} ms)`);
+      console.warn(`${TAG} CORTE con reserva en i=${i} · transcurrido=${transcurrido} ms · mediaIter=${Math.round(mediaIter)} ms`);
       break;
     }
 
@@ -1120,6 +1150,9 @@ export async function recuperarContactosCore({ desde = 0, hasta = 25, dryRun = f
       console.error(`${TAG} EXCEPCIÓN ${ficha}: ${e.message}`);
       errores++;
       detalle.push({ i, sadpe: numSadpe, nombre: ficha, estado: 'ERROR', msg: String(e.message || '').slice(0, 200) });
+    } finally {
+      iteraciones++;
+      msIteraciones += (Date.now() - tIter);
     }
   }
 
@@ -1142,6 +1175,7 @@ export async function recuperarContactosCore({ desde = 0, hasta = 25, dryRun = f
     tramoPedido: { desde: ini, hasta: fin },
     procesadoHasta,
     cortadoPorTiempo: cortadoEn !== null,
+    msPorFicha: iteraciones > 0 ? Math.round(msIteraciones / iteraciones) : null,
     resumen: { creados, saltados, errores },
     siguienteTramo: siguiente,
     detalle
