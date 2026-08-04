@@ -1,7 +1,60 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.86  ·  TIENDA — CIF/DNI antes de cobrar
+ * VERSION: 1.1.87  ·  CAPA TÁCTIL — arrastrar con el dedo (tablet)
+ *
+ * v1.1.87 (5 ago 2026) — ARRASTRE CON EL DEDO. Los cuatro arrastres del
+ *   calendario estaban escritos exclusivamente contra mousedown /
+ *   mousemove / mouseup, y en un navegador táctil esa secuencia no
+ *   existe: un dedo que se desplaza produce touchmove y scroll, nunca
+ *   mousemove. En tablet quedaban muertos MOVER FASE, REDIMENSIONAR
+ *   FASE, EXTENDER CITA y CREAR BLOQUEO — este último de forma
+ *   silenciosa (un toque da mousedown+mouseup en el mismo punto, la
+ *   duración sale 0 y no se crea nada ni se avisa).
+ *
+ *   SOLUCIÓN — capa de traducción, no reescritura. La lógica de
+ *   arrastre NO se toca: se le entregan eventos de ratón sintéticos
+ *   construidos a partir del gesto del dedo. Cero cambios en el camino
+ *   de ratón; el mostrador de escritorio se comporta exactamente igual
+ *   que en v1.1.86.
+ *     · _fireSyntheticMouse(target, tipo, x, y) — el mousedown se
+ *       despacha sobre el elemento REAL tocado (para que los guardias
+ *       e.target.closest(...) sigan funcionando) y el mousemove/mouseup
+ *       sobre `document` con bubbles:true, que alcanza tanto a los
+ *       listeners de document (_bindFaseDrag) como a los de window
+ *       (_bindResizeExt, _bindBlockDrag), porque document propaga a
+ *       window.
+ *     · _bindTouchLongPressDrag(el, opts) — PULSACIÓN LARGA de 450ms
+ *       quieto y luego arrastrar. Se usa en los bloques de cita y en las
+ *       columnas libres. No es capricho: si el arrastre arrancase al
+ *       primer movimiento, el dedo apoyado sobre una cita o una columna
+ *       ya no podría hacer scroll vertical del calendario, y con la
+ *       agenda llena eso es casi toda la pantalla. Con pulsación larga
+ *       conviven los tres gestos: toque corto abre la cita, arrastre
+ *       directo hace scroll, mantener + arrastrar mueve.
+ *       Antes de armarse NO se llama a preventDefault, de modo que el
+ *       scroll y el click nativo siguen intactos. Al armar, clase
+ *       `is-touch-armed` (+ vibración breve donde exista) para que el
+ *       operador vea que el bloque ya está enganchado.
+ *     · _bindTouchImmediateDrag(el) — arrastre inmediato para las dos
+ *       asas de resize, que son objetivos deliberados y nunca superficie
+ *       de scroll.
+ *
+ *   CSS — primera media query del archivo, `@media (hover: none)`, que
+ *   por definición no aplica en escritorio con ratón:
+ *     · .ks-appt-timeadj (el 🕑 que ajusta la hora de la fase SIN
+ *       arrastrar) vivía con opacity:0 y solo se revelaba en :hover →
+ *       era invisible con el dedo. Ahora es permanente y de 20×20px.
+ *     · .ks-appt-resize conserva su aspecto (28×4px) pero gana zona de
+ *       impacto por pseudo-elemento (~56px de ancho) y touch-action:none.
+ *     · -webkit-touch-callout / user-select desactivados en cita y
+ *       columna, para que iOS no abra el menú de selección al mantener.
+ *
+ *   NO se toca: page code, backends, contrato de mensajes ('mover-fase',
+ *   'redimensionar-fase', 'extender-reserva', 'crearBloqueo'), ni ningún
+ *   flujo de negocio.
+ *
+ * v1.1.86  ·  TIENDA — CIF/DNI antes de cobrar
  *
  * v1.1.86 (4 ago 2026) — El CIF/DNI se pide en el paso de cliente, antes
  *   de la venta, que es cuando el cliente está delante del mostrador. En
@@ -1468,7 +1521,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.86]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.87]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2474,6 +2527,28 @@ button { font-family: inherit; cursor: pointer; }
 .cierre-importe { font-weight:700; }
 .cierre-metodo-icon { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
 .cierre-banner { background:#fff5e6; border:1px solid #d48a1a; color:#d48a1a; padding:8px 12px; border-radius:6px; font-size:12px; font-weight:600; margin-bottom:10px; grid-column:1/-1; }
+
+/* ============================================================
+   v1.1.87 — CAPA TÁCTIL (tablet)
+   Estado "armado" tras pulsación larga. Se aplica también con
+   ratón si alguna vez se dispara, pero solo lo activa el gesto
+   táctil, así que en escritorio nunca aparece.
+   ============================================================ */
+.ks-appt.is-touch-armed { box-shadow: var(--ks-shadow-lg); outline: 2px solid #fff; outline-offset: -2px; transform: scale(1.03); z-index: 9; }
+.ks-col.is-touch-armed { background: rgba(201, 164, 74, .10); outline: 2px dashed #c9a44a; outline-offset: -2px; }
+
+@media (hover: none) {
+  /* El 🕑 ajusta la hora de la fase sin arrastrar. Vivía solo en
+     :hover → invisible con el dedo. Aquí permanente y más grande. */
+  .ks-appt-timeadj { opacity: 1; width: 20px; height: 20px; font-size: 12px; top: 3px; right: 21px; background: rgba(0,0,0,.42); }
+
+  /* Asa de resize: mismo aspecto, zona de impacto ampliada. */
+  .ks-appt-resize { touch-action: none; }
+  .ks-appt-resize::after { content: ''; position: absolute; left: -14px; right: -14px; top: -9px; bottom: -6px; }
+
+  /* iOS abre el callout de selección al mantener pulsado si no se corta. */
+  .ks-appt, .ks-col { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+}
 `;
 
   class RecepcionProCMS extends HTMLElement {
@@ -4798,6 +4873,133 @@ button { font-family: inherit; cursor: pointer; }
       }));
     }
 
+    // ── v1.1.87 · CAPA TÁCTIL ─────────────────────────────────
+    // Traduce el gesto del dedo a eventos de ratón sintéticos. La lógica
+    // de arrastre (ghost, snap a 5 min, preview, commit al page code) no
+    // se toca: recibe exactamente los mismos eventos que recibiría de un
+    // ratón real.
+    //
+    //   · mousedown → sobre el elemento REAL tocado, para que los
+    //     guardias e.target.closest('.ks-appt-resize' / '.ks-appt-timeadj')
+    //     de los handlers existentes sigan funcionando igual.
+    //   · mousemove / mouseup → sobre `document` con bubbles:true. Alcanza
+    //     a los listeners de document (_bindFaseDrag) y a los de window
+    //     (_bindResizeExt, _bindBlockDrag), porque document propaga hacia
+    //     window.
+    _fireSyntheticMouse(target, type, x, y) {
+      if (!target) return;
+      try {
+        target.dispatchEvent(new MouseEvent(type, {
+          bubbles: true, cancelable: true, composed: true, view: window,
+          button: 0, buttons: (type === 'mouseup' ? 0 : 1),
+          clientX: x, clientY: y
+        }));
+      } catch (_) { /* navegador sin constructor MouseEvent: se ignora */ }
+    }
+
+    // PULSACIÓN LARGA (450ms quieto) + arrastrar. Para elementos que
+    // además son superficie de scroll: bloques de cita y columnas libres.
+    // Mientras no está armado NO se llama a preventDefault → el scroll
+    // vertical del calendario y el click nativo (abrir cita) siguen
+    // funcionando exactamente igual.
+    // opts: { skipSelector, armedClass }
+    _bindTouchLongPressDrag(el, opts) {
+      const o = opts || {};
+      const HOLD_MS = 450;
+      const SLOP = 10;
+      let timer = null, armed = false, downTarget = null;
+      let x0 = 0, y0 = 0, lastX = 0, lastY = 0;
+
+      const limpiar = () => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (armed && o.armedClass) el.classList.remove(o.armedClass);
+        armed = false; downTarget = null;
+      };
+
+      el.addEventListener('touchstart', e => {
+        if (!e.touches || e.touches.length !== 1) { limpiar(); return; }
+        const tgt = e.target;
+        // Mismos guardias que el camino de ratón.
+        if (o.skipSelector && tgt && tgt.closest && tgt.closest(o.skipSelector)) return;
+        const t = e.touches[0];
+        downTarget = tgt;
+        x0 = lastX = t.clientX; y0 = lastY = t.clientY;
+        armed = false;
+        timer = setTimeout(() => {
+          timer = null; armed = true;
+          if (o.armedClass) el.classList.add(o.armedClass);
+          try { if (navigator.vibrate) navigator.vibrate(15); } catch (_) {}
+          this._fireSyntheticMouse(downTarget, 'mousedown', lastX, lastY);
+        }, HOLD_MS);
+      }, { passive: false });
+
+      el.addEventListener('touchmove', e => {
+        const t = e.touches && e.touches[0]; if (!t) return;
+        lastX = t.clientX; lastY = t.clientY;
+        if (!armed) {
+          // Aún en la ventana de espera: si el dedo se mueve es un scroll,
+          // no un arrastre. Se cancela y se deja pasar el gesto al navegador.
+          if (Math.abs(lastX - x0) > SLOP || Math.abs(lastY - y0) > SLOP) limpiar();
+          return;
+        }
+        e.preventDefault();          // el gesto es nuestro: no hay scroll
+        this._fireSyntheticMouse(document, 'mousemove', lastX, lastY);
+      }, { passive: false });
+
+      el.addEventListener('touchend', e => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (!armed) { downTarget = null; return; }
+        const t = (e.changedTouches && e.changedTouches[0]) || null;
+        const fx = t ? t.clientX : lastX, fy = t ? t.clientY : lastY;
+        if (o.armedClass) el.classList.remove(o.armedClass);
+        armed = false; downTarget = null;
+        e.preventDefault();          // evita el click fantasma al soltar
+        this._fireSyntheticMouse(document, 'mouseup', fx, fy);
+      }, { passive: false });
+
+      el.addEventListener('touchcancel', () => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (!armed) { downTarget = null; return; }
+        if (o.armedClass) el.classList.remove(o.armedClass);
+        armed = false; downTarget = null;
+        this._fireSyntheticMouse(document, 'mouseup', lastX, lastY);
+      }, { passive: false });
+    }
+
+    // ARRASTRE INMEDIATO. Para las dos asas de resize: objetivos
+    // deliberados y diminutos, nunca superficie de scroll. preventDefault
+    // en touchstart impide que la rejilla se desplace y suprime el click.
+    _bindTouchImmediateDrag(el) {
+      let lastX = 0, lastY = 0, activo = false;
+
+      el.addEventListener('touchstart', e => {
+        if (!e.touches || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        lastX = t.clientX; lastY = t.clientY; activo = true;
+        e.preventDefault(); e.stopPropagation();
+        this._fireSyntheticMouse(el, 'mousedown', lastX, lastY);
+      }, { passive: false });
+
+      el.addEventListener('touchmove', e => {
+        if (!activo) return;
+        const t = e.touches && e.touches[0]; if (!t) return;
+        lastX = t.clientX; lastY = t.clientY;
+        e.preventDefault(); e.stopPropagation();
+        this._fireSyntheticMouse(document, 'mousemove', lastX, lastY);
+      }, { passive: false });
+
+      const fin = e => {
+        if (!activo) return;
+        activo = false;
+        const t = (e.changedTouches && e.changedTouches[0]) || null;
+        const fx = t ? t.clientX : lastX, fy = t ? t.clientY : lastY;
+        e.preventDefault(); e.stopPropagation();
+        this._fireSyntheticMouse(document, 'mouseup', fx, fy);
+      };
+      el.addEventListener('touchend', fin, { passive: false });
+      el.addEventListener('touchcancel', fin, { passive: false });
+    }
+
     // v1.1.29 — DRAG&DROP DE FASE
     //   Mantén pulsado un bloque ocupante y arrástralo: aparece un ghost que
     //   sigue el cursor. Al soltar sobre otra celda → moverFase con la nueva
@@ -4909,6 +5111,14 @@ button { font-family: inherit; cursor: pointer; }
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
       });
+
+      // v1.1.87 — mismo arrastre con el dedo: pulsación larga de 450ms y
+      // luego mover. El toque corto sigue abriendo el modal de la cita y el
+      // arrastre directo sigue haciendo scroll del calendario.
+      this._bindTouchLongPressDrag(btn, {
+        skipSelector: '.ks-appt-resize, .ks-appt-timeadj, .ks-appt-ext-rm',
+        armedClass: 'is-touch-armed'
+      });
     }
 
     // v1.1.14 — drag del resize handle para crear/modificar extensión.
@@ -4960,6 +5170,8 @@ button { font-family: inherit; cursor: pointer; }
           window.addEventListener('mousemove', onMove);
           window.addEventListener('mouseup', onUp);
         });
+        // v1.1.87 — misma asa con el dedo, arrastre inmediato.
+        this._bindTouchImmediateDrag(handle);
         return;
       }
 
@@ -5004,6 +5216,8 @@ button { font-family: inherit; cursor: pointer; }
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
       });
+      // v1.1.87 — misma asa con el dedo, arrastre inmediato.
+      this._bindTouchImmediateDrag(handle);
     }
 
     _madridNowMin() {
@@ -5395,6 +5609,14 @@ button { font-family: inherit; cursor: pointer; }
           }
         };
         window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+      });
+
+      // v1.1.87 — crear bloqueo con el dedo: pulsación larga de 450ms
+      // sobre la columna libre y luego arrastrar verticalmente. Hasta que
+      // no se arma, el dedo sigue haciendo scroll del calendario.
+      this._bindTouchLongPressDrag(col, {
+        skipSelector: '.ks-appt, .ks-customblock',
+        armedClass: 'is-touch-armed'
       });
     }
 
