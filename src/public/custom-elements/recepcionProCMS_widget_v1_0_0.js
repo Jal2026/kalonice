@@ -1,7 +1,24 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.81  ·  Armado múltiple, cantidad y variantes al añadir
+ * VERSION: 1.1.83  ·  Variantes al añadir complemento
+ *
+ * v1.1.83 (4 ago 2026) — El modal "⛓ Complemento" del modal de cita ya
+ *   permite elegir VARIANTE. Antes solo mandaba el setupUid y un
+ *   complemento con variantes (Peinado M/L/XL) entraba siempre a precio y
+ *   duración base. Mismo patrón que v1.1.81 hizo con "+ Servicio
+ *   adicional". El botón Añadir se rehabilita si el backend da error.
+ *   Requiere backend v1.0.44 y page code v1.0.37.
+ *
+ * v1.1.82  ·  Panel sin "Complementos de fases"
+ *
+ * v1.1.82 (4 ago 2026) — El grupo "Complementos de fases" deja de listarse
+ *   en la columna de servicios. Son piezas que el motor materializa dentro
+ *   de la cascada de otro servicio, y verlas sueltas entre los principales
+ *   confunde. Siguen accesibles en la pestaña "Complementos" del filtro de
+ *   rol. Solo cambia _buildGroups; el catálogo y el backend no se tocan.
+ *
+ * v1.1.81  ·  Armado múltiple, cantidad y variantes al añadir
  *
  * v1.1.81 (4 ago 2026) — ARMADO MÚLTIPLE + CANTIDAD + VARIANTES AL AÑADIR.
  *   Tres cosas que ahorran pasos en el mostrador, sobre una única cita.
@@ -1408,7 +1425,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.81]';   // v1.1.81 — venía rezagado en v1.1.75
+  const TAG = '[RecepcionProCMS-Widget v1.1.83]';
 
   // ─── helpers ───
   function esc(s) {
@@ -1430,6 +1447,20 @@
   // holgado para el caso real (familias) y evita que un dedo pegado al ＋
   // genere una cadena interminable de llamadas al backend.
   const CANT_MAX_LINEA = 10;
+
+  // v1.1.82 — Grupo del catálogo que NO se lista en la columna de servicios
+  // salvo que el filtro de rol sea explícitamente "Complementos". Son piezas
+  // que el motor materializa dentro de la cascada de otro servicio; verlas
+  // sueltas junto a los principales confunde al operador.
+  // Se compara normalizado (sin guiones, sin acentos, sin mayúsculas) para
+  // que dé igual cómo esté escrito el `group` en ServiceCatalog.
+  const GRUPO_OCULTO_PANEL = 'complementos de fases';
+  function normGrupo(g) {
+    return String(g || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[-_]+/g, ' ').replace(/\s+/g, ' ')
+      .trim().toLowerCase();
+  }
 
   // calendario
   const CAL_START = 9, CAL_END = 21, SLOT_MIN = 30;
@@ -2440,6 +2471,8 @@ button { font-family: inherit; cursor: pointer; }
       this._addSvcUid = '';            // "+ Servicio adicional": selección
       this._addSvcVarIdx = 0;
       this._addSvcComplSel = {};
+      this._addCmpUid = '';            // "⛓ Complemento": selección
+      this._addCmpVarIdx = 0;
       this._reservando = false;
       this._pagando = false;
       this._modalReserva = null;
@@ -2995,7 +3028,12 @@ button { font-family: inherit; cursor: pointer; }
           break;
         case 'complemento-agregado':
           if (p.ok) { this._toast(`Complemento añadido: ${p.label}`); this._closeSubModal(); this._closeModal(); this._sendToPage('getReservas', { fecha: this._fecha }); }
-          else this._toast('Error: ' + (p.error || 'no se pudo añadir complemento'));
+          else {
+            this._toast('Error: ' + (p.error || 'no se pudo añadir complemento'));
+            // v1.1.83 — rehabilitar el botón para poder reintentar sin cerrar.
+            const bCmp = this.shadowRoot.getElementById('cmOk');
+            if (bCmp) bCmp.disabled = false;
+          }
           break;
         case 'servicio-agregado':
           // v1.1.81 — dos orígenes posibles para esta respuesta:
@@ -3923,6 +3961,9 @@ button { font-family: inherit; cursor: pointer; }
     _buildGroups() {
       const q = (this._query || '').trim().toLowerCase();
       const visible = this._servicios.filter(s => {
+        // v1.1.82 — "Complementos de fases" fuera del listado, salvo que el
+        // operador pida expresamente la pestaña Complementos.
+        if (this._role !== 'complemento' && normGrupo(s.group) === GRUPO_OCULTO_PANEL) return false;
         if (this._role === 'principal' && s.tipo === 'complemento') return false;
         if (this._role === 'complemento' && s.tipo === 'principal') return false;
         if (q && !(s.label || '').toLowerCase().includes(q)) return false;
@@ -6246,6 +6287,10 @@ button { font-family: inherit; cursor: pointer; }
       });
     }
     // v1.1.16 — COMPLEMENTO (servicio del catálogo con tipo complemento/ambos)
+    // ⛓ AÑADIR COMPLEMENTO (desde el modal de la cita)
+    // v1.1.83 — con ELECCIÓN DE VARIANTE. Antes solo viajaba el setupUid:
+    //   un complemento con variantes (Peinado M/L/XL) se añadía siempre a
+    //   precio y duración BASE. Requiere backend v1.0.44 y page code v1.0.37.
     _openAddComplementoModal(r) {
       const catalogo = Array.isArray(this._servicios) ? this._servicios : [];
       // Filtrar: tipo complemento o ambos, activo, con setupUid
@@ -6254,9 +6299,14 @@ button { font-family: inherit; cursor: pointer; }
         .sort((a, b) => String(a.label || '').localeCompare(String(b.label || '')));
       let opts = '<option value="">— Elegir complemento —</option>';
       candidatos.forEach(s => {
-        opts += `<option value="${esc(s.setupUid)}">${esc(s.label)} · ${Number(s.duration) || 0}min · ${Number(s.price) || 0}€</option>`;
+        const varTag = s.hasVariants ? ' · variantes' : '';
+        opts += `<option value="${esc(s.setupUid)}">${esc(s.label)} · ${Number(s.duration) || 0}min · ${Number(s.price) || 0}€${varTag}</option>`;
       });
       const vacio = candidatos.length === 0;
+
+      this._addCmpUid = '';
+      this._addCmpVarIdx = 0;
+
       const box = this._openSubModal(`
         <div class="ks-modal-head"><span class="ks-modal-staff">⛓ AÑADIR COMPLEMENTO</span><button class="ks-modal-x" id="cmX">✕</button></div>
         <div style="margin-top:14px;font-size:13px;color:var(--ks-ink2);">Se añadirá al final del pack y sumará tiempo + precio.</div>
@@ -6265,19 +6315,60 @@ button { font-family: inherit; cursor: pointer; }
           <select id="cmSel" style="width:100%;margin-top:6px;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">${opts}</select>
           ${vacio ? '<div style="margin-top:10px;color:#a55b00;font-size:12px;font-style:italic;">No hay servicios marcados como Complemento/Ambos en el catálogo.</div>' : ''}
         </div>
+        <div id="cmOpts" style="margin-top:6px;"></div>
         <div class="ks-modal-foot" style="margin-top:18px;">
           <button class="ks-modal-close" id="cmCancel">Cancelar</button>
           <button class="ks-pay" id="cmOk" style="background:var(--ks-ink);color:#fff;" ${vacio ? 'disabled' : ''}>Añadir</button>
         </div>`);
       box.querySelector('#cmX').addEventListener('click', () => this._closeSubModal());
       box.querySelector('#cmCancel').addEventListener('click', () => this._closeSubModal());
+
+      const sel = box.querySelector('#cmSel');
+      sel.addEventListener('change', () => {
+        this._addCmpUid = sel.value || '';
+        this._addCmpVarIdx = 0;
+        this._renderAddComplementoOpts(box);
+      });
+
       box.querySelector('#cmOk').addEventListener('click', () => {
-        const setupUid = box.querySelector('#cmSel').value;
+        const setupUid = this._addCmpUid || sel.value;
         if (!setupUid) { this._toast('Elige un complemento'); return; }
+        const svc = this._porSetupUid[setupUid];
+        const varianteSel = svc
+          ? this._varianteSelDeLinea({ servicio: svc, variantIdx: this._addCmpVarIdx })
+          : null;
         box.querySelector('#cmOk').disabled = true;
-        this._sendToPage('agregar-complemento', { reservaId: r._id, setupUid });
+        this._sendToPage('agregar-complemento', { reservaId: r._id, setupUid, varianteSel });
       });
     }
+
+    // v1.1.83 — Variantes del complemento elegido. Solo variantes: los
+    // complementos no arrastran cascada propia en este circuito.
+    _renderAddComplementoOpts(box) {
+      const cont = box.querySelector('#cmOpts');
+      if (!cont) return;
+      const svc = this._addCmpUid ? this._porSetupUid[this._addCmpUid] : null;
+      const vars = (svc && Array.isArray(svc.variantes)) ? svc.variantes : [];
+      if (!svc || !svc.hasVariants || !vars.length) { cont.innerHTML = ''; return; }
+
+      cont.innerHTML = `<div style="margin-top:12px"><label style="font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--ks-ink2);">VARIANTE</label>
+        <div class="ks-variant-list" style="margin-top:6px">${vars.map((v, i) => {
+          const vLabel = (typeof v === 'string') ? v : (v.label || v.nombre || '');
+          const vPrice = (typeof v === 'object') ? Number(v.precio != null ? v.precio : v.price) : NaN;
+          const vDur = (typeof v === 'object') ? Number(v.duracion != null ? v.duracion : v.duration) : NaN;
+          const meta = [];
+          if (!isNaN(vPrice)) meta.push(vPrice > 0 ? `${vPrice}€` : 'incluido');
+          if (!isNaN(vDur) && vDur > 0) meta.push(`${vDur}′`);
+          const metaHTML = meta.length ? `<span class="ks-dur">${meta.join(' · ')}</span>` : '';
+          return `<button class="ks-variant ${i === this._addCmpVarIdx ? 'active' : ''}" data-cmvi="${i}" style="display:flex;justify-content:space-between;align-items:center"><span>${esc(vLabel)}</span>${metaHTML}</button>`;
+        }).join('')}</div></div>`;
+
+      cont.querySelectorAll('[data-cmvi]').forEach(b => b.addEventListener('click', () => {
+        this._addCmpVarIdx = parseInt(b.getAttribute('data-cmvi'), 10) || 0;
+        this._renderAddComplementoOpts(box);
+      }));
+    }
+
     // v1.1.30 — SERVICIO ADICIONAL: añade un servicio principal NUEVO al
     // final de la cita existente. La cascada del nuevo servicio (si es
     // complejo) se construye en el backend reutilizando construirFasesPack.
