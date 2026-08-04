@@ -1,7 +1,21 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.87  ·  CAPA TÁCTIL — arrastrar con el dedo (tablet)
+ * VERSION: 1.1.88  ·  ARQUEO — recuperar el conteo guardado al reabrir
+ *
+ * v1.1.88 (5 ago 2026) — ARQUEO: EL CONTEO GUARDADO NO SE RECUPERABA.
+ *   El backend guardaba correctamente (countedCash y difference quedaban
+ *   escritos en CashRegister y el toast confirmaba), pero _openCaja()
+ *   arrancaba siempre con this._cajaContado = 0 y _renderCajaBody()
+ *   calculaba la diferencia contra esa variable, ignorando d.registro.
+ *   Resultado: al reabrir el modal el input salía vacío y la diferencia
+ *   volvía a pintarse en rojo con el negativo del efectivo esperado,
+ *   aunque la caja estuviese cuadrada y guardada. Lo mismo con la nota.
+ *   Ahora el render hidrata this._cajaContado y this._cajaNota desde
+ *   d.registro mientras el usuario no haya tecleado (flag
+ *   _cajaContadoTouched), de modo que un refresco posterior a guardar o
+ *   a registrar un movimiento no pisa lo que se está escribiendo.
+ *   Cambio aditivo: sin registro guardado el comportamiento es idéntico.
  *
  * v1.1.87 (5 ago 2026) — ARRASTRE CON EL DEDO. Los cuatro arrastres del
  *   calendario estaban escritos exclusivamente contra mousedown /
@@ -1521,7 +1535,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.87]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.88]';
 
   // ─── helpers ───
   function esc(s) {
@@ -7515,6 +7529,7 @@ button { font-family: inherit; cursor: pointer; }
       this._cajaData = null;
       this._cajaContado = 0;
       this._cajaNota = '';
+      this._cajaContadoTouched = false;   // v1.1.88 — permite hidratar desde d.registro
       const root = this.shadowRoot;
       root.getElementById('cajaScrim')?.remove();
       const scrim = document.createElement('div'); scrim.className = 'ks-modal-scrim'; scrim.id = 'cajaScrim';
@@ -7540,6 +7555,14 @@ button { font-family: inherit; cursor: pointer; }
       const guardado = d.registro && d.registro.status === 'saved';
       const st = this.shadowRoot.getElementById('cajaStatus');
       if (st) { st.textContent = cerrada ? 'Cerrada' : (d.registro?.status === 'saved' ? 'Guardada' : 'Abierta'); st.className = 'ks-modal-status ' + (cerrada ? 'paid' : 'pending'); }
+
+      // v1.1.88 — Hidratar el conteo ya guardado. Mientras el usuario no
+      // haya tecleado nada en esta apertura del modal, el input y la
+      // diferencia se pintan con lo que hay en CashRegister, no con 0.
+      if (!this._cajaContadoTouched && d.registro) {
+        if (d.registro.countedCash != null) this._cajaContado = Number(d.registro.countedCash) || 0;
+        if (!this._cajaNota && d.registro.differenceNote) this._cajaNota = String(d.registro.differenceNote);
+      }
 
       const esperado = Number(d.esperado || 0);
       const contado = Number(this._cajaContado || 0);
@@ -7578,6 +7601,7 @@ button { font-family: inherit; cursor: pointer; }
       if (!cerrada) {
         const inp = body.querySelector('#cajaContado');
         inp?.addEventListener('input', e => {
+          this._cajaContadoTouched = true;   // v1.1.88 — a partir de aquí manda lo tecleado
           this._cajaContado = parseFloat(e.target.value) || 0;
           const nd = Math.round((this._cajaContado - esperado) * 100) / 100;
           const el = body.querySelector('#cajaDif');
