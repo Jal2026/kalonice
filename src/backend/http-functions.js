@@ -8,11 +8,15 @@
 //   https://www.hair-times.com/_functions/whatsappWebhook  (GET=verificación, POST=mensajes entrantes)
 //   https://www.hair-times.com/_functions/akiraAsk         (POST=pregunta a AKIRA)
 //   https://www.hair-times.com/_functions/akiraTts         (POST=voz de AKIRA)
-//   https://www.peluqueriakalonice.es/_functions/recuperarContactos?token=...&desde=0&hasta=50
+//   https://www.peluqueriakalonice.es/_functions/recuperarContactos?token=...&desde=0&hasta=25
 //                                                          (GET=recuperación one-shot, KALÓNICE)
 //
 // CHANGELOG
 // ---------
+// v1.4.1 (4-Ago-2026)
+//   - get_recuperarContactos: se pasa también skipCheck al core
+//     (recuperarContactos.web.js v1.0.2). Sin cambios en el resto.
+//
 // v1.4.0 (4-Ago-2026)
 //   - Añadido GET get_recuperarContactos() — recuperación one-shot de
 //     las 766 fichas que el importador del Dashboard descartó por móvil
@@ -715,7 +719,7 @@ export async function get_dumpReservasV1(request) {
 //
 // URL:
 //   https://www.peluqueriakalonice.es/_functions/recuperarContactos
-//        ?token=KL-REC-2026-0804&desde=0&hasta=50[&dryRun=1]
+//        ?token=KL-REC-2026-0804&desde=0&hasta=25[&dryRun=1][&skipCheck=1]
 //
 // Recrea las 766 fichas que el importador del Dashboard descartó porque su
 // móvil ya existía en el CRM (grupos familiares que comparten número).
@@ -738,7 +742,10 @@ export async function get_recuperarContactos(request) {
 
         const desde  = parseInt(request.query.desde, 10);
         const hasta  = parseInt(request.query.hasta, 10);
-        const dryRun = request.query.dryRun === '1' || request.query.dryRun === 'true';
+        const dryRun    = request.query.dryRun === '1' || request.query.dryRun === 'true';
+        // v1.4.1 — skipCheck omite el volcado de la CRM. Solo para tramos ya
+        // verificados: sin él NO hay protección contra crear duplicados.
+        const skipCheck = request.query.skipCheck === '1' || request.query.skipCheck === 'true';
 
         if (Number.isNaN(desde) || Number.isNaN(hasta)) {
             return badRequest({ body: 'Faltan parámetros desde / hasta (enteros)' });
@@ -748,7 +755,7 @@ export async function get_recuperarContactos(request) {
         // Se importa la función PURA, no el webMethod: este archivo corre
         // SIN sesión de miembro (ver aviso de akiraSynthesizeCore arriba).
         const { recuperarContactosCore } = await import('backend/recuperarContactos.web.js');
-        const result = await recuperarContactosCore({ desde, hasta, dryRun });
+        const result = await recuperarContactosCore({ desde, hasta, dryRun, skipCheck });
 
         if (!result || !result.ok) {
             return serverError({ body: result?.error || 'Error desconocido en recuperarContactos' });
