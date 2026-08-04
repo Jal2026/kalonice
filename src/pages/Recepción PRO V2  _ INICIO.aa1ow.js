@@ -1,10 +1,20 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.37
+// VERSION: 1.0.38
 // FECHA: 4 de agosto de 2026
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
 //
+// v1.0.38: 🧾 DOCUMENTOS DE VENTAS SIN CITA (botón TIENDA del widget
+//          v1.1.85). Import de generarTicketVenta, generarFacturaVenta y
+//          obtenerDocumentoVenta de facturacionSalonLogic v1.0.4, con tres
+//          handlers y tres cases nuevos:
+//            'generarTicketVenta'   → 'ticketVentaGenerado'
+//            'generarFacturaVenta'  → 'facturaVentaGenerada'
+//            'obtenerDocumentoVenta'→ 'documentoVenta'
+//          La clave es `sourceKey` (bookingId del cobro en
+//          PaymentReservations = orderId de la venta). Cambio ADITIVO:
+//          los tres handlers de facturación de citas no se tocan.
 // v1.0.37: 🎚️ handleAgregarComplemento propaga `varianteSel` al backend
 //          agregarComplementoReserva v1.0.44. Mismo motivo que en v1.0.36
 //          con los servicios: sin ese campo, un complemento con variantes
@@ -486,7 +496,11 @@ import {
 import {
   obtenerDocumentoReserva,
   generarTicketCita,
-  generarFacturaCita
+  generarFacturaCita,
+  // v1.0.38 — documentos de ventas sin cita (TIENDA)
+  generarTicketVenta,
+  generarFacturaVenta,
+  obtenerDocumentoVenta
 } from 'backend/facturacionSalonLogic.web';
 
 // v1.0.29 — Nombres del salón (brandName / legalName) para las cabeceras
@@ -510,7 +524,7 @@ import {
 // Nombre comprobado contra el resto de imports de este archivo: no colisiona.
 import { getFichaTecnicaCliente } from 'backend/memoriaLegacyLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.37]';
+const TAG = '[RecepcionProCMS v1.0.38]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -954,6 +968,42 @@ async function handleGenerarFactura(msg) {
   } catch (e) {
     console.error(`${TAG} ❌ generarFactura:`, e);
     sendResponse('facturaGenerada', { ok: false, error: { message: e?.message || 'Error' } });
+  }
+}
+
+// v1.0.38 — Documentos de una VENTA sin cita. `sourceKey` es el bookingId
+// con el que quedó registrado el cobro en PaymentReservations.
+async function handleGenerarTicketVenta(msg) {
+  try {
+    const result = await generarTicketVenta({ sourceKey: msg.sourceKey });
+    sendResponse('ticketVentaGenerado', result);
+  } catch (e) {
+    console.error(`${TAG} ❌ generarTicketVenta:`, e);
+    sendResponse('ticketVentaGenerado', { ok: false, error: { message: e?.message || 'Error' } });
+  }
+}
+
+async function handleGenerarFacturaVenta(msg) {
+  try {
+    const result = await generarFacturaVenta({
+      sourceKey: msg.sourceKey,
+      vatId: msg.vatId,
+      legalName: msg.legalName
+    });
+    sendResponse('facturaVentaGenerada', result);
+  } catch (e) {
+    console.error(`${TAG} ❌ generarFacturaVenta:`, e);
+    sendResponse('facturaVentaGenerada', { ok: false, error: { message: e?.message || 'Error' } });
+  }
+}
+
+async function handleObtenerDocumentoVenta(msg) {
+  try {
+    const result = await obtenerDocumentoVenta({ sourceKey: msg.sourceKey });
+    sendResponse('documentoVenta', result);
+  } catch (e) {
+    console.error(`${TAG} ❌ obtenerDocumentoVenta:`, e);
+    sendResponse('documentoVenta', { ok: false, error: { message: e?.message || 'Error' } });
   }
 }
 
@@ -1746,6 +1796,9 @@ $w.onReady(function () {
         case 'obtenerDocumento': handleObtenerDocumento(msg); break;
         case 'generarTicket':    handleGenerarTicket(msg); break;
         case 'generarFactura':   handleGenerarFactura(msg); break;
+        case 'generarTicketVenta':    handleGenerarTicketVenta(msg); break;
+        case 'generarFacturaVenta':   handleGenerarFacturaVenta(msg); break;
+        case 'obtenerDocumentoVenta': handleObtenerDocumentoVenta(msg); break;
         case 'buscarCliente':    handleBuscarCliente(msg); break;
         case 'crearCliente':     handleCrearCliente(msg); break;
         case 'editarContacto':   handleEditarContacto(msg); break;
