@@ -1,7 +1,18 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.85  ·  TIENDA con ticket / factura y CIF-DNI
+ * VERSION: 1.1.86  ·  TIENDA — CIF/DNI antes de cobrar
+ *
+ * v1.1.86 (4 ago 2026) — El CIF/DNI se pide en el paso de cliente, antes
+ *   de la venta, que es cuando el cliente está delante del mostrador. En
+ *   v1.1.85 solo aparecía después de cobrar, dentro del formulario de
+ *   factura. Ahora el paso de cliente se muestra siempre —también con un
+ *   cliente ya cargado en el aside, en cuyo caso los datos personales
+ *   salen rellenos y bloqueados y solo queda añadir los fiscales— y lo
+ *   capturado se arrastra al formulario de factura ya relleno.
+ *   Dejarlo vacío sigue permitiendo emitir ticket y convertirlo después.
+ *
+ * v1.1.85  ·  TIENDA con ticket / factura y CIF-DNI
  *
  * v1.1.85 (4 ago 2026) — La venta de TIENDA ya emite documento KAMISUITE.
  *   Al registrar la venta el modal deja de cerrarse: muestra el resultado
@@ -1457,7 +1468,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.85]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.86]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2519,6 +2530,8 @@ button { font-family: inherit; cursor: pointer; }
       this._ventaDoc = null;                 // documento emitido de la venta
       this._ventaForm = false;               // form CIF/DNI abierto
       this._ventaGenerando = false;
+      this._tiendaVatId = '';                // CIF/DNI capturado en TIENDA
+      this._tiendaLegalName = '';            // razón social capturada en TIENDA
       this._reservando = false;
       this._pagando = false;
       this._modalReserva = null;
@@ -6688,8 +6701,8 @@ button { font-family: inherit; cursor: pointer; }
       } else if (this._ventaForm) {
         slot = `<div style="display:flex;flex-direction:column;gap:7px">
             <div style="font-size:10.5px;font-weight:700;color:var(--ks-ink3);letter-spacing:.5px;text-transform:uppercase">Datos para factura completa</div>
-            <input id="vtVat" placeholder="CIF / DNI *" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--ks-line);border-radius:8px;font-size:13px;font-family:inherit">
-            <input id="vtLegal" placeholder="Razón social o nombre fiscal" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--ks-line);border-radius:8px;font-size:13px;font-family:inherit">
+            <input id="vtVat" placeholder="CIF / DNI *" value="${esc(this._tiendaVatId || '')}" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--ks-line);border-radius:8px;font-size:13px;font-family:inherit">
+            <input id="vtLegal" placeholder="Razón social o nombre fiscal" value="${esc(this._tiendaLegalName || '')}" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--ks-line);border-radius:8px;font-size:13px;font-family:inherit">
             <div style="display:flex;gap:7px">
               <button id="vtEmitir" style="flex:1;background:var(--ks-ink);color:#fff;border:0;border-radius:8px;padding:9px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit">Emitir factura</button>
               <button id="vtFormCancel" style="background:var(--ks-paper2);color:var(--ks-ink2);border:1px solid var(--ks-line);border-radius:8px;padding:9px 12px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit">Cancelar</button>
@@ -6697,10 +6710,11 @@ button { font-family: inherit; cursor: pointer; }
             <div style="font-size:11px;color:var(--ks-ink3)">El CIF/DNI se guarda en la ficha del cliente para las próximas veces.</div>
           </div>`;
       } else {
+        const conCif = !!(this._tiendaVatId || '').trim();
         slot = `<div style="display:flex;gap:8px">
             <button id="vtTicket" style="flex:1;background:var(--ks-paper2);color:var(--ks-ink);border:1px solid var(--ks-line);border-radius:8px;padding:10px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit">🧾 Ticket</button>
             <button id="vtFactura" style="flex:1;background:var(--ks-ink);color:#fff;border:0;border-radius:8px;padding:10px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit">📄 Factura</button>
-          </div>`;
+          </div>${conCif ? `<div style="margin-top:7px;font-size:11px;color:var(--ks-ink3)">CIF/DNI recogido: <strong>${esc(this._tiendaVatId)}</strong></div>` : ''}`;
       }
 
       body.innerHTML = `
@@ -6755,8 +6769,13 @@ button { font-family: inherit; cursor: pointer; }
 
     _openTiendaModal() {
       if (!this._puede('cobrar')) { this._toast('No tienes permiso para esta acción'); return; }
-      const cli = this._cliente;
-      if (cli && cli.contactId && !cli.esProvisional) { this._abrirVentaTienda(); return; }
+      // v1.1.86 — El paso de cliente se muestra SIEMPRE, también cuando ya
+      // hay uno cargado en el aside: es donde se captura el CIF/DNI, que
+      // hay que pedir con el cliente delante y no después de cobrar. Si el
+      // cliente ya existe, el formulario viene relleno y basta con
+      // continuar.
+      this._tiendaVatId = '';
+      this._tiendaLegalName = '';
       this._openTiendaClienteForm();
     }
 
@@ -6764,19 +6783,30 @@ button { font-family: inherit; cursor: pointer; }
     // en el aside (caso típico: cliente provisional con solo el nombre).
     _openTiendaClienteForm() {
       const cli = this._cliente || {};
+      const yaIdentificado = !!(cli.contactId && !cli.esProvisional);
       const partes = String(cli.nombre || '').trim().split(' ');
       const nomPrev = partes.shift() || '';
       const apePrev = partes.join(' ');
       const box = this._openSubModal(`
         <div class="ks-modal-head"><span class="ks-modal-staff">🛍 TIENDA · CLIENTE</span><button class="ks-modal-x" id="tdX">✕</button></div>
-        <div style="margin-top:14px;font-size:13px;color:var(--ks-ink2);">La venta se registra a nombre de un cliente. Indica sus datos para darlo de alta.</div>
+        <div style="margin-top:14px;font-size:13px;color:var(--ks-ink2);">${yaIdentificado
+          ? 'Cliente cargado. Añade el CIF/DNI si va a querer factura completa.'
+          : 'La venta se registra a nombre de un cliente. Indica sus datos para darlo de alta.'}</div>
         <div style="margin-top:14px;display:grid;gap:8px">
-          <input id="tdNombre" placeholder="Nombre *" value="${esc(nomPrev)}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">
-          <input id="tdApellido" placeholder="Apellidos" value="${esc(apePrev)}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">
-          <input id="tdTelefono" placeholder="Teléfono" value="${esc(cli.telefono || '')}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">
-          <input id="tdEmail" placeholder="Email" value="${esc(cli.email || '')}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">
+          <input id="tdNombre" placeholder="Nombre *" value="${esc(nomPrev)}" ${yaIdentificado ? 'disabled' : ''} style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;${yaIdentificado ? 'background:var(--ks-paper2);color:var(--ks-ink2);' : ''}">
+          <input id="tdApellido" placeholder="Apellidos" value="${esc(apePrev)}" ${yaIdentificado ? 'disabled' : ''} style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;${yaIdentificado ? 'background:var(--ks-paper2);color:var(--ks-ink2);' : ''}">
+          <input id="tdTelefono" placeholder="Teléfono" value="${esc(cli.telefono || '')}" ${yaIdentificado ? 'disabled' : ''} style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;${yaIdentificado ? 'background:var(--ks-paper2);color:var(--ks-ink2);' : ''}">
+          <input id="tdEmail" placeholder="Email" value="${esc(cli.email || '')}" ${yaIdentificado ? 'disabled' : ''} style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;${yaIdentificado ? 'background:var(--ks-paper2);color:var(--ks-ink2);' : ''}">
         </div>
-        <div style="margin-top:10px;font-size:11.5px;color:var(--ks-ink3);">Nombre y, al menos, teléfono o email.</div>
+        <div style="margin-top:14px;border-top:1px solid var(--ks-line2);padding-top:12px;">
+          <div style="font-size:10.5px;font-weight:700;color:var(--ks-ink3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">Datos fiscales · solo si quiere factura</div>
+          <div style="display:grid;gap:8px">
+            <input id="tdVatId" placeholder="CIF / DNI" value="${esc(this._tiendaVatId || '')}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">
+            <input id="tdLegal" placeholder="Razón social o nombre fiscal" value="${esc(this._tiendaLegalName || '')}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">
+          </div>
+          <div style="margin-top:7px;font-size:11px;color:var(--ks-ink3);">Si lo dejas vacío podrás emitir ticket, y añadir el CIF más tarde para convertirlo en factura.</div>
+        </div>
+        <div style="margin-top:10px;font-size:11.5px;color:var(--ks-ink3);">${yaIdentificado ? '' : 'Nombre y, al menos, teléfono o email.'}</div>
         <div class="ks-modal-foot" style="margin-top:16px;">
           <button class="ks-modal-close" id="tdCancel">Cancelar</button>
           <button class="ks-pay" id="tdOk" style="background:var(--ks-ink);color:#fff;">Continuar</button>
@@ -6784,6 +6814,13 @@ button { font-family: inherit; cursor: pointer; }
       box.querySelector('#tdX').addEventListener('click', () => this._closeSubModal());
       box.querySelector('#tdCancel').addEventListener('click', () => this._closeSubModal());
       box.querySelector('#tdOk').addEventListener('click', () => {
+        // Los datos fiscales se guardan siempre: viajan al paso de factura
+        // y se persisten en la ficha del cliente al emitirla.
+        this._tiendaVatId = box.querySelector('#tdVatId').value.trim();
+        this._tiendaLegalName = box.querySelector('#tdLegal').value.trim();
+
+        if (yaIdentificado) { this._abrirVentaTienda(); return; }
+
         const nombre = box.querySelector('#tdNombre').value.trim();
         const apellido = box.querySelector('#tdApellido').value.trim();
         const telefono = box.querySelector('#tdTelefono').value.trim();
