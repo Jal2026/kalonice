@@ -8,11 +8,20 @@
 //   https://www.hair-times.com/_functions/whatsappWebhook  (GET=verificación, POST=mensajes entrantes)
 //   https://www.hair-times.com/_functions/akiraAsk         (POST=pregunta a AKIRA)
 //   https://www.hair-times.com/_functions/akiraTts         (POST=voz de AKIRA)
-//   https://www.peluqueriakalonice.es/_functions/recuperarContactos?token=...&desde=0&hasta=25
+//   https://www.peluqueriakalonice.es/_functions/recuperarContactos?token=...&desde=0&hasta=50
 //                                                          (GET=recuperación one-shot, KALÓNICE)
 //
 // CHANGELOG
 // ---------
+// v1.4.2 (4-Ago-2026)
+//   - get_recuperarContactos: modo &auto=1. Devuelve una página HTML que
+//     se recarga sola con el tramo siguiente (meta refresh) hasta agotar
+//     el lote, mostrando progreso y totales acumulados. Evita tener que
+//     pegar ~30 URLs a mano. Sin &auto=1 el endpoint sigue devolviendo
+//     JSON exactamente igual que en v1.4.1.
+//   - Los acumulados viajan en la query string (accC/accS/accE) porque
+//     el endpoint no tiene estado entre llamadas.
+//
 // v1.4.1 (4-Ago-2026)
 //   - get_recuperarContactos: se pasa también skipCheck al core
 //     (recuperarContactos.web.js v1.0.2). Sin cambios en el resto.
@@ -719,7 +728,7 @@ export async function get_dumpReservasV1(request) {
 //
 // URL:
 //   https://www.peluqueriakalonice.es/_functions/recuperarContactos
-//        ?token=KL-REC-2026-0804&desde=0&hasta=25[&dryRun=1][&skipCheck=1]
+//        ?token=KL-REC-2026-0804&desde=0&hasta=50&auto=1   ← modo automatico
 //
 // Recrea las 766 fichas que el importador del Dashboard descartó porque su
 // móvil ya existía en el CRM (grupos familiares que comparten número).
@@ -755,15 +764,88 @@ export async function get_recuperarContactos(request) {
         // Se importa la función PURA, no el webMethod: este archivo corre
         // SIN sesión de miembro (ver aviso de akiraSynthesizeCore arriba).
         const { recuperarContactosCore } = await import('backend/recuperarContactos.web.js');
+        const auto = request.query.auto === '1' || request.query.auto === 'true';
+
         const result = await recuperarContactosCore({ desde, hasta, dryRun, skipCheck });
 
         if (!result || !result.ok) {
             return serverError({ body: result?.error || 'Error desconocido en recuperarContactos' });
         }
 
+        // ── Modo JSON (comportamiento v1.4.1, intacto) ──
+        if (!auto) {
+            return ok({
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(result, null, 2)
+            });
+        }
+
+        // ── Modo AUTO: HTML que se recarga solo con el tramo siguiente ──
+        // Los acumulados viajan por query string: el endpoint no tiene estado.
+        const accC = (parseInt(request.query.accC, 10) || 0) + (result.resumen?.creados  || 0);
+        const accS = (parseInt(request.query.accS, 10) || 0) + (result.resumen?.saltados || 0);
+        const accE = (parseInt(request.query.accE, 10) || 0) + (result.resumen?.errores  || 0);
+
+        const hecho   = result.procesadoHasta || 0;
+        const total   = result.totalLote || 0;
+        const pct     = total > 0 ? Math.round((hecho / total) * 100) : 0;
+        const tam     = Math.max(25, (hasta - desde));
+        const terminado = !result.siguienteTramo;
+
+        const base = '/_functions/recuperarContactos'
+            + '?token=' + encodeURIComponent(token)
+            + (dryRun ? '&dryRun=1' : '')
+            + (skipCheck ? '&skipCheck=1' : '')
+            + '&auto=1&accC=' + accC + '&accS=' + accS + '&accE=' + accE;
+        const urlSiguiente = base + '&desde=' + hecho + '&hasta=' + Math.min(total, hecho + tam);
+
+        // Errores del tramo actual, para verlos sin abrir el log.
+        const fallos = (result.detalle || [])
+            .filter(d => String(d.estado || '').indexOf('ERROR') === 0)
+            .map(d => '<li>' + d.nombre + ' — ' + (d.code || d.msg || d.estado) + '</li>')
+            .join('');
+
+        const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">'
+            + '<title>Recuperando contactos</title>'
+            + (terminado ? '' : '<meta http-equiv="refresh" content="1;url=' + urlSiguiente + '">')
+            + '<style>'
+            + 'body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f6f8;'
+            + 'margin:0;padding:40px 20px;color:#1a1a2e;display:flex;justify-content:center}'
+            + '.card{background:#fff;border-radius:14px;padding:32px 36px;max-width:560px;width:100%;'
+            + 'box-shadow:0 2px 18px rgba(0,0,0,.08)}'
+            + 'h1{font-size:20px;margin:0 0 4px}'
+            + '.sub{color:#6b6b80;font-size:14px;margin:0 0 24px}'
+            + '.bar{background:#ececf2;border-radius:999px;height:14px;overflow:hidden;margin:0 0 8px}'
+            + '.fill{background:#6b3fa0;height:100%;transition:width .3s}'
+            + '.pct{font-size:13px;color:#6b6b80;margin:0 0 24px}'
+            + '.grid{display:flex;gap:10px;margin:0 0 20px}'
+            + '.box{flex:1;background:#f6f6f8;border-radius:10px;padding:14px;text-align:center}'
+            + '.num{font-size:26px;font-weight:600;display:block}'
+            + '.lbl{font-size:11px;color:#6b6b80;text-transform:uppercase;letter-spacing:.5px}'
+            + '.ok{color:#2e7d4f}.warn{color:#6b3fa0}.err{color:#c0392b}'
+            + '.done{background:#e8f5ee;border-radius:10px;padding:16px;color:#2e7d4f;font-weight:600;text-align:center}'
+            + '.foot{font-size:12px;color:#9a9aae;margin-top:20px;line-height:1.6}'
+            + 'ul{font-size:13px;color:#c0392b;padding-left:20px}'
+            + '</style></head><body><div class="card">'
+            + '<h1>Recuperando contactos' + (dryRun ? ' (simulación)' : '') + '</h1>'
+            + '<p class="sub">' + hecho + ' de ' + total + ' fichas procesadas</p>'
+            + '<div class="bar"><div class="fill" style="width:' + pct + '%"></div></div>'
+            + '<p class="pct">' + pct + '%</p>'
+            + '<div class="grid">'
+            + '<div class="box"><span class="num ok">' + accC + '</span><span class="lbl">Creados</span></div>'
+            + '<div class="box"><span class="num warn">' + accS + '</span><span class="lbl">Ya estaban</span></div>'
+            + '<div class="box"><span class="num err">' + accE + '</span><span class="lbl">Errores</span></div>'
+            + '</div>'
+            + (fallos ? '<ul>' + fallos + '</ul>' : '')
+            + (terminado
+                ? '<div class="done">Terminado. Ya puedes cerrar esta pestaña.</div>'
+                : '<p class="foot">Continuando solo. No cierres esta pestana hasta que termine.<br>'
+                  + 'Ultimo tramo: ' + result.ms + ' ms · ' + (result.msPorFicha || '-') + ' ms por ficha.</p>')
+            + '</div></body></html>';
+
         return ok({
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(result, null, 2)
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            body: html
         });
 
     } catch (error) {
