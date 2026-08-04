@@ -1,7 +1,21 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.84  ·  Botón TIENDA — venta de productos sin cita
+ * VERSION: 1.1.85  ·  TIENDA con ticket / factura y CIF-DNI
+ *
+ * v1.1.85 (4 ago 2026) — La venta de TIENDA ya emite documento KAMISUITE.
+ *   Al registrar la venta el modal deja de cerrarse: muestra el resultado
+ *   y ofrece 🧾 Ticket (factura simplificada) o 📄 Factura completa. La
+ *   factura pide CIF/DNI y razón social, que se guardan en la ficha del
+ *   cliente para las próximas veces. Si ya se emitió ticket, aparece
+ *   "Convertir a factura" y el backend la emite como rectificativa, misma
+ *   mecánica que en el modal de cita.
+ *   El documento se ancla al cobro por `sourceKey` (el orderId de la
+ *   venta, que es el bookingId de su fila en PaymentReservations), no a
+ *   una reserva. Requiere facturacionSalonLogic v1.0.4, los campos
+ *   sourceType y sourceKey en Invoices, y page code v1.0.38.
+ *
+ * v1.1.84  ·  Botón TIENDA — venta de productos sin cita
  *
  * v1.1.84 (4 ago 2026) — TIENDA. Botón nuevo en la barra superior, junto a
  *   FICHA TÉCNICA, para vender productos a quien entra sin cita. Abre el
@@ -1443,7 +1457,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.84]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.85]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2499,6 +2513,12 @@ button { font-family: inherit; cursor: pointer; }
       this._addCmpUid = '';            // "⛓ Complemento": selección
       this._addCmpVarIdx = 0;
       this._tiendaEsperandoCliente = false;  // alta de cliente desde TIENDA
+      this._ventaTiendaActiva = false;       // el modal de venta viene de TIENDA
+      this._ventaTiendaKey = '';             // sourceKey (bookingId) de la venta
+      this._ventaTiendaTotal = 0;
+      this._ventaDoc = null;                 // documento emitido de la venta
+      this._ventaForm = false;               // form CIF/DNI abierto
+      this._ventaGenerando = false;
       this._reservando = false;
       this._pagando = false;
       this._modalReserva = null;
@@ -3094,12 +3114,53 @@ button { font-family: inherit; cursor: pointer; }
             if (bAdd) bAdd.disabled = false;
           }
           break;
+        // v1.1.85 — documentos de la venta de TIENDA
+        case 'ticketVentaGenerado':
+        case 'facturaVentaGenerada': {
+          this._ventaGenerando = false;
+          if (p.ok) {
+            this._ventaDoc = {
+              modo: p.modo || (p.type === 'ticketVentaGenerado' ? 'ticket' : 'factura'),
+              invoiceNumber: p.invoiceNumber || '',
+              pdfUrl: p.pdfUrl || ''
+            };
+            this._toast(p.duplicado ? 'Esta venta ya tenía documento' : `Documento emitido · ${p.invoiceNumber || ''}`);
+          } else {
+            this._toast('Error: ' + (p.error?.message || p.error || 'no se pudo emitir'));
+          }
+          this._renderVentaDocPanel();
+          break;
+        }
+        case 'documentoVenta':
+          if (p.ok && p.existe && p.documento) {
+            this._ventaDoc = {
+              modo: p.documento.modo,
+              invoiceNumber: p.documento.invoiceNumber || '',
+              pdfUrl: p.documento.pdfUrl || ''
+            };
+            this._renderVentaDocPanel();
+          }
+          break;
         case 'producto-agregado':
           // v1.1.16 legacy — ya no se usa, mantenemos por compatibilidad
           break;
         case 'productos-venta-result':
           if (p.ok) {
             this._toast('Venta de productos registrada ✓');
+            // v1.1.85 — venta desde TIENDA: el modal se queda abierto para
+            // emitir ticket o factura. La clave del documento es el orderId,
+            // que es el bookingId con el que el cobro entra en
+            // PaymentReservations.
+            if (this._ventaTiendaActiva) {
+              const pl = p.payload || {};
+              this._ventaTiendaKey = String(pl.orderId || '');
+              this._ventaTiendaTotal = Number(pl.total) || 0;
+              this._ventaDoc = null;
+              this._ventaForm = false;
+              this._ventaGenerando = false;
+              this._renderVentaDocPanel();
+              break;
+            }
             this._closeProductoModal();
             this._closeModal();
             this._sendToPage('getReservas', { fecha: this._fecha });
@@ -6598,6 +6659,100 @@ button { font-family: inherit; cursor: pointer; }
     // No hay venta anónima: venderProductosDesdeAgenda exige contactId
     // porque genera un pedido real de tienda.
     // ═══════════════════════════════════════════════════
+    // v1.1.85 — Tras registrar una venta de TIENDA, el modal no se cierra:
+    // muestra el resultado y ofrece TICKET (factura simplificada) o FACTURA
+    // completa con CIF/DNI, con la misma mecánica que el modal de cita.
+    // El documento se ancla al cobro por `sourceKey` (bookingId de la venta),
+    // no a una reserva — backend facturacionSalonLogic v1.0.4.
+    _renderVentaDocPanel() {
+      const body = this.shadowRoot.querySelector('#pdBody');
+      if (!body) return;
+      const cli = this._cliente || {};
+      const total = Number(this._ventaTiendaTotal) || 0;
+
+      let slot = '';
+      if (this._ventaGenerando) {
+        slot = `<div style="display:flex;align-items:center;gap:7px;color:var(--ks-ink2);font-size:12.5px;font-weight:600">
+          <span style="display:inline-block;width:12px;height:12px;border:2px solid var(--ks-line);border-top-color:var(--ks-accent);border-radius:50%;animation:ksSpin .7s linear infinite;"></span>
+          Generando documento…</div>`;
+      } else if (this._ventaDoc && this._ventaDoc.invoiceNumber) {
+        const d = this._ventaDoc;
+        const esTicket = d.modo === 'ticket';
+        slot = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="display:inline-flex;align-items:center;gap:7px;background:${esTicket ? 'var(--ks-paper2)' : 'var(--ks-accent-soft)'};border:1px solid ${esTicket ? 'var(--ks-line)' : 'var(--ks-accent)'};border-radius:8px;padding:6px 12px;font-size:12.5px;font-weight:700;color:${esTicket ? 'var(--ks-ink)' : 'var(--ks-accent-ink)'}">
+              <span>${esTicket ? '🧾' : '📄'}</span><span>${esc(d.invoiceNumber)}</span>
+              <a href="#" id="vtPdf" title="Abrir PDF" style="text-decoration:none;color:inherit;font-size:14px;margin-left:2px">🔗</a>
+            </span>
+            ${esTicket ? '<button id="vtUpgrade" style="background:#15803d;color:#fff;border:0;border-radius:8px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit">📄 Convertir a factura</button>' : ''}
+          </div>`;
+      } else if (this._ventaForm) {
+        slot = `<div style="display:flex;flex-direction:column;gap:7px">
+            <div style="font-size:10.5px;font-weight:700;color:var(--ks-ink3);letter-spacing:.5px;text-transform:uppercase">Datos para factura completa</div>
+            <input id="vtVat" placeholder="CIF / DNI *" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--ks-line);border-radius:8px;font-size:13px;font-family:inherit">
+            <input id="vtLegal" placeholder="Razón social o nombre fiscal" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--ks-line);border-radius:8px;font-size:13px;font-family:inherit">
+            <div style="display:flex;gap:7px">
+              <button id="vtEmitir" style="flex:1;background:var(--ks-ink);color:#fff;border:0;border-radius:8px;padding:9px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit">Emitir factura</button>
+              <button id="vtFormCancel" style="background:var(--ks-paper2);color:var(--ks-ink2);border:1px solid var(--ks-line);border-radius:8px;padding:9px 12px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit">Cancelar</button>
+            </div>
+            <div style="font-size:11px;color:var(--ks-ink3)">El CIF/DNI se guarda en la ficha del cliente para las próximas veces.</div>
+          </div>`;
+      } else {
+        slot = `<div style="display:flex;gap:8px">
+            <button id="vtTicket" style="flex:1;background:var(--ks-paper2);color:var(--ks-ink);border:1px solid var(--ks-line);border-radius:8px;padding:10px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit">🧾 Ticket</button>
+            <button id="vtFactura" style="flex:1;background:var(--ks-ink);color:#fff;border:0;border-radius:8px;padding:10px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit">📄 Factura</button>
+          </div>`;
+      }
+
+      body.innerHTML = `
+        <div style="text-align:center;padding:6px 0 12px">
+          <div style="font-size:26px">✓</div>
+          <div style="font-size:14px;font-weight:700;color:var(--ks-ink);margin-top:4px">Venta registrada</div>
+          <div style="font-size:12.5px;color:var(--ks-ink2);margin-top:2px">${esc(cli.nombre || '')} · ${total}€</div>
+        </div>
+        <div style="border-top:1px solid var(--ks-line2);padding-top:12px">
+          <div style="font-size:10.5px;font-weight:700;color:var(--ks-ink3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Documento</div>
+          ${slot}
+        </div>
+        <div class="ks-modal-foot" style="margin-top:16px">
+          <button class="ks-modal-close" id="vtCerrar">Cerrar</button>
+        </div>`;
+
+      body.querySelector('#vtCerrar')?.addEventListener('click', () => {
+        this._closeProductoModal();
+        this._sendToPage('getReservas', { fecha: this._fecha });
+      });
+      body.querySelector('#vtTicket')?.addEventListener('click', () => {
+        if (!this._ventaTiendaKey) { this._toast('No se puede identificar la venta'); return; }
+        this._ventaGenerando = true; this._renderVentaDocPanel();
+        this._sendToPage('generarTicketVenta', { sourceKey: this._ventaTiendaKey });
+      });
+      body.querySelector('#vtFactura')?.addEventListener('click', () => {
+        this._ventaForm = true; this._renderVentaDocPanel();
+      });
+      body.querySelector('#vtUpgrade')?.addEventListener('click', () => {
+        this._ventaForm = true; this._ventaDoc = null; this._renderVentaDocPanel();
+      });
+      body.querySelector('#vtFormCancel')?.addEventListener('click', () => {
+        this._ventaForm = false; this._renderVentaDocPanel();
+      });
+      body.querySelector('#vtEmitir')?.addEventListener('click', () => {
+        const vatId = body.querySelector('#vtVat').value.trim();
+        const legalName = body.querySelector('#vtLegal').value.trim();
+        if (!vatId) { this._toast('El CIF/DNI es obligatorio para la factura completa'); return; }
+        if (!this._ventaTiendaKey) { this._toast('No se puede identificar la venta'); return; }
+        this._ventaForm = false;
+        this._ventaGenerando = true;
+        this._renderVentaDocPanel();
+        this._sendToPage('generarFacturaVenta', { sourceKey: this._ventaTiendaKey, vatId, legalName });
+      });
+      body.querySelector('#vtPdf')?.addEventListener('click', e => {
+        e.preventDefault();
+        const url = this._ventaDoc && this._ventaDoc.pdfUrl;
+        if (url) window.open(url, '_blank', 'noopener');
+        else this._toast('El documento no tiene PDF asociado');
+      });
+    }
+
     _openTiendaModal() {
       if (!this._puede('cobrar')) { this._toast('No tienes permiso para esta acción'); return; }
       const cli = this._cliente;
@@ -6647,6 +6802,12 @@ button { font-family: inherit; cursor: pointer; }
       const cli = this._cliente;
       if (!cli || !cli.contactId) { this._toast('Falta identificar al cliente'); return; }
       this._closeSubModal();
+      this._ventaTiendaActiva = true;
+      this._ventaTiendaKey = '';
+      this._ventaTiendaTotal = 0;
+      this._ventaDoc = null;
+      this._ventaForm = false;
+      this._ventaGenerando = false;
       this._openAddProductoModal({
         _id: '',                       // sin cita → el page code manda packId vacío
         contactId: cli.contactId,
@@ -6688,6 +6849,13 @@ button { font-family: inherit; cursor: pointer; }
     }
     _closeProductoModal() {
       this._pendingProdReserva = null;
+      // v1.1.85 — limpiar el estado de la venta de TIENDA
+      this._ventaTiendaActiva = false;
+      this._ventaTiendaKey = '';
+      this._ventaTiendaTotal = 0;
+      this._ventaDoc = null;
+      this._ventaForm = false;
+      this._ventaGenerando = false;
       this._productoCart = [];
       this._productoSearchQ = '';
       this._closeSubModal();
