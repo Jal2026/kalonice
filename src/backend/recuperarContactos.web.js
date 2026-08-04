@@ -1,5 +1,5 @@
 // =====================================================
-// [RecuperarContactos v1.0.2] - recuperarContactos.web.js
+// [RecuperarContactos v1.0.3] - recuperarContactos.web.js
 //
 // BACKEND ONE-SHOT — RECUPERACIÓN DE CONTACTOS PERDIDOS
 // EN LA IMPORTACIÓN SADPE → WIX CRM (KALÓNICE, agosto 2026)
@@ -71,6 +71,27 @@
 // -----------------------------------------------------------------
 // CHANGELOG
 // -----------------------------------------------------------------
+// v1.0.3 (4-ago-2026) — HOTFIX presupuesto. La v1.0.2 volcaba la CRM
+//   ENTERA (3.855 contactos) en cada llamada: 11.772 ms solo el volcado,
+//   agotaba el presupuesto y procesaba 0 fichas.
+//   · volcarCRM() ELIMINADO. La idempotencia ya no mira toda la CRM,
+//     solo los contactos que ESTE script ha creado, identificados por la
+//     etiqueta del lote. Empieza en 0 y termina en 766 → como mucho una
+//     página. Protege exactamente contra el riesgo real: relanzar un
+//     tramo ya procesado.
+//   · Patrón COPIADO de adserverLogic.web.js getClientesPorLabel
+//     (líneas 200-245): findOrCreateLabel → labelKey, luego
+//     queryContacts().hasSome('info.labelKeys',[labelKey]).limit(100)
+//     con paginación por cursor (result.hasNext() / result.next()).
+//   · La etiqueta se resuelve SIEMPRE (también en dryRun), porque ahora
+//     es la fuente de la comprobación.
+//   · PRESUPUESTO_MS subido a 20000. Dato empírico de la v1.0.2: el
+//     endpoint devolvió respuesta a los 11.772 ms sin que Wix lo cortara,
+//     luego el timeout real está por encima de esa cifra.
+//   AVISO: la comprobación NO detecta contactos preexistentes ajenos al
+//   script. No hace falta: el LOTE se construyó precisamente con las
+//   fichas que NO están en la CRM.
+//
 // v1.0.2 (4-ago-2026) — HOTFIX 504 (timeout). La v1.0.1 lanzaba UNA
 //   query a queryContacts POR CADA ficha del tramo (50 queries
 //   secuenciales antes de crear nada) y Wix cortaba el endpoint.
@@ -122,8 +143,8 @@ import { webMethod, Permissions } from 'wix-web-module';
 import { elevate } from 'wix-auth';
 import { contacts } from 'wix-crm-backend';
 
-const VERSION = 'v1.0.2';
-const TAG = '[RecuperarContactos v1.0.2]';
+const VERSION = 'v1.0.3';
+const TAG = '[RecuperarContactos v1.0.3]';
 
 const ETIQUETA_LOTE = 'Kalonice recuperados';
 
@@ -909,7 +930,7 @@ const LOTE = [
 // presupuesto, se corta limpiamente y se devuelve el punto exacto donde
 // se quedó, para continuar en la llamada siguiente.
 // =====================================================
-const PRESUPUESTO_MS = 10000;
+const PRESUPUESTO_MS = 20000;
 
 // Últimos 9 dígitos — COPIADO LITERAL de contactLookup.web.js línea 74.
 function tel9(tel) {
@@ -925,46 +946,51 @@ function norm(s) {
 }
 
 // =====================================================
-// volcarCRM — volcado ÚNICO paginado + índices en memoria.
+// leerYaCreados — contactos que ESTE script ya creó.
 //
-// v1.0.2 — patrón COPIADO de contactLookup.web.js buscarContactoIdLote
-// (líneas 267-300): .skip(skip).limit(1000).find() en bucle hasta
-// agotar, y Maps en memoria. Sustituye a la query-por-ficha de v1.0.1
-// que provocaba el 504.
+// v1.0.3 — sustituye al volcado de la CRM entera de v1.0.2 (11.772 ms,
+// inviable). Solo consulta los contactos con la etiqueta del lote:
+// arranca en 0 y acaba en 766, como mucho una página.
 //
-// Devuelve { porNombre:Set, porNombreTel:Set, total }
-//   porNombre    → claves "nombre apellido" normalizado
-//   porNombreTel → claves "nombre apellido|tel9"
+// Patrón COPIADO de adserverLogic.web.js getClientesPorLabel
+// (líneas 204-245): .hasSome('info.labelKeys',[labelKey]).limit(100)
+// y paginación por cursor con result.hasNext() / result.next().
+//
+// Devuelve Set de claves "nombre apellido|tel9".
 // =====================================================
-async function volcarCRM(elevatedQuery) {
-  const porNombre = new Set();
-  const porNombreTel = new Set();
-  let total = 0;
+async function leerYaCreados(elevatedQuery, labelKey) {
+  const claves = new Set();
+  if (!labelKey) return claves;
 
-  let skip = 0;
-  const pageSize = 1000;
   let hasMore = true;
+  let cursorPaging = undefined;
 
   while (hasMore) {
-    const r = await elevatedQuery().skip(skip).limit(pageSize).find();
-    const its = r?.items || [];
-    for (const c of its) {
-      total++;
-      const nk = norm(`${c?.info?.name?.first || ''} ${c?.info?.name?.last || ''}`);
-      if (!nk) continue;
-      porNombre.add(nk);
-      const phones = Array.isArray(c?.info?.phones) ? c.info.phones : [];
-      for (const p of phones) {
-        const t = tel9(p?.phone || p);
-        if (t) porNombreTel.add(`${nk}|${t}`);
-      }
+    const queryBuilder = elevatedQuery()
+      .hasSome('info.labelKeys', [labelKey])
+      .limit(100);
+
+    let result;
+    if (cursorPaging) {
+      result = await cursorPaging.next();
+    } else {
+      result = await queryBuilder.find({ suppressAuth: true });
     }
-    if (its.length < pageSize) hasMore = false;
-    else skip += pageSize;
-    if (skip >= 20000) hasMore = false; // tope de seguridad (idem contactLookup)
+
+    const items = result.items || [];
+    for (const c of items) {
+      const nk = norm(`${c.info?.name?.first || ''} ${c.info?.name?.last || ''}`);
+      if (!nk) continue;
+      const phones = Array.isArray(c.info?.phones) ? c.info.phones : [];
+      if (phones.length === 0) { claves.add(`${nk}|`); continue; }
+      for (const p of phones) claves.add(`${nk}|${tel9(p?.phone || p)}`);
+    }
+
+    hasMore = result.hasNext && result.hasNext();
+    if (hasMore) cursorPaging = result;
   }
 
-  return { porNombre, porNombreTel, total };
+  return claves;
 }
 
 // =====================================================
@@ -996,25 +1022,25 @@ export async function recuperarContactosCore({ desde = 0, hasta = 25, dryRun = f
 
   console.log(`${TAG} INICIO tramo [${ini}, ${fin}) · dryRun=${dryRun} · skipCheck=${skipCheck} · total lote=${LOTE.length}`);
 
-  // ── Volcado único de la CRM (idempotencia) ──
-  let idx = null;
-  let crmTotal = -1;
-  if (!skipCheck) {
-    idx = await volcarCRM(elevatedQuery);
-    crmTotal = idx.total;
-    console.log(`${TAG} volcado CRM: ${crmTotal} contactos · ${Date.now() - t0} ms`);
+  // ── Etiqueta del lote — patrón crmToolsLogic líneas 103-113 ──
+  // v1.0.3: se resuelve SIEMPRE (también en dryRun) porque ahora es la
+  // fuente de la comprobación de idempotencia.
+  let labelKey = null;
+  try {
+    const resp = await elevatedFindLabel(ETIQUETA_LOTE);
+    labelKey = resp?.label?.key || null;
+    console.log(`${TAG} etiqueta "${ETIQUETA_LOTE}" → key=${labelKey} · ${Date.now() - t0} ms`);
+  } catch (e) {
+    console.warn(`${TAG} findOrCreateLabel falló: ${e.message} — se continúa sin etiquetar`);
   }
 
-  // ── Etiqueta del lote — patrón crmToolsLogic líneas 103-113 ──
-  let labelKey = null;
-  if (!dryRun) {
-    try {
-      const resp = await elevatedFindLabel(ETIQUETA_LOTE);
-      labelKey = resp?.label?.key || null;
-      console.log(`${TAG} etiqueta "${ETIQUETA_LOTE}" → key=${labelKey}`);
-    } catch (e) {
-      console.warn(`${TAG} findOrCreateLabel falló: ${e.message} — se continúa sin etiquetar`);
-    }
+  // ── Ya creados por este script (idempotencia barata) ──
+  let idx = null;
+  let yaCreadosTotal = -1;
+  if (!skipCheck) {
+    idx = await leerYaCreados(elevatedQuery, labelKey);
+    yaCreadosTotal = idx.size;
+    console.log(`${TAG} ya creados con etiqueta: ${yaCreadosTotal} claves · ${Date.now() - t0} ms`);
   }
 
   const detalle = [];
@@ -1035,19 +1061,10 @@ export async function recuperarContactosCore({ desde = 0, hasta = 25, dryRun = f
 
     try {
       // ── Idempotencia (en memoria, sin query) ──
-      if (idx) {
-        const nk = norm(`${nombre} ${apellido}`);
-        const kTel = `${nk}|${tel9(telefono)}`;
-        if (idx.porNombreTel.has(kTel)) {
-          saltados++;
-          detalle.push({ i, sadpe: numSadpe, nombre: ficha, estado: 'YA_EXISTE', motivo: 'NOMBRE_Y_TELEFONO' });
-          continue;
-        }
-        if (idx.porNombre.has(nk)) {
-          saltados++;
-          detalle.push({ i, sadpe: numSadpe, nombre: ficha, estado: 'YA_EXISTE', motivo: 'SOLO_NOMBRE' });
-          continue;
-        }
+      if (idx && idx.has(`${norm(`${nombre} ${apellido}`)}|${tel9(telefono)}`)) {
+        saltados++;
+        detalle.push({ i, sadpe: numSadpe, nombre: ficha, estado: 'YA_CREADO' });
+        continue;
       }
 
       if (dryRun) {
@@ -1121,7 +1138,7 @@ export async function recuperarContactosCore({ desde = 0, hasta = 25, dryRun = f
     dryRun: !!dryRun,
     ms,
     totalLote: LOTE.length,
-    crmContactos: crmTotal,
+    yaCreadosPrevios: yaCreadosTotal,
     tramoPedido: { desde: ini, hasta: fin },
     procesadoHasta,
     cortadoPorTiempo: cortadoEn !== null,
