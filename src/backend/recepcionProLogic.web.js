@@ -1,9 +1,36 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.44
-// FECHA: 4 de agosto de 2026
+// VERSION: 1.0.45
+// FECHA: 5 de agosto de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.45: 📐 EXTENSIÓN RAYADA POR FASE — `extenderFase`.
+//          Contexto: hasta v1.1.64 del widget, arrastrar el asa inferior
+//          de una cita creaba un BUFFER RAYADO detrás (campo raíz
+//          `extensionMin`) que se quitaba con una ✕. La v1.1.65 (29 jul)
+//          cambió el asa para que redimensionara la DURACIÓN de la fase
+//          (`redimensionarFase`) y dejó el buffer solo para reservas SIN
+//          fases — que en V2 no existen. Resultado: el bloque de color
+//          crecía, no había rayado y no había forma de deshacerlo.
+//          Jal: la extensión rayada es fundamental y debe estar en TODOS
+//          los servicios, principal o lavado.
+//
+//          Nueva función `extenderFase({ reservaId, faseIndex, extMin })`:
+//            · Escribe `extMin` DENTRO de la fase indicada (no en la raíz),
+//              que es lo que permite tener extensión en cualquier fase y no
+//              solo al final de la cita. extMin = 0 la quita.
+//            · NO desplaza ninguna otra fase, mismo criterio que
+//              `moverFase` y `redimensionarFase` v1.0.40: el operador manda.
+//            · Recalcula `duracionTotal` contando las extensiones:
+//              max(end + extMin) − min(start) de las fases ocupantes.
+//            · Bloquea si la cita está PAGADA y rechaza fases de proceso
+//              (PROCESO es hueco libre: extenderlo no significa nada).
+//
+//          `extenderReserva` / `quitarExtension` (campo raíz `extensionMin`)
+//          se conservan intactos para las reservas legacy sin fases.
+//          `redimensionarFase` tampoco se toca: sigue disponible aunque el
+//          widget v1.1.87 deje de invocarla desde el asa.
 //
 // v1.0.44: 🎚️ VARIANTES TAMBIÉN EN agregarComplementoReserva (botón
 //          "⛓ Complemento" del modal de cita). Mismo agujero que se cerró
@@ -952,7 +979,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.44';
+const VERSION = '1.0.45';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -3469,6 +3496,82 @@ export const moverFase = webMethod(
 //   - PAGADO se rechaza (igual que moverFase).
 //   - Recalcula fechaReserva = min(start) y duracionTotal = max(end) − min(start)
 //     de las ocupantes (agregados de la propia cita).
+
+// ─── Extensión rayada POR FASE (v1.0.45) ───────────────────────
+// Guarda `extMin` dentro de la fase. Es un buffer visual detrás de esa
+// fase concreta: no desplaza nada, no genera session y no se cobra.
+// extMin = 0 elimina la extensión.
+export const extenderFase = webMethod(
+  Permissions.SiteMember,
+  async ({ reservaId, faseIndex, extMin }) => {
+    try {
+      const min = Math.max(0, Math.round(Number(extMin) || 0));
+      console.log(`${TAG} 📐 extenderFase reserva=${reservaId} idx=${faseIndex} extMin=${min}`);
+      if (!reservaId) return { ok: false, error: 'Falta reservaId' };
+      if (faseIndex == null || isNaN(Number(faseIndex))) return { ok: false, error: 'faseIndex inválido' };
+
+      let registro;
+      try {
+        registro = await wixData.get(CMS_RESERVAS, reservaId, { suppressAuth: true });
+      } catch (e) {
+        return { ok: false, error: `Reserva no encontrada: ${reservaId}` };
+      }
+      if (!registro) return { ok: false, error: `Reserva no encontrada: ${reservaId}` };
+      if (registro.status === 'PAGADO') return { ok: false, error: 'No se puede extender una cita ya cobrada' };
+
+      const fasesArr = jsonIn(registro.fases, 'items');
+      const idx = Number(faseIndex);
+      if (idx < 0 || idx >= fasesArr.length) return { ok: false, error: `faseIndex fuera de rango (0..${fasesArr.length - 1})` };
+
+      const faseActual = fasesArr[idx];
+      if (!faseActual) return { ok: false, error: 'Fase no encontrada' };
+      // PROCESO es hueco libre por definición: no se extiende.
+      if (faseActual.ocupa === false) return { ok: false, error: 'Las fases de proceso no se extienden' };
+
+      // Solo se toca esta fase. Si extMin = 0, el campo se elimina para no
+      // dejar basura en el JSON.
+      const fasesNew = fasesArr.map((f, i) => {
+        if (i !== idx) return { ...f };
+        const nf = { ...f };
+        if (min > 0) nf.extMin = min;
+        else delete nf.extMin;
+        return nf;
+      });
+
+      // duracionTotal = max(end + extMin) − min(start) de las ocupantes.
+      const ocupantes = fasesNew.filter(f => f && f.ocupa);
+      let minStart = Infinity, maxEnd = -Infinity;
+      for (const f of ocupantes) {
+        if (f.start) {
+          const st = new Date(f.start).getTime();
+          if (!isNaN(st) && st < minStart) minStart = st;
+        }
+        if (f.end) {
+          const en = new Date(f.end).getTime() + (Number(f.extMin) || 0) * 60000;
+          if (!isNaN(en) && en > maxEnd) maxEnd = en;
+        }
+      }
+
+      registro.fases = { items: fasesNew };
+      if (isFinite(minStart) && isFinite(maxEnd) && maxEnd > minStart) {
+        registro.duracionTotal = Math.max(1, Math.round((maxEnd - minStart) / 60000));
+      }
+
+      await wixData.update(CMS_RESERVAS, registro, { suppressAuth: true });
+      console.log(`${TAG} ✅ Extensión de fase ${idx} = ${min} min | duracionTotal=${registro.duracionTotal}`);
+      return {
+        ok: true,
+        reservaId,
+        faseIndex: idx,
+        extMin: min,
+        duracionTotal: registro.duracionTotal
+      };
+    } catch (e) {
+      console.error(`${TAG} ❌ extenderFase:`, e.message);
+      return { ok: false, error: e.message };
+    }
+  }
+);
 
 export const redimensionarFase = webMethod(
   Permissions.SiteMember,
