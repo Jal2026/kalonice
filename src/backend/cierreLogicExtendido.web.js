@@ -1,6 +1,29 @@
 // =====================================================
-// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.1.4
+// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.1.5
 // =====================================================
+// v1.1.5 (4 ago 2026): DETALLE DE ESPECIALES en el Cierre Financiero.
+//      Las ventas manuales de productos comerciales (Bono 🎟️, Tarjeta
+//      PRIME ⭐, Tarjeta promocional 🎁) hechas desde Recepción PRO se
+//      registran en PaymentReservations con staff='ESPECIALES'
+//      (especialesVentaLogic v1.0.1 · registrarCobroEspecial). Hasta
+//      ahora entraban en TOTAL COBRADO REAL, en "Cobrado por método de
+//      pago", en el desglose de IVA y como una línea agregada
+//      "ESPECIALES · N cobros" en "Cobrado por staff", pero NO se veía
+//      QUÉ se había vendido ni A QUIÉN: la sección "Productos cobrados
+//      hoy" se construye con parsearProductos, que solo reconoce tokens
+//      con prefijo 🛒, y los especiales usan 🎟️ / ⭐ / 🎁.
+//      Cambio: procesarCierre acumula además `especiales[]` (una entrada
+//      por cada fila de pago con staff='ESPECIALES') con cliente,
+//      concepto (la descripcion tal cual la escribió la venta), importe
+//      y método de pago, más `especialesTotal`.
+//      NO se altera ningún cálculo previo: el importe ya sumaba en
+//      totalReal, porMetodo, IVA y staffAgg y sigue sumando exactamente
+//      igual. La línea "ESPECIALES" de "Cobrado por staff" se mantiene
+//      (solo TIENDA_POS está excluida de ese agregado) para que el
+//      bloque siga cuadrando con el total.
+//      Aditivo puro: dos campos nuevos en el return de procesarCierre.
+//      Un widget antiguo que no los lea sigue funcionando igual.
+//
 // v1.1.4 (14 jun 2026): FILTRADO DE BLOQUEOS del informe del día.
 //      Los bloqueos manuales del calendario (family='BLOQUEO' /
 //      clientName con prefijo 'BLOQUEO:Almuerzo', etc.) creados por el
@@ -74,11 +97,16 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CierreExt v1.1.4]';
+const TAG = '[CierreExt v1.1.5]';
 const COLECCION_PAGOS    = 'PaymentReservations';
 const COLECCION_RESERVAS = 'KamisuiteReservations';
 const COLECCION_STAFF    = 'StaffConfig';
 const COLECCION_CONFIG   = 'SalonConfig';
+
+// v1.1.5 — Etiqueta de staff que escribe especialesVentaLogic en
+// PaymentReservations.staff para las ventas manuales de Bono / PRIME /
+// Tarjeta promocional. Debe coincidir con STAFF_ESPECIALES de ese backend.
+const STAFF_ESPECIALES = 'ESPECIALES';
 
 // =====================================================
 // HELPERS COMUNES
@@ -387,6 +415,8 @@ function procesarCierre(pagos, staffList, vatRate) {
   const externosArr = [];
   const descuentosArr = [];   // v1.1.1
   let descuentoTotal = 0;     // v1.1.1
+  const especialesArr = [];   // v1.1.5
+  let especialesTotal = 0;    // v1.1.5
 
   for (const p of noCancelados) {
     const importe = Number(p.importeTotal) || 0;
@@ -425,6 +455,21 @@ function procesarCierre(pagos, staffList, vatRate) {
       if (info) { st.isExternal = info.isExternal; st.commissionPct = info.commissionPct; }
     }
 
+    // v1.1.5 — Detalle de ventas ESPECIALES (Bono / PRIME / Tarjeta).
+    // `concepto` es la descripcion tal cual la grabó registrarCobroEspecial
+    // ("🎟️ Bono · <servicio> (N usos) · N€", "⭐ Tarjeta PRIME · …",
+    // "🎁 Tarjeta · …", con el token de descuento concatenado si lo hubo).
+    // No se reparsea: se muestra literal para no perder ni inventar nada.
+    if (staffName.toUpperCase() === STAFF_ESPECIALES) {
+      especialesArr.push({
+        cliente: (p.nombreCliente || '').trim(),
+        concepto: String(p.descripcion || '').trim(),
+        importe: Math.round(importe * 100) / 100,
+        metodo: p.tipoPago || ''
+      });
+      especialesTotal += importe;
+    }
+
     const info = staffMap[staffName.toUpperCase()];
     if (info && info.isExternal) {
       const pct = info.commissionPct || 0;
@@ -454,7 +499,9 @@ function procesarCierre(pagos, staffList, vatRate) {
     externos: externosArr,
     externosComisionTotal: round(externosArr.reduce((s, e) => s + e.comision, 0)),
     descuentos: descuentosArr,                  // v1.1.1
-    descuentoTotal: round(descuentoTotal)       // v1.1.1
+    descuentoTotal: round(descuentoTotal),      // v1.1.1
+    especiales: especialesArr,                  // v1.1.5
+    especialesTotal: round(especialesTotal)     // v1.1.5
   };
 }
 
