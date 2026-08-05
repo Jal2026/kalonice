@@ -1,14 +1,59 @@
 // =====================================================
 // KAMISUITE — Page Code: Recepción Lite Mobile (V2 CMS-first)
 // =====================================================
-// VERSION: 0.3.5
-// FECHA: 4 de julio de 2026
+// VERSION: 0.3.6
+// FECHA: 6 de agosto de 2026
 // Página: /recepcionpromobile
 // Custom Element ID en Editor: kamisuiteBookingLite (tag: kamisuite-booking-lite)
 //
 // Comunicación (sin cambios respecto al cableado):
 //   Page → Element: el.setAttribute('response', JSON.stringify({type, ...data, ts}))
 //   Element → Page: el.on('booking-message', handler)  (CustomEvent)
+//
+// =====================================================
+// v0.3.6 — handleReady IDEMPOTENTE + guarda de reentrada del cache
+// =====================================================
+//   PAREJA OBLIGATORIA del widget kamisuiteBookingLite v0.5.1, que
+//   introduce un retry loop de 'ready' cada 700 ms (hasta 12 intentos)
+//   para resolver el cuelgue aleatorio en "Cargando agenda…".
+//
+//   POR QUÉ ESTE PAGE CODE TIENE QUE CAMBIAR TAMBIÉN:
+//   En v0.3.5 cada mensaje 'ready' recibido dispara un handleReady
+//   completo: getStaffColumnas + getCatalogoReserva y, a continuación,
+//   cargarCacheContactosBackground() → cargarTodosContactos(), que en
+//   KALÓNICE son 5 páginas de 1.000 y 4.619 contactos, ~12 s de backend.
+//   Verificado en los logs de producción del 6-ago-2026 01:06: los dos
+//   handleReady solapados (kickoff proactivo + evento del CE) provocaron
+//   DOS cargas completas de 4.619 contactos en paralelo:
+//     01:06:34.479  Cargando TODOS los contactos...  → 4.619
+//     01:06:38.240  Cargando TODOS los contactos...  → 4.619
+//   Con el retry del widget y sin este fix, cada reintento lanzaría otra
+//   tanda: se cambiaría un cuelgue por una tormenta de backend.
+//
+//   CAMBIOS QUIRÚRGICOS:
+//   1) handleReady idempotente. Si _staff y _catalogo ya están en memoria
+//      (de una invocación anterior de esta misma carga de página),
+//      reenvía 'init-data' al instante con lo cacheado y sale — sin tocar
+//      el backend. Solo la PRIMERA invocación consulta getStaffColumnas
+//      y getCatalogoReserva. Nueva variable de módulo _catalogo y flag
+//      _initListo.
+//   2) Guarda contra invocaciones concurrentes: _initEnCurso. Si dos
+//      'ready' llegan mientras la primera tanda de queries está en vuelo,
+//      la segunda no relanza nada; la respuesta 'init-data' de la primera
+//      llegará igual al widget (el retry del widget se corta solo al
+//      recibirla).
+//   3) cargarCacheContactosBackground con guarda de reentrada
+//      (_cacheLoading). Si el cache ya está listo, reenvía
+//      'contactos-cache-ready' al widget sin volver a llamar al backend.
+//      Si está cargándose, no hace nada.
+//   4) TAG corregido: la constante decía '[BookingLitePage v0.3.3]' desde
+//      hace dos versiones, así que TODOS los logs de Google Cloud han
+//      estado reportando una versión desplegada falsa. Ahora v0.3.6.
+//
+//   CERO CAMBIOS en: contrato de mensajes, backend recepcionProLogic
+//   v1.0.49, backend recepcionLogic, handleGetSettings/handleSaveSettings
+//   (fuente única desde Desktop, intacta desde v0.3.5), reservas,
+//   bloqueos, contactos, pre-carga y cualquier otro handler.
 //
 // =====================================================
 // v0.3.5 — Fuente ÚNICA de settings: Desktop manda, Lite Mobile lee
@@ -171,13 +216,27 @@ import {
 
 import { cargarTodosContactos, crearContacto } from 'backend/recepcionLogic.web';
 
-const TAG = '[BookingLitePage v0.3.3]';
+// v0.3.6 — TAG corregido. Desde v0.3.4 la constante seguía diciendo
+// 'v0.3.3' y todos los logs de Google Cloud reportaban una versión
+// desplegada falsa.
+const TAG = '[BookingLitePage v0.3.6]';
 const PRELOAD_BATCH = 5;
 
 let _el = null;
 let _staff = [];
 let _cacheContactos = [];
 let _cacheReady = false;
+
+// v0.3.6 — Estado del init, para hacer handleReady idempotente frente al
+// retry de 'ready' del widget v0.5.1.
+//   _catalogo     : catálogo cacheado de esta carga de página.
+//   _initListo    : true cuando staff + catálogo ya se obtuvieron una vez.
+//   _initEnCurso  : true mientras la primera tanda de queries está en vuelo.
+//   _cacheLoading : true mientras cargarTodosContactos está en vuelo.
+let _catalogo = [];
+let _initListo = false;
+let _initEnCurso = false;
+let _cacheLoading = false;
 
 function sendResponse(type, data = {}) {
   if (!_el) return;
@@ -198,6 +257,33 @@ function addDaysISO(iso, delta) {
 // INIT: staff + catálogo en paralelo (V2)
 // =====================================================
 async function handleReady() {
+  // v0.3.6 — IDEMPOTENTE. El widget v0.5.1 reenvía 'ready' cada 700 ms
+  // hasta recibir 'init-data' (resuelve el cuelgue de "Cargando agenda…"
+  // cuando el primer dispatchEvent cae antes de que este listener exista).
+  // Sin las dos guardas siguientes, cada reintento repetiría dos queries
+  // al backend y una carga completa de 4.619 contactos.
+
+  // Caso 1: ya tenemos los datos de esta carga de página → reenvío directo.
+  if (_initListo) {
+    console.log(`${TAG} ♻️ 'ready' repetido: reenvío init-data cacheado (${_staff.length} staff · ${_catalogo.length} servicios)`);
+    sendResponse('init-data', { staff: _staff, catalogo: _catalogo });
+    // Si el cache de contactos ya estaba listo, el widget también necesita
+    // saberlo (su flag _cacheContactosReady puede haberse perdido con el
+    // mensaje original).
+    if (_cacheReady) {
+      sendResponse('contactos-cache-ready', { total: _cacheContactos.length });
+    }
+    return;
+  }
+
+  // Caso 2: la primera tanda de queries está en vuelo → no relanzar nada.
+  // Cuando termine enviará 'init-data' y el retry del widget se cortará solo.
+  if (_initEnCurso) {
+    console.log(`${TAG} ⏳ 'ready' repetido mientras init en curso: ignorado`);
+    return;
+  }
+
+  _initEnCurso = true;
   console.log(`${TAG} 📱 CE listo. Cargando datos iniciales en paralelo…`);
   try {
     const [staffRes, catalogoRes] = await Promise.all([
@@ -206,6 +292,7 @@ async function handleReady() {
     ]);
 
     if (!staffRes?.ok) {
+      _initEnCurso = false;
       sendResponse('error', { message: staffRes?.error?.message || 'Error staff' });
       return;
     }
@@ -213,12 +300,18 @@ async function handleReady() {
     _staff = staffRes.staff || [];
     const catalogo = catalogoRes?.ok ? (catalogoRes.servicios || []) : [];
 
+    // v0.3.6 — cachear para los reenvíos idempotentes.
+    _catalogo = catalogo;
+    _initListo = true;
+    _initEnCurso = false;
+
     console.log(`${TAG} 🎯 Init OK: ${_staff.length} staff · ${catalogo.length} servicios`);
     sendResponse('init-data', { staff: _staff, catalogo });
 
     // Cargar contactos en background (no bloquea primera renderización)
     cargarCacheContactosBackground();
   } catch (e) {
+    _initEnCurso = false;
     console.error(`${TAG} ❌ handleReady:`, e?.message);
     sendResponse('error', { message: 'Error cargando datos iniciales' });
   }
@@ -228,6 +321,22 @@ async function handleReady() {
 // CACHE DE CONTACTOS (background) — patrón legacy literal
 // =====================================================
 async function cargarCacheContactosBackground() {
+  // v0.3.6 — GUARDA DE REENTRADA. En KALÓNICE esta llamada son 5 páginas
+  // de 1.000 y 4.619 contactos (~12 s de backend). En los logs del
+  // 6-ago-2026 01:06 se ejecutó DOS VECES en paralelo por dos handleReady
+  // solapados. Con el retry de 'ready' del widget v0.5.1 podría dispararse
+  // muchas más. Ahora: si ya está lista, se reenvía el aviso sin tocar el
+  // backend; si está en vuelo, no se hace nada.
+  if (_cacheReady) {
+    sendResponse('contactos-cache-ready', { total: _cacheContactos.length });
+    return;
+  }
+  if (_cacheLoading) {
+    console.log(`${TAG} ⏳ Cache de clientes ya en carga: petición ignorada`);
+    return;
+  }
+
+  _cacheLoading = true;
   try {
     const result = await cargarTodosContactos();
     if (result?.ok) {
@@ -240,6 +349,8 @@ async function cargarCacheContactosBackground() {
     }
   } catch (e) {
     console.error(`${TAG} ❌ cargarCacheContactos:`, e?.message);
+  } finally {
+    _cacheLoading = false;
   }
 }
 
