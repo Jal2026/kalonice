@@ -1,7 +1,19 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.92  ·  Informe del día por profesional + detalle de ventas
+ * VERSION: 1.1.93  ·  Informe: quién cobra, y hora en cada servicio
+ *
+ * v1.1.93 (5 ago 2026) — Requiere cierreLogicExtendido v1.1.7.
+ *     · "Cobrado por staff" pasa a agrupar por QUIÉN COBRÓ (el empleado
+ *       logueado), no por la columna del calendario. Sin login, un único
+ *       cajón "Administrador". El subtítulo del bloque lo dice.
+ *     · Cada clienta lleva un tercer chip, 👤, con quién cobró.
+ *     · Servicios del día: cada servicio con su HORA de calendario y la
+ *       clienta, en orden cronológico dentro de cada profesional. Se deja
+ *       de agregar por nombre: agregando se perdía la hora, que es lo que
+ *       permite localizarlo.
+ *
+ * v1.1.92 (5 ago 2026) — Informe del día por profesional + detalle de ventas
  *
  * v1.1.92 (5 ago 2026) — INFORME DEL DÍA. Requiere cierreLogicExtendido
  *   v1.1.6 (si no está desplegado, cada bloque nuevo cae al render antiguo).
@@ -1633,7 +1645,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.92]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.93]';
 
   // ─── helpers ───
   function esc(s) {
@@ -8167,8 +8179,12 @@ button { font-family: inherit; cursor: pointer; }
         for (const g of rendimiento.serviciosPorStaff) {
           h += `<div class="cierre-staffgroup"><span class="cierre-staffgroup-name">${esc(g.staffName)}</span><span class="cierre-staffgroup-tot">${eur(g.total)}</span></div>`;
           for (const s of g.servicios) {
-            const subtitle = s.cantidad > 1 ? ` <span style="color:#9ca3af;font-size:10px;">${eur(s.total / s.cantidad)} ×${s.cantidad} =</span>` : '';
-            h += `<div class="cierre-row cierre-row-ind"><span class="cierre-nombre">${esc(s.nombre)}${subtitle}</span><span class="cierre-importe">${eur(s.total)}</span></div>`;
+            // v1.1.93 — hora de la fase + clienta: el servicio se localiza
+            // en el calendario sin tener que buscarlo.
+            const qty = s.cantidad > 1 ? ` <span style="color:#9ca3af;font-size:10px;">×${s.cantidad}</span>` : '';
+            const hora = s.hora ? `<b>${esc(s.hora)}</b> · ` : '';
+            const cli = s.cliente ? ` <span style="color:#9ca3af;font-size:10px;">${esc(s.cliente)}</span>` : '';
+            h += `<div class="cierre-row cierre-row-ind"><span class="cierre-nombre">${hora}${esc(s.nombre)}${qty}${cli}</span><span class="cierre-importe">${eur(s.total)}</span></div>`;
           }
         }
         h += `</div>`;
@@ -8191,6 +8207,12 @@ button { font-family: inherit; cursor: pointer; }
         const ico = { 'Efectivo': '💵', 'Tarjeta': '💳', 'Bizum': '📲', 'Mixto': '🔀', 'Canje': '🎟️' }[m] || '💰';
         return `<span style="color:#4b5563;font-size:9px;font-weight:700;letter-spacing:.4px;background:rgba(75,85,99,.10);padding:1px 5px;border-radius:4px;margin-left:4px;">${ico} ${esc(m)}</span>`;
       };
+      // v1.1.93 — quién pasó el cobro. Sin login → Administrador.
+      const _chipCobrador = (c) => {
+        if (c.status !== 'PAGADO') return '';
+        const quien = (c.cobradoPor && String(c.cobradoPor).trim()) || 'Administrador';
+        return `<span style="color:#4b5563;font-size:9px;font-weight:700;letter-spacing:.4px;background:rgba(75,85,99,.10);padding:1px 5px;border-radius:4px;margin-left:4px;">👤 ${esc(quien)}</span>`;
+      };
       const _importeCli = (c) => {
         const hayDesc = c.descLabel && c.bruto && c.bruto > c.total;
         return hayDesc
@@ -8200,7 +8222,7 @@ button { font-family: inherit; cursor: pointer; }
       const _filaCliente = (c) => {
         const svcs = (c.servicios || []).map(s => esc(s.nombre)).filter(Boolean).join(' · ');
         const compart = c.compartida ? ' <span style="color:#8b5cf6;font-size:9px;font-weight:700;">⇄ compartida</span>' : '';
-        return `<div class="cierre-row cierre-row-ind"><span class="cierre-nombre"><b>${esc(c.hora || '')}</b> · <b>${esc(c.nombre)}</b>${svcs ? ' — ' + svcs : ''}${compart}${_chipEstado(c.status)}${_chipMetodo(c.metodoPago)}</span><span class="cierre-importe">${_importeCli(c)}</span></div>`;
+        return `<div class="cierre-row cierre-row-ind"><span class="cierre-nombre"><b>${esc(c.hora || '')}</b> · <b>${esc(c.nombre)}</b>${svcs ? ' — ' + svcs : ''}${compart}${_chipEstado(c.status)}${_chipMetodo(c.metodoPago)}${_chipCobrador(c)}</span><span class="cierre-importe">${_importeCli(c)}</span></div>`;
       };
 
       if (rendimiento.clientesPorStaff?.length) {
@@ -8338,7 +8360,7 @@ button { font-family: inherit; cursor: pointer; }
 
       // Productividad staff financiera
       if (cierre.staff?.length) {
-        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">💼 Cobrado por staff</div>`;
+        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">💼 Cobrado por staff <span style="color:#9ca3af;font-size:9.5px;font-weight:600;text-transform:none;letter-spacing:0;">· quién pasó el cobro</span></div>`;
         for (const s of cierre.staff) {
           const ext = s.isExternal ? ` <span style="color:#a78bfa;font-size:9px;font-weight:700;background:rgba(167,139,250,.12);padding:1px 5px;border-radius:4px;">EXT</span>` : '';
           h += `<div class="cierre-row"><span class="cierre-nombre"><b>${esc(s.staffName)}</b>${ext} <span style="color:#9ca3af;font-size:10px;">${s.citas} cobros</span></span><span class="cierre-importe">${eur(s.cobrado)}</span></div>`;
