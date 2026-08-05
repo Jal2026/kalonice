@@ -1,6 +1,27 @@
 // =====================================================
-// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.1.7
+// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.1.8
 // =====================================================
+// v1.1.8 (5 ago 2026): COBROS DE OTROS DÍAS + OBSERVATORIO SEMANAL.
+//
+//   A) `reconciliacion.cobrosDeOtrosDias` se enriquece con hora, método,
+//      quién cobró y la FECHA DE LA CITA a la que corresponde el cobro
+//      (una query por lote sobre las reservas referenciadas). Sin eso el
+//      bloque decía que había un descuadre pero no de qué cita venía.
+//
+//   B) NEW `obtenerObservatorioSemanal({ fechaISO })` — semana natural
+//      lunes→domingo que contiene esa fecha. Por cada día: cobrado en
+//      tarjeta, efectivo, bizum, otros y total, más el estado de cuadre
+//      de los tres métodos:
+//        · EFECTIVO  → cuadra si el CashRegister de ese día existe, está
+//          arqueado (status 'saved' o 'closed') y su `difference` es 0.
+//        · TARJETA   → cuadra si `cardConfirmed` es true (alguien ha
+//          confirmado que la lectura del datáfono coincide).
+//        · BIZUM     → cuadra si `bizumConfirmed` es true.
+//      Un método sin cobros ese día no se marca pendiente: no hay nada
+//      que cuadrar. Los días futuros tampoco.
+//      Requiere los campos `cardConfirmed` y `bizumConfirmed` (Booleano)
+//      en CashRegister, que escribe cashRegisterLogic v1.1.4.
+//
 // v1.1.7 (5 ago 2026): "COBRADO POR STAFF" PASA A SER "QUIÉN COBRÓ".
 //      Ese bloque agrupaba por `PaymentReservations.staff`, que guarda el
 //      TITULAR de la cita — la columna del calendario —, no la persona que
@@ -157,7 +178,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CierreExt v1.1.7]';
+const TAG = '[CierreExt v1.1.8]';
 const COLECCION_PAGOS    = 'PaymentReservations';
 const COLECCION_RESERVAS = 'KamisuiteReservations';
 const COLECCION_STAFF    = 'StaffConfig';
@@ -786,7 +807,13 @@ async function procesarReconciliacion(reservas, pagos, fechaISO, startOfDay, end
         importe: Number(p.importeTotal) || 0,
         descripcion: p.descripcion || '',
         bookingId: bookId,
-        reservaId
+        reservaId,
+        // v1.1.8 — contexto del cobro para poder juzgarlo de un vistazo
+        hora: horaMadrid(p.fechaPago),
+        metodo: p.tipoPago || '',
+        cobradoPor: String(p.soldBy || '').trim(),
+        fechaCita: '',        // se rellena abajo con una query por lote
+        horaCita: ''
       });
     }
   }
@@ -843,6 +870,33 @@ async function procesarReconciliacion(reservas, pagos, fechaISO, startOfDay, end
     }
   }
 
+  // v1.1.8 — Resolver la fecha de la cita de cada cobro de otro día. Sin
+  // esto el bloque no puede decir "esto es del viernes", que es justo el
+  // dato que explica el descuadre.
+  if (cobrosDeOtrosDias.length) {
+    try {
+      const ids = [...new Set(cobrosDeOtrosDias.map(c => c.reservaId).filter(Boolean))];
+      for (let i = 0; i < ids.length; i += 100) {
+        const lote = ids.slice(i, i + 100);
+        const rr = await wixData.query(COLECCION_RESERVAS)
+          .hasSome('_id', lote)
+          .limit(200)
+          .find({ suppressAuth: true });
+        const porId = new Map((rr.items || []).map(x => [x._id, x]));
+        for (const c of cobrosDeOtrosDias) {
+          const reserva = porId.get(c.reservaId);
+          if (!reserva || !reserva.fechaReserva) continue;
+          const d = new Date(reserva.fechaReserva);
+          c.fechaCita = d.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', timeZone: 'Europe/Madrid' });
+          c.horaCita = horaMadrid(d);
+          if (!c.cliente) c.cliente = (reserva.clientName || '').trim();
+        }
+      }
+    } catch (e) {
+      console.warn(`${TAG} No se pudo resolver la fecha de las citas de otros días:`, e.message);
+    }
+  }
+
   const round = v => Math.round(v * 100) / 100;
   const totalCobradoOtrosDias = round(cobrosDeOtrosDias.reduce((s, c) => s + c.importe, 0));
   const totalCobradasFueraHoy = round(cobradasFueraDelDia.reduce((s, c) => s + c.importe, 0));
@@ -855,6 +909,157 @@ async function procesarReconciliacion(reservas, pagos, fechaISO, startOfDay, end
     diferencia: round(totalCobradoOtrosDias - totalCobradasFueraHoy)
   };
 }
+
+// =====================================================
+// OBSERVATORIO SEMANAL  (v1.1.8)
+// =====================================================
+// Semana natural lunes→domingo que contiene `fechaISO`. Por día: cobrado
+// por método y estado de cuadre de los tres que se pueden cuadrar.
+//
+// Qué significa CUADRADO en cada método:
+//   · EFECTIVO — hay arqueo hecho ese día (CashRegister en 'saved' o
+//     'closed') y la diferencia entre contado y esperado es 0.
+//   · TARJETA  — alguien ha confirmado que la lectura del datáfono
+//     coincide con el informe (`cardConfirmed`).
+//   · BIZUM    — ídem con `bizumConfirmed`.
+// Un método sin cobros ese día no se marca PENDIENTE: no hay nada que
+// cuadrar. Los días futuros tampoco se marcan.
+const COL_CASH_REGISTER = 'CashRegister';
+
+function _lunesDeLaSemana(fechaISO) {
+  const d = new Date(`${fechaISO}T12:00:00.000`);
+  const dow = d.getDay();                 // 0 domingo … 6 sábado
+  const retro = (dow === 0) ? 6 : dow - 1;  // lunes como día 1
+  d.setDate(d.getDate() - retro);
+  return d;
+}
+
+function _iso(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+// Normaliza el tipoPago a las cuatro cestas del observatorio.
+function _cesta(tipoPago) {
+  const t = String(tipoPago || '').trim().toLowerCase();
+  if (t === 'tarjeta') return 'tarjeta';
+  if (t === 'efectivo') return 'efectivo';
+  if (t === 'bizum') return 'bizum';
+  return 'otros';   // Mixto, Canje, transferencia, sin especificar…
+}
+
+export const obtenerObservatorioSemanal = webMethod(
+  Permissions.Anyone,
+  async ({ fechaISO }) => {
+    try {
+      if (!fechaISO) return { ok: false, error: 'fechaISO requerido' };
+
+      const lunes = _lunesDeLaSemana(fechaISO);
+      const domingo = new Date(lunes); domingo.setDate(domingo.getDate() + 6);
+      const desde = new Date(`${_iso(lunes)}T00:00:00.000`);
+      const hasta = new Date(`${_iso(domingo)}T23:59:59.999`);
+      console.log(`${TAG} 📅 Observatorio semanal ${_iso(lunes)} → ${_iso(domingo)}`);
+
+      // Cobros de la semana
+      let pagos = [];
+      let skip = 0, hasMore = true;
+      while (hasMore && skip < 5000) {
+        const r = await wixData.query(COLECCION_PAGOS)
+          .ge('fechaPago', desde).le('fechaPago', hasta)
+          .skip(skip).limit(500)
+          .find({ suppressAuth: true });
+        pagos = pagos.concat(r.items || []);
+        hasMore = (r.items || []).length === 500;
+        skip += 500;
+      }
+
+      // Arqueos de la semana
+      let registros = [];
+      try {
+        const rc = await wixData.query(COL_CASH_REGISTER)
+          .ge('registerDate', desde).le('registerDate', hasta)
+          .limit(50)
+          .find({ suppressAuth: true });
+        registros = rc.items || [];
+      } catch (eReg) {
+        console.warn(`${TAG} No se pudo leer CashRegister de la semana:`, eReg.message);
+      }
+
+      const round = v => Math.round(v * 100) / 100;
+      const hoyISO = _iso(new Date());
+      const NOMBRES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+
+      const dias = [];
+      for (let i = 0; i < 7; i++) {
+        const dia = new Date(lunes); dia.setDate(dia.getDate() + i);
+        const iso = _iso(dia);
+        const ini = new Date(`${iso}T00:00:00.000`).getTime();
+        const fin = new Date(`${iso}T23:59:59.999`).getTime();
+
+        const acc = { tarjeta: 0, efectivo: 0, bizum: 0, otros: 0 };
+        for (const p of pagos) {
+          if (String(p.status || '').toUpperCase() === 'CANCELADO') continue;
+          const t = p.fechaPago ? new Date(p.fechaPago).getTime() : 0;
+          if (t < ini || t > fin) continue;
+          acc[_cesta(p.tipoPago)] += Number(p.importeTotal) || 0;
+        }
+
+        const reg = registros.find(r => {
+          const t = r.registerDate ? new Date(r.registerDate).getTime() : 0;
+          return t >= ini && t <= fin;
+        }) || null;
+
+        const arqueado = !!reg && (reg.status === 'saved' || reg.status === 'closed');
+        const futuro = iso > hoyISO;
+
+        // estado: 'ok' | 'pendiente' | 'na'  (na = nada que cuadrar)
+        const estado = (importe, cuadrado) => {
+          if (futuro) return 'na';
+          if (!(importe > 0)) return 'na';
+          return cuadrado ? 'ok' : 'pendiente';
+        };
+
+        dias.push({
+          fechaISO: iso,
+          nombre: NOMBRES[i],
+          diaMes: dia.getDate(),
+          esHoy: iso === hoyISO,
+          futuro,
+          tarjeta: round(acc.tarjeta),
+          efectivo: round(acc.efectivo),
+          bizum: round(acc.bizum),
+          otros: round(acc.otros),
+          total: round(acc.tarjeta + acc.efectivo + acc.bizum + acc.otros),
+          estadoTarjeta: estado(acc.tarjeta, reg ? reg.cardConfirmed === true : false),
+          estadoEfectivo: estado(acc.efectivo, arqueado && Math.abs(Number(reg.difference) || 0) < 0.005),
+          estadoBizum: estado(acc.bizum, reg ? reg.bizumConfirmed === true : false),
+          arqueoStatus: reg ? (reg.status || '') : ''
+        });
+      }
+
+      const tot = dias.reduce((a, d) => ({
+        tarjeta: a.tarjeta + d.tarjeta, efectivo: a.efectivo + d.efectivo,
+        bizum: a.bizum + d.bizum, otros: a.otros + d.otros, total: a.total + d.total
+      }), { tarjeta: 0, efectivo: 0, bizum: 0, otros: 0, total: 0 });
+
+      return {
+        ok: true,
+        desde: _iso(lunes),
+        hasta: _iso(domingo),
+        dias,
+        totales: {
+          tarjeta: round(tot.tarjeta), efectivo: round(tot.efectivo),
+          bizum: round(tot.bizum), otros: round(tot.otros), total: round(tot.total)
+        }
+      };
+    } catch (error) {
+      console.error(`${TAG} ❌ obtenerObservatorioSemanal:`, error);
+      return { ok: false, error: error.message };
+    }
+  }
+);
 
 // =====================================================
 // FUNCIÓN PRINCIPAL (REESCRITA v1.1.0)
