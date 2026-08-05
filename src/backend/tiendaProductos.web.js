@@ -2,7 +2,7 @@
 // KAMISUITE - Tienda Productos (Backend)
 // =====================================================
 // Archivo: tiendaProductos.web.js
-// Versión: 1.5.10
+// Versión: 1.5.13
 // =====================================================
 // v1.1: wixData Stores/Products + generalInfo pickup
 // v1.2: + contactos + buyerInfo + addPayments (order visible)
@@ -81,6 +81,20 @@
 //       NO se tocan registrarVenta, generarFacturaProducto,
 //       obtenerHistorialVentas, cargarContactosTienda ni el bloque
 //       CMS-first de PaymentReservations.
+// v1.5.13: TRAZABILIDAD DEL VENDEDOR — campo `soldBy`.
+//       El registro de venta en PaymentReservations usa `staff` como
+//       DISCRIMINADOR de tipo ('TIENDA' desde la agenda, 'TIENDA_POS'
+//       desde la tienda standalone), no como persona, así que no había
+//       forma de saber QUIÉN despachó el producto. El informe del día
+//       necesita atribuir la venta al empleado que estaba logueado en
+//       Recepción.
+//       Cambio: `soldBy` opcional en la firma de venderProductosDesdeAgenda
+//       y de registrarVenta; se escribe tal cual en el campo `soldBy` de
+//       PaymentReservations (campo CMS nuevo, Texto). Vacío = sin login
+//       activo; el informe lo pinta como "Administrador".
+//       `staff` NO se toca: sigue siendo TIENDA / TIENDA_POS, del que
+//       dependen el cierre financiero y el cruce de productos.
+//       Aditivo puro: quien llame sin soldBy funciona igual que antes.
 // v1.5.12: VARIANTES EN LA TIENDA STANDALONE (registrarVenta).
 //       v1.5.11 dio soporte de variantes SOLO a la venta desde la
 //       Agenda. La Tienda Productos (widget tiendaproductos + page code
@@ -114,7 +128,7 @@ import { invoices } from 'wix-billing-backend';
 import { getProductVariants } from 'wix-stores-backend';
 
 const TAG = '[TiendaProductos]';
-const VERSION = "1.5.12";
+const VERSION = "1.5.13";
 
 // AppId de Wix Stores para catalogReference en eCommerce
 const STORES_APP_ID = '215238eb-22a5-4c36-9e7b-e7c08025e04e';
@@ -521,7 +535,7 @@ export const crearContactoTienda = webMethod(
 // =====================================================
 export const registrarVenta = webMethod(
   Permissions.Anyone,
-  async ({ productId, productName, price, currency, quantity, contactId, contactName, contactEmail, contactPhone, metodoPago, variantId, variantLabel }) => {
+  async ({ productId, productName, price, currency, quantity, contactId, contactName, contactEmail, contactPhone, metodoPago, variantId, variantLabel, soldBy }) => {
     const t0 = Date.now();
     try {
       console.log(`${TAG} 🛒 Venta: ${productName}${variantLabel ? ' · ' + variantLabel : ''} x${quantity} @ ${price}${currency || 'EUR'} | ${metodoPago || 'offline'} | contacto: ${contactId || 'anónimo'} | variantId: ${variantId || '(simple)'}`);
@@ -734,7 +748,8 @@ export const registrarVenta = webMethod(
             importeTotal: subtotal,
             tipoPago: metodoPago || 'Efectivo',
             staff: 'TIENDA_POS',
-            contactId: contactId || ''
+            contactId: contactId || '',
+            soldBy: String(soldBy || '').trim()   // v1.5.13
           };
 
           await wixData.insert(COLECCION_PAGOS, registroPago);
@@ -1099,7 +1114,7 @@ export const obtenerHistorialVentas = webMethod(
 // =====================================================
 export const venderProductosDesdeAgenda = webMethod(
   Permissions.Anyone,
-  async ({ contactId, contactName, contactEmail, contactPhone, items, metodoPago, currency, bookingId, packId, desglosemetodopago }) => {
+  async ({ contactId, contactName, contactEmail, contactPhone, items, metodoPago, currency, bookingId, packId, desglosemetodopago, soldBy }) => {
     const t0 = Date.now();
     try {
       // ── 0. Validación de entrada ──
@@ -1411,7 +1426,8 @@ export const venderProductosDesdeAgenda = webMethod(
             staff: 'TIENDA',
             contactId: contactId || '',
             desglosemetodopago: desglosemetodopago || '',
-            invoiceId: invoiceId || ''
+            invoiceId: invoiceId || '',
+            soldBy: String(soldBy || '').trim()   // v1.5.13
           };
 
           await wixData.insert(COLECCION_PAGOS, registroPago);
