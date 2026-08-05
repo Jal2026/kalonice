@@ -1,6 +1,23 @@
 // =====================================================
-// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.1.8
+// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.1.9
 // =====================================================
+// v1.1.9 (5 ago 2026): "Servicios del día" muestra el PRECIO DE TARIFA.
+//      Cada línea salía con el neto prorrateado (precio × factor
+//      neto/bruto del pago), de modo que un ajuste en el cobro o un
+//      descuento repartía céntimos entre todos los servicios y se leían
+//      cosas como "Puntos de Luz 46,77€" cuando en la ficha de la cita
+//      pone 57€. Aritméticamente correcto, ilegible en la práctica: ese
+//      bloque es el catálogo de lo que se ha hecho, no el desglose de lo
+//      que ha entrado.
+//      Ahora cada servicio se lista a su precio real (precio × cantidad).
+//      Dónde vive cada cifra a partir de aquí:
+//        · Servicios del día      → tarifa, lo que se ha trabajado.
+//        · Clientes del día       → neto cobrado por cita (el ticket).
+//        · Productividad por staff→ neto cobrado (el dinero).
+//      Por eso el total de un profesional en Servicios puede ser mayor
+//      que en Productividad cuando ha habido descuento o ajuste: la
+//      diferencia es justo lo que no se cobró.
+//
 // v1.1.8 (5 ago 2026): COBROS DE OTROS DÍAS + OBSERVATORIO SEMANAL.
 //
 //   A) `reconciliacion.cobrosDeOtrosDias` se enriquece con hora, método,
@@ -178,7 +195,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CierreExt v1.1.8]';
+const TAG = '[CierreExt v1.1.9]';
 const COLECCION_PAGOS    = 'PaymentReservations';
 const COLECCION_RESERVAS = 'KamisuiteReservations';
 const COLECCION_STAFF    = 'StaffConfig';
@@ -555,7 +572,8 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
           nombre: sv.nombre,
           cliente: (r.clientName || '').trim(),
           cantidad: sv.cantidad,
-          total: Math.round(sv.precio * sv.cantidad * factor * 100) / 100
+          // v1.1.9 — precio de tarifa, SIN prorratear el descuento/ajuste
+          total: Math.round(sv.precio * sv.cantidad * 100) / 100
         });
       }
 
