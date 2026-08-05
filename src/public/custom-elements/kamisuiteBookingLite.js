@@ -4,8 +4,85 @@
  * Ubicación en Wix: public/custom-elements/
  * Tag name: kamisuite-booking-lite
  * Página:   /recepcionpromobile
- * VERSION:  0.5.0
- * FECHA:    4 Julio 2026
+ * VERSION:  0.5.1
+ * FECHA:    6 Agosto 2026
+ *
+ * v0.5.1 — FIX "Cargando agenda…" colgado aleatoriamente en la primera carga.
+ *
+ *   SÍNTOMA (reportado por Jal 6-ago-2026): la pantalla se queda en
+ *   "Cargando agenda…" indefinidamente. A veces carga, a veces no. Es
+ *   aleatorio y se resuelve recargando la página.
+ *
+ *   DIAGNÓSTICO (verificado en logs de producción KALÓNICE 01:06 del
+ *   6-ago-2026, no especulado):
+ *
+ *   1) El evento 'ready' de connectedCallback NUNCA llega al page code.
+ *      En los logs solo aparece UN "📱 CE listo" por carga, 3 ms después
+ *      de "👂 Listener activo" — es el kickoff proactivo del final del
+ *      $w.onReady del page code, no el evento del custom element. El
+ *      dispatchEvent del connectedCallback se emite antes de que
+ *      _el.on('booking-message') exista y se pierde sin dejar rastro.
+ *      Mismo fenómeno documentado en el widget Desktop
+ *      recepcionProCMS_widget v1.1.46 y v1.1.55.
+ *
+ *   2) Por tanto, la carga de la agenda dependía al 100% de que el
+ *      kickoff proactivo del page code ganase la carrera de tiempos
+ *      contra el montaje del custom element. Sin red de seguridad: si la
+ *      pierde (setAttribute('response') disparado antes de que el
+ *      attributeChangedCallback esté armado), 'init-data' se pierde y NO
+ *      hay segundo intento.
+ *
+ *   3) Sin 'init-data' no hay salida del placeholder. _renderCalendarHeader()
+ *      es la ÚNICA función que sustituye el <div class="cal-loading">
+ *      del shell, y solo se invoca desde case 'init-data' y case
+ *      'settings-data' — y 'settings-data' solo se pide DENTRO de
+ *      case 'init-data'. Cuelgue permanente para esa carga.
+ *
+ *   4) El refresh de 10 s NO rescataba. En los logs de la sesión colgada
+ *      se ve el widget pidiendo datos cada 10 s exactos y el page code
+ *      respondiendo "📅 2026-08-06: 54 packs"… con la pantalla en
+ *      "Cargando agenda…". Motivo: _renderCalendarBody() hace
+ *      getElementById('calBody') y sale con return en seco porque el
+ *      header nunca se pintó y #calBody no existe. Los 54 packs se
+ *      descartaban en silencio cada 10 segundos.
+ *
+ *   CAMBIOS QUIRÚRGICOS (patrón copiado LITERAL del widget Desktop
+ *   recepcionProCMS_widget, en producción desde v1.1.55):
+ *
+ *   1) Constructor: nuevos flags _initRecibido, _readyTries y handles
+ *      _readyTimer / _refreshTimer inicializados a null.
+ *
+ *   2) connectedCallback: retry loop de 'ready' cada 700 ms hasta recibir
+ *      'init-data' o agotar 12 intentos (mismo intervalo y mismo tope que
+ *      el _readyTimer del Desktop). Con log por reintento.
+ *
+ *   3) case 'init-data': marca this._initRecibido = true y corta el retry.
+ *
+ *   4) disconnectedCallback NUEVO. Hasta v0.5.0 el setInterval de refresh
+ *      de 10 s se creaba en CADA connectedCallback sin guardarse ni
+ *      limpiarse: si Wix desconecta y reconecta el custom element
+ *      (habitual durante hidratación/relayout, documentado en Desktop
+ *      v1.1.66) se acumulaban intervals huérfanos, cada uno pidiendo
+ *      reservas cada 10 s. Ahora el handle se guarda en _refreshTimer y
+ *      ambos timers se limpian al desconectar.
+ *
+ *   5) connectedCallback: rescate de remontaje (patrón Desktop v1.1.66).
+ *      Si al montar YA hay staff en memoria (_staff.length > 0), se
+ *      repinta el calendario con lo que hay en vez de dejar el placeholder
+ *      estático que acaba de repintar _renderShell. En el primer montaje
+ *      _staff está vacío y no hace nada — comportamiento idéntico al
+ *      actual.
+ *
+ *   PAREJA OBLIGATORIA: page code v0.3.6. Sin él, cada reintento de
+ *   'ready' dispararía un handleReady completo (getStaffColumnas +
+ *   getCatalogoReserva + cargarTodosContactos = 4.619 contactos, ~12 s de
+ *   backend). El v0.3.6 hace handleReady idempotente y añade guarda de
+ *   reentrada al cache de contactos: un reintento cuesta un setAttribute,
+ *   no una tanda de queries.
+ *
+ *   CERO CAMBIOS en: contrato de mensajes, backend recepcionProLogic
+ *   v1.0.49, CSS, lógica de reserva, bloqueos, variantes, settings,
+ *   month picker, detail sheet y cualquier otro handler.
  *
  * v0.5.0 — VARIANTE BASE del principal + envío de varianteSel al backend.
  *   Doble fix necesario para que servicios simple_variantes (Corte Mujer
@@ -294,7 +371,7 @@
     console.log('[KamisuiteBookingLite] Ya registrado.');
     return;
   }
-  const VERSION = '0.5.0';
+  const VERSION = '0.5.1';
   const TAG = `[BookingLite v${VERSION}]`;
 
   // ── Constantes de calendario ──
@@ -1038,6 +1115,17 @@ input, textarea { font-family: inherit; }
       this._detail = { open: false, data: null };
       // v0.3.7 — Sheet de creación de bloqueo
       this._bloqueo = this._emptyBloqueo();
+      // ── v0.5.1 — Handshake con el page code ──
+      // _initRecibido: true en cuanto llega 'init-data'. Corta el retry.
+      // _readyTimer / _readyTries: retry loop de 'ready' (patrón literal
+      //   del _readyTimer de recepcionProCMS_widget v1.1.55).
+      // _refreshTimer: handle del setInterval de refresh de 10 s. Hasta
+      //   v0.5.0 no se guardaba y no se limpiaba nunca → intervals
+      //   huérfanos acumulados en cada reconexión del custom element.
+      this._initRecibido = false;
+      this._readyTries = 0;
+      this._readyTimer = null;
+      this._refreshTimer = null;
     }
 
     // v0.3.7 — Estado inicial del sheet de bloqueo.
@@ -1112,15 +1200,68 @@ input, textarea { font-family: inherit; }
       }
       this._renderShell();
       this._bindBaseEvents();
+
+      // v0.5.1 — RESCATE DE REMONTAJE (patrón Desktop v1.1.66).
+      // Wix puede desconectar y reconectar el custom element durante la
+      // hidratación o un relayout. En ese segundo connectedCallback,
+      // _renderShell acaba de repintar el placeholder estático
+      // "Cargando agenda…", pero los datos YA están en memoria y el retry
+      // de 'ready' no re-dispara porque _initRecibido ya es true → la
+      // pantalla se quedaría colgada sin rescate posible. Repintamos con
+      // lo que haya. En el PRIMER montaje _staff está vacío y esto es
+      // no-op: comportamiento idéntico a v0.5.0.
+      if (this._staff.length) {
+        this._renderCalendarHeader();
+      }
+
       this._sendToPage('ready', {});
+
+      // v0.5.1 — RETRY LOOP DE 'ready'. Copia literal del patrón
+      // _readyTimer de recepcionProCMS_widget v1.1.55 (700 ms, 12 intentos).
+      //
+      // Motivo: el page code engancha su listener dentro de $w.onReady. Por
+      // la carrera de tiempos de Wix, el dispatchEvent de arriba puede caer
+      // antes de que ese listener exista y se pierde SIN dejar rastro en
+      // logs (verificado en producción KALÓNICE: en los logs nunca aparece
+      // un segundo "📱 CE listo" provocado por el custom element; el único
+      // que aparece es el kickoff proactivo del page code). Sin este retry
+      // la carga de la agenda depende de que el kickoff gane la carrera, y
+      // cuando la pierde el cuelgue es permanente.
+      //
+      // Page code v0.3.6 hace handleReady idempotente: si ya tiene staff y
+      // catálogo en memoria reenvía 'init-data' sin volver a llamar al
+      // backend. Por eso reintentar es barato.
+      this._readyTries = 0;
+      this._readyTimer = setInterval(() => {
+        if (this._initRecibido || this._readyTries >= 12) {
+          clearInterval(this._readyTimer);
+          this._readyTimer = null;
+          return;
+        }
+        this._readyTries++;
+        console.log(`${TAG} → reintento ready #${this._readyTries}`);
+        this._sendToPage('ready', {});
+      }, 700);
+
       // Refresh automático cada 10s (igual que kamisuiteAgenda.js líneas 612-617)
-      setInterval(() => {
+      // v0.5.1 — handle guardado en _refreshTimer para poder limpiarlo en
+      // disconnectedCallback. Antes se creaba anónimo en cada montaje.
+      this._refreshTimer = setInterval(() => {
         if (this._lastDateChange && Date.now() - this._lastDateChange < 5000) return;
         // No refrescar si hay sheets abiertos
         if (this._booking.open || this._monthOpen || this._detail.open || this._bloqueo.open) return;
         this._sendToPage('get-reservas-dia', { fecha: this._fecha });
       }, 10000);
       console.log(`${TAG} 📱 Montado. Fecha inicial: ${this._fecha}`);
+    }
+
+    // v0.5.1 — NUEVO. Limpia ambos timers al desconectar el elemento.
+    // Sin esto, cada reconexión del custom element por parte de Wix dejaba
+    // vivo el setInterval de refresh anterior: N intervals huérfanos
+    // pidiendo reservas cada 10 s contra el backend.
+    disconnectedCallback() {
+      if (this._readyTimer) { clearInterval(this._readyTimer); this._readyTimer = null; }
+      if (this._refreshTimer) { clearInterval(this._refreshTimer); this._refreshTimer = null; }
     }
 
     attributeChangedCallback(name, oldVal, newVal) {
@@ -1142,7 +1283,16 @@ input, textarea { font-family: inherit; }
     // ═══════════════════════════════════════════════════════════════════════
     _handleResponse(p) {
       switch (p.type) {
-        case 'init-data':
+        case 'init-data': {
+          // v0.5.1 — Handshake completado: corta el retry de 'ready'.
+          // _initDuplicado: un 'ready' reintentado puede cruzarse con el
+          // 'init-data' original en vuelo y provocar un segundo 'init-data'
+          // (el page code v0.3.6 lo responde cacheado, sin tocar backend).
+          // Los datos se refrescan igual, pero NO se relanzan las peticiones
+          // de cola — sobre todo 'preload-reservas', que son 30 queries.
+          const _initDuplicado = this._initRecibido;
+          this._initRecibido = true;
+          if (this._readyTimer) { clearInterval(this._readyTimer); this._readyTimer = null; }
           // v0.3.0 — Staff V2 (getStaffColumnas): {wixResourceId, wixScheduleId,
           // displayName, isExternal, profileImage}. Normalizo a forma legacy
           // {id, name, color, scheduleId, isExternal, profileImage} para no
@@ -1164,12 +1314,19 @@ input, textarea { font-family: inherit; }
           this._initStaffConfig();
           this._renderCalendarHeader();
           console.log(`${TAG} 🎯 Init: ${this._staff.length} staff, ${this._catalogo.length} servicios`);
-          this._sendToPage('get-reservas-dia', { fecha: this._fecha });
-          this._sendToPage('preload-reservas', { fechaBase: this._fecha, dias: PRELOAD_DAYS });
-          // v0.3.0 — Pide settings del usuario (CalendarViewSettings).
-          // Llega como 'settings-data' y aplica staffConfig si existe.
-          this._sendToPage('get-settings', {});
+          // v0.5.1 — Solo el PRIMER init-data lanza la cola de peticiones.
+          // Un init-data duplicado (retry cruzado) ya ha repintado staff,
+          // catálogo y cabecera arriba; repetir aquí supondría 30 queries
+          // de preload redundantes contra el backend.
+          if (!_initDuplicado) {
+            this._sendToPage('get-reservas-dia', { fecha: this._fecha });
+            this._sendToPage('preload-reservas', { fechaBase: this._fecha, dias: PRELOAD_DAYS });
+            // v0.3.0 — Pide settings del usuario (CalendarViewSettings).
+            // Llega como 'settings-data' y aplica staffConfig si existe.
+            this._sendToPage('get-settings', {});
+          }
           break;
+        }
 
         case 'reservas-dia':
           if (p.fecha) {
