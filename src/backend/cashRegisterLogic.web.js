@@ -1,10 +1,28 @@
 // =====================================================
-// BACKEND cashRegisterLogic.web.js — Arqueo de Caja KAMISUITE v1.1.0
+// BACKEND cashRegisterLogic.web.js — Arqueo de Caja KAMISUITE v1.1.4
 // =====================================================
 // FECHA: 1 Ago 2026
-// VERSION: 1.1.3
+// VERSION: 1.1.4
 //
 // CHANGELOG
+//   v1.1.4 · 5 Ago 2026 · CONFIRMACIÓN DE DATÁFONO Y BIZUM
+//     - NEW confirmarLecturaMetodo({ fechaISO, metodo, confirmado,
+//       recordedBy }): marca que la lectura del datáfono (metodo='card')
+//       o el resumen de Bizum (metodo='bizum') coincide con el informe
+//       del día. Escribe los campos booleanos `cardConfirmed` /
+//       `bizumConfirmed` de CashRegister, creando el registro del día si
+//       aún no existe (mismo auto-create que guardarArqueo, para el salón
+//       que no usa apertura formal). Rechaza si la caja está cerrada.
+//     - El arqueo de efectivo NO se toca: contar caja y confirmar una
+//       lectura son cosas distintas y se guardan por separado. Esto es
+//       una confirmación humana, no una conciliación automática: nadie
+//       compara importe a importe con el datáfono.
+//     - Lo consume el Observatorio semanal (cierreLogicExtendido v1.1.8)
+//       para pintar CUADRADO / PENDIENTE por método y día.
+//     - Requiere en CashRegister: cardConfirmed, bizumConfirmed
+//       (Booleano), y opcionalmente cardConfirmedBy / bizumConfirmedBy
+//       (Texto) si se quiere saber quién confirmó.
+//
 //   v1.1.3 · 1 Ago 2026 · LIMPIEZA — getFondoSugerido deja de leer
 //     SalonConfig.fondoCajaFijo (enfoque descartado; causaba el error
 //     'does not have permissions to read on SalonConfig'). Fondo sugerido
@@ -74,7 +92,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CashRegister v1.1.3]';
+const TAG = '[CashRegister v1.1.4]';
 const COL_REGISTER = 'CashRegister';
 const COL_MOVEMENTS = 'CashMovements';
 const COL_PAGOS = 'PaymentReservations';
@@ -590,6 +608,74 @@ export const guardarArqueo = webMethod(
       };
     } catch (error) {
       console.error(`${TAG} ❌ guardarArqueo:`, error);
+      return { ok: false, error: error.message };
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════
+// confirmarLecturaMetodo — Datáfono / Bizum  (v1.1.4)
+// ═══════════════════════════════════════════════════════
+// Confirmación HUMANA de que la lectura del datáfono (o el resumen de
+// Bizum) coincide con el informe del día. No concilia importe a importe:
+// deja constancia de que alguien lo ha comprobado y cuándo.
+// metodo: 'card' | 'bizum'
+export const confirmarLecturaMetodo = webMethod(
+  Permissions.SiteMember,
+  async ({ fechaISO, metodo, confirmado, recordedBy }) => {
+    try {
+      const tipo = String(metodo || '').toLowerCase();
+      if (!fechaISO) return { ok: false, error: 'fechaISO requerido' };
+      if (tipo !== 'card' && tipo !== 'bizum') {
+        return { ok: false, error: "metodo debe ser 'card' o 'bizum'" };
+      }
+      const valor = confirmado !== false;   // por defecto confirma
+      console.log(`${TAG} 🧾 confirmarLecturaMetodo: ${fechaISO} | ${tipo} | ${valor}`);
+
+      const { start, end } = _dayRange(fechaISO);
+      const regResult = await wixData.query(COL_REGISTER)
+        .ge('registerDate', start)
+        .le('registerDate', end)
+        .limit(1)
+        .find({ suppressAuth: true });
+
+      let registro;
+      if (regResult.items.length === 0) {
+        // Auto-crear, igual que guardarArqueo: se puede confirmar el
+        // datáfono de un día en el que nadie ha contado la caja todavía.
+        registro = await wixData.insert(COL_REGISTER, {
+          registerDate: new Date(`${fechaISO}T08:00:00.000`),
+          openingBalance: 0,
+          status: 'open'
+        }, { suppressAuth: true });
+      } else {
+        registro = regResult.items[0];
+      }
+
+      if (registro.status === 'closed') {
+        return { ok: false, error: 'La caja de este día ya está cerrada' };
+      }
+
+      // READ-MERGE-UPDATE sobre el registro completo ya leído
+      if (tipo === 'card') {
+        registro.cardConfirmed = valor;
+        registro.cardConfirmedBy = valor ? String(recordedBy || '').trim() : '';
+      } else {
+        registro.bizumConfirmed = valor;
+        registro.bizumConfirmedBy = valor ? String(recordedBy || '').trim() : '';
+      }
+
+      const updated = await wixData.update(COL_REGISTER, registro, { suppressAuth: true });
+      console.log(`${TAG} ✅ ${tipo} ${valor ? 'confirmado' : 'desconfirmado'} en ${fechaISO}`);
+
+      return {
+        ok: true,
+        metodo: tipo,
+        confirmado: valor,
+        registro: updated
+      };
+    } catch (error) {
+      console.error(`${TAG} ❌ confirmarLecturaMetodo:`, error);
       return { ok: false, error: error.message };
     }
   }
