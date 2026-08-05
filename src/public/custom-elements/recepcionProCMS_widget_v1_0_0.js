@@ -1,7 +1,40 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.93  ·  Informe: quién cobra, y hora en cada servicio
+ * VERSION: 1.1.95  ·  El preview de ACORTAR ya no queda tapado
+ *
+ * v1.1.95 (5 ago 2026) — FIX visual del acortado (v1.1.91). El preview de
+ *   recorte se pinta ENCIMA del bloque de la cita, pero tanto .ks-appt
+ *   como .ks-appt-resize-preview están en z-index 5, y .ks-appt:hover sube
+ *   a 8 — y durante el arrastre el cursor está sobre la cita, así que el
+ *   bloque tapaba el aviso: se recortaba a ciegas. El de extender no lo
+ *   sufría porque cae en hueco vacío, por debajo de la cita.
+ *   Ahora .is-cut va en z-index 12, por encima de la cita incluso con
+ *   hover, con línea de corte marcada arriba y el texto legible sobre el
+ *   rayado. El preview de extensión no se toca.
+ *
+ * v1.1.94 (5 ago 2026) — Observatorio semanal + confirmación datáfono/Bizum
+ *
+ * v1.1.94 (5 ago 2026) — Requiere cierreLogicExtendido v1.1.8,
+ *   cashRegisterLogic v1.1.4 y page code v1.0.43.
+ *     · Arqueo: bajo "Guardar arqueo", dos botones — Confirmar datáfono y
+ *       Confirmar Bizum — que dejan constancia de que la lectura coincide
+ *       con el informe. Es una confirmación humana, no una conciliación
+ *       importe a importe, y se guarda aparte del conteo de efectivo.
+ *       Al confirmar, el botón queda en verde con la fecha; se puede
+ *       deshacer volviendo a pulsar.
+ *     · Cierre financiero: bloque "Cobros de otros días" con los cobros
+ *       de hoy que corresponden a citas de otra fecha — cliente, importe,
+ *       método, quién cobró y de qué día es la cita.
+ *     · Cierre financiero: OBSERVATORIO SEMANAL al final. Lunes a domingo
+ *       con tarjeta, efectivo, bizum y total por día, y un chip por
+ *       método: CUADRADO en verde, PENDIENTE en rojo. Un método sin
+ *       cobros ese día no se marca: no hay nada que cuadrar.
+ *     · El botón COPIAR de los dos bloques exporta ya lo que se ve en
+ *       pantalla, con la agrupación por profesional, los chips y los
+ *       bloques nuevos.
+ *
+ * v1.1.93 (5 ago 2026) — Informe: quién cobra, y hora en cada servicio
  *
  * v1.1.93 (5 ago 2026) — Requiere cierreLogicExtendido v1.1.7.
  *     · "Cobrado por staff" pasa a agrupar por QUIÉN COBRÓ (el empleado
@@ -1645,7 +1678,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.93]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.95]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2213,10 +2246,17 @@ button { font-family: inherit; cursor: pointer; }
   color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center;
   justify-content: center; pointer-events: none; z-index: 5;
   border: 1px dashed rgba(255,255,255,.7); }
-/* v1.1.91 — preview de ACORTADO: se pinta ENCIMA del tramo que se recorta */
+/* v1.1.91 — preview de ACORTADO: se pinta ENCIMA del tramo que se recorta.
+   v1.1.95 — z-index 12: por encima de .ks-appt (5) y de .ks-appt:hover (8),
+   que es lo que lo tapaba durante el arrastre. Línea de corte marcada en
+   el borde superior: ahí queda el nuevo final de la fase. */
 .ks-appt-resize-preview.is-cut {
-  background: repeating-linear-gradient(135deg, rgba(220,80,80,.72), rgba(220,80,80,.72) 5px,
-    rgba(170,30,30,.8) 5px, rgba(170,30,30,.8) 10px); }
+  z-index: 12;
+  background: repeating-linear-gradient(135deg, rgba(220,80,80,.88), rgba(220,80,80,.88) 5px,
+    rgba(170,30,30,.94) 5px, rgba(170,30,30,.94) 10px);
+  border: 1px dashed rgba(255,255,255,.85);
+  border-top: 2px solid #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,.55); }
 /* v1.1.17 — Modal productos (estilo V1) */
 .pd-search { width: 100%; padding: 9px 12px; border: 1px solid var(--ks-line); border-radius: 8px;
   font-size: 13px; font-family: inherit; margin-bottom: 10px; box-sizing: border-box; }
@@ -2637,6 +2677,24 @@ button { font-family: inherit; cursor: pointer; }
 .cierre-staffgroup-tot { font-size:10.5px; font-weight:700; color:#6b7280; font-variant-numeric:tabular-nums; }
 .cierre-row-ind { padding-left:16px; }
 .cierre-row-vacio { display:block; padding:8px; font-size:11px; font-style:italic; color:#9ca3af; }
+/* v1.1.94 — confirmación de datáfono / Bizum en el arqueo */
+.ks-conf-block { margin-top:10px; padding-top:9px; border-top:1px solid var(--ks-line2); display:flex; flex-wrap:wrap; gap:7px; }
+.ks-conf-hint { flex:1 0 100%; font-size:10.5px; color:var(--ks-ink3); font-weight:600; }
+.ks-conf-btn { flex:1; min-width:120px; border:1px solid var(--ks-line); background:var(--ks-paper2); color:var(--ks-ink2); border-radius:8px; padding:7px 9px; font:inherit; font-size:11.5px; font-weight:700; cursor:pointer; }
+.ks-conf-btn.is-ok { border-color:oklch(0.5 0.14 150); background:oklch(0.5 0.14 150 / .12); color:oklch(0.42 0.14 150); }
+/* v1.1.94 — observatorio semanal */
+.obs-day { padding:6px 8px; border-bottom:1px solid #eef0f3; }
+.obs-day.is-future { opacity:.45; }
+.obs-day-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:3px; }
+.obs-day-name { font-size:11px; font-weight:800; color:#4b5563; text-transform:uppercase; letter-spacing:.4px; }
+.obs-day-tot { font-size:11.5px; font-weight:700; font-variant-numeric:tabular-nums; }
+.obs-line { display:flex; align-items:center; gap:8px; padding:2px 0 2px 10px; font-size:11px; }
+.obs-met { flex:1; color:#6b7280; }
+.obs-imp { font-variant-numeric:tabular-nums; min-width:64px; text-align:right; }
+.obs-chip { min-width:74px; text-align:center; font-size:8.5px; font-weight:800; letter-spacing:.5px; padding:2px 6px; border-radius:4px; }
+.obs-ok { color:#15803d; background:rgba(21,128,61,.13); }
+.obs-pdte { color:#b91c1c; background:rgba(185,28,28,.12); }
+.obs-na { color:#c3c7cd; background:transparent; }
 .cierre-row:nth-child(odd) { background:rgba(0,0,0,.03); border-radius:4px; }
 /* v1.1.21 — bloques rendimiento / cierre + banner reconciliación */
 .cierre-block { border-radius:12px; padding:14px; margin-bottom:14px; border:1px solid var(--ks-line); background:#fff; }
@@ -3524,6 +3582,16 @@ button { font-family: inherit; cursor: pointer; }
         case 'caja-cerrada':
           if (p.ok) { this._toast('Caja cerrada ✓'); this._cajaRefresh(); }
           else this._toast('Error: ' + (p.error || 'no se pudo cerrar'));
+          break;
+        // v1.1.94 — confirmación de datáfono / Bizum
+        case 'caja-metodo-confirmado':
+          if (p.ok) {
+            const que = p.metodo === 'bizum' ? 'Bizum' : 'Datáfono';
+            this._toast(p.confirmado ? `${que} confirmado ✓` : `${que} sin confirmar`);
+            this._cajaRefresh();
+          } else {
+            this._toast('Error: ' + (p.error || 'no se pudo confirmar'));
+          }
           break;
         case 'caja-movimiento-ok':
           if (p.ok) { this._toast('Movimiento registrado'); this._cajaRefresh(); }
@@ -7875,6 +7943,10 @@ button { font-family: inherit; cursor: pointer; }
         if (!this._cajaNota && d.registro.differenceNote) this._cajaNota = String(d.registro.differenceNote);
       }
 
+      // v1.1.94 — estado de las confirmaciones de datáfono y Bizum
+      const cardOk = !!(d.registro && d.registro.cardConfirmed === true);
+      const bizumOk = !!(d.registro && d.registro.bizumConfirmed === true);
+
       const esperado = Number(d.esperado || 0);
       const contado = Number(this._cajaContado || 0);
       const dif = Math.round((contado - esperado) * 100) / 100;
@@ -7904,7 +7976,14 @@ button { font-family: inherit; cursor: pointer; }
           <button class="ks-pay pay-tarjeta" id="cajaGuardar" style="flex:1">Guardar arqueo</button>
           ${this._cajaModo === 'cierre' ? `<button class="ks-pay pay-efectivo" id="cajaCerrar" style="flex:1">🔒 Cerrar día</button>` : ''}
         </div>
-        ${guardado ? `<div style="text-align:center;margin-top:8px;font-size:12px;font-weight:800;color:oklch(0.5 0.14 150)">✓ Arqueo guardado${d.registro && d.registro.difference != null ? ` · dif ${Number(d.registro.difference)}€` : ''}</div>` : ''}`}
+        ${guardado ? `<div style="text-align:center;margin-top:8px;font-size:12px;font-weight:800;color:oklch(0.5 0.14 150)">✓ Arqueo guardado${d.registro && d.registro.difference != null ? ` · dif ${Number(d.registro.difference)}€` : ''}</div>` : ''}
+        <!-- v1.1.94 — Confirmación de lecturas. No concilia importe a
+             importe: deja constancia de que alguien lo ha comprobado. -->
+        <div class="ks-conf-block">
+          <div class="ks-conf-hint">Confirma si la lectura coincide con el informe</div>
+          <button class="ks-conf-btn ${cardOk ? 'is-ok' : ''}" id="cajaConfCard">${cardOk ? '✓ Datáfono confirmado' : 'Confirmar datáfono'}</button>
+          <button class="ks-conf-btn ${bizumOk ? 'is-ok' : ''}" id="cajaConfBizum">${bizumOk ? '✓ Bizum confirmado' : 'Confirmar Bizum'}</button>
+        </div>`}
         ${movimientos.length ? `<div class="ks-modal-items" style="border-top:1px solid var(--ks-line2);margin-top:8px"><div class="ks-eyebrow" style="padding:6px 0">Movimientos del día</div>${movimientos.map(m => `<div class="ks-modal-item"><span class="ks-item-label">${esc(this._movLabel(m.movementType))} · ${esc(m.description || '')}</span><span class="ks-item-price">${Number(m.amount || 0)}€</span></div>`).join('')}</div>` : ''}
         <div class="ks-modal-foot"><span></span><button class="ks-modal-close" id="cajaClose">Cerrar</button></div>`;
 
@@ -7930,6 +8009,12 @@ button { font-family: inherit; cursor: pointer; }
           const v = parseFloat(raw) || 0;
           this._sendToPage('caja-set-fondo', { fechaISO: this._fecha, openingBalance: v });
         });
+        // v1.1.94 — confirmar / deshacer lectura de datáfono y Bizum
+        const _conf = (metodo, estadoActual) => {
+          this._sendToPage('caja-confirmar-metodo', { fechaISO: this._fecha, metodo, confirmado: !estadoActual });
+        };
+        body.querySelector('#cajaConfCard')?.addEventListener('click', () => _conf('card', cardOk));
+        body.querySelector('#cajaConfBizum')?.addEventListener('click', () => _conf('bizum', bizumOk));
         body.querySelector('#cajaGuardar')?.addEventListener('click', () => {
           this._sendToPage('caja-guardar', { fechaISO: this._fecha, countedCash: this._cajaContado, differenceNote: this._cajaNota, countBreakdown: '', closedBy: '' });
         });
@@ -8475,6 +8560,49 @@ button { font-family: inherit; cursor: pointer; }
         h += `</div>`;
       }
 
+      // v1.1.94 — COBROS DE OTROS DÍAS. Dinero que entró hoy pero cuya cita
+      // es de otra fecha: es la explicación de por qué el cobrado de hoy no
+      // coincide con lo trabajado hoy.
+      const otrosDias = (reconciliacion && reconciliacion.cobrosDeOtrosDias) || [];
+      if (otrosDias.length) {
+        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🔁 Cobros de otros días</div>`;
+        for (const c of otrosDias) {
+          const cita = c.fechaCita ? ` <span style="color:#8b5cf6;font-size:10px;font-weight:700;">cita ${esc(c.fechaCita)}${c.horaCita ? ' ' + esc(c.horaCita) : ''}</span>` : '';
+          const met = c.metodo ? ` <span style="color:#9ca3af;font-size:10px;">${esc(c.metodo)}</span>` : '';
+          const quien = `<span style="color:#4b5563;font-size:9px;font-weight:700;background:rgba(75,85,99,.10);padding:1px 5px;border-radius:4px;margin-left:4px;">👤 ${esc((c.cobradoPor || '').trim() || 'Administrador')}</span>`;
+          h += `<div class="cierre-row"><span class="cierre-nombre"><b>${esc(c.hora || '')}</b> · <b>${esc(c.cliente || 'Sin nombre')}</b>${cita}${met}${quien}</span><span class="cierre-importe">${eur(c.importe)}</span></div>`;
+        }
+        h += `<div class="cierre-row" style="border-top:1px solid #e2e5ea;margin-top:4px;padding-top:6px;"><span class="cierre-nombre" style="font-weight:700;">Total de otras fechas</span><span class="cierre-importe" style="font-weight:700;">${eur(reconciliacion.totalCobrosDeOtrosDias || 0)}</span></div>`;
+        h += `</div>`;
+      }
+
+      // v1.1.94 — OBSERVATORIO SEMANAL. Lunes a domingo de la semana de la
+      // fecha visible. Por día, lo cobrado en cada método y si está cuadrado.
+      // Un método sin cobros ese día no se marca: no hay nada que cuadrar.
+      const obs = d.observatorio || null;
+      if (obs && Array.isArray(obs.dias)) {
+        const chip = (estado) => {
+          if (estado === 'ok') return `<span class="obs-chip obs-ok">CUADRADO</span>`;
+          if (estado === 'pendiente') return `<span class="obs-chip obs-pdte">PENDIENTE</span>`;
+          return `<span class="obs-chip obs-na">—</span>`;
+        };
+        h += `<div class="cierre-section" style="margin-top:12px;border-top:2px solid #c9a44a;padding-top:12px;">`;
+        h += `<div class="cierre-section-title" style="font-size:13px;">📅 Observatorio semanal <span style="color:#9ca3af;font-size:9.5px;font-weight:600;text-transform:none;letter-spacing:0;">· ${esc(obs.desde)} → ${esc(obs.hasta)}</span></div>`;
+        for (const dia of obs.dias) {
+          const hoyTag = dia.esHoy ? ` <span style="color:#8b5cf6;font-size:9px;font-weight:800;">HOY</span>` : '';
+          h += `<div class="obs-day ${dia.futuro ? 'is-future' : ''}">`;
+          h += `<div class="obs-day-head"><span class="obs-day-name">${esc(dia.nombre)} ${dia.diaMes}${hoyTag}</span><span class="obs-day-tot">${eur(dia.total)}</span></div>`;
+          h += `<div class="obs-line"><span class="obs-met">💳 Tarjeta</span><span class="obs-imp">${eur(dia.tarjeta)}</span>${chip(dia.estadoTarjeta)}</div>`;
+          h += `<div class="obs-line"><span class="obs-met">💵 Efectivo</span><span class="obs-imp">${eur(dia.efectivo)}</span>${chip(dia.estadoEfectivo)}</div>`;
+          h += `<div class="obs-line"><span class="obs-met">📲 Bizum</span><span class="obs-imp">${eur(dia.bizum)}</span>${chip(dia.estadoBizum)}</div>`;
+          if (dia.otros > 0) h += `<div class="obs-line"><span class="obs-met">Otros</span><span class="obs-imp">${eur(dia.otros)}</span><span class="obs-chip obs-na">—</span></div>`;
+          h += `</div>`;
+        }
+        h += `<div class="cierre-row" style="border-top:1px solid #e2e5ea;margin-top:6px;padding-top:6px;"><span class="cierre-nombre" style="font-weight:700;">Total semana</span><span class="cierre-importe" style="font-weight:700;">${eur(obs.totales.total)}</span></div>`;
+        h += `<div class="cierre-row"><span class="cierre-nombre" style="color:#9ca3af;font-size:10.5px;">💳 ${eur(obs.totales.tarjeta)} · 💵 ${eur(obs.totales.efectivo)} · 📲 ${eur(obs.totales.bizum)}${obs.totales.otros ? ` · otros ${eur(obs.totales.otros)}` : ''}</span><span></span></div>`;
+        h += `</div>`;
+      }
+
       h += `</div>`;  // /cierre-block-fin
 
       grid.innerHTML = h || `<div class="cierre-section" style="text-align:center;padding:20px;color:#9ca3af;">Sin datos para hoy.</div>`;
@@ -8775,18 +8903,42 @@ button { font-family: inherit; cursor: pointer; }
         if (r.servicios && r.servicios.length) {
           L.push('');
           L.push('✂️ Servicios del día');
-          for (const s of r.servicios) {
-            const mult = s.cantidad > 1 ? ` (${eur(s.total / s.cantidad)} ×${s.cantidad})` : '';
-            L.push(`- ${s.nombre}${mult}: ${eur(s.total)}`);
+          // v1.1.94 — el texto copiado refleja lo que se ve: agrupado por
+          // profesional y con la hora de cada servicio.
+          if (r.serviciosPorStaff && r.serviciosPorStaff.length) {
+            for (const g of r.serviciosPorStaff) {
+              L.push(`  ${g.staffName.toUpperCase()} — ${eur(g.total)}`);
+              for (const s of g.servicios) {
+                const mult = s.cantidad > 1 ? ` ×${s.cantidad}` : '';
+                const cli = s.cliente ? ` (${s.cliente})` : '';
+                L.push(`  - ${s.hora || ''} ${s.nombre}${mult}${cli}: ${eur(s.total)}`);
+              }
+            }
+          } else {
+            for (const s of r.servicios) {
+              const mult = s.cantidad > 1 ? ` (${eur(s.total / s.cantidad)} ×${s.cantidad})` : '';
+              L.push(`- ${s.nombre}${mult}: ${eur(s.total)}`);
+            }
           }
         }
         if (r.clientes && r.clientes.length) {
           L.push('');
           L.push(`👥 Clientes del día (${r.clientes.length})`);
-          for (const c of r.clientes) {
+          const lineaCli = (c) => {
             const svcs = (c.servicios || []).map(s => s.nombre).filter(Boolean).join(' · ');
             const estado = c.status === 'PAGADO' ? '[PAGADO]' : '[PDTE]';
-            L.push(`- ${c.hora || ''} ${c.nombre}${svcs ? ' — ' + svcs : ''} ${estado}: ${eur(c.total)}`);
+            const met = c.metodoPago ? ` [${c.metodoPago}]` : '';
+            const quien = c.status === 'PAGADO' ? ` [${(c.cobradoPor || '').trim() || 'Administrador'}]` : '';
+            const comp = c.compartida ? ' (compartida)' : '';
+            return `  - ${c.hora || ''} ${c.nombre}${svcs ? ' — ' + svcs : ''}${comp} ${estado}${met}${quien}: ${eur(c.total)}`;
+          };
+          if (r.clientesPorStaff && r.clientesPorStaff.length) {
+            for (const g of r.clientesPorStaff) {
+              L.push(`  ${g.staffName.toUpperCase()} — ${g.clientes.length} · ${eur(g.total)}`);
+              for (const c of g.clientes) L.push(lineaCli(c));
+            }
+          } else {
+            for (const c of r.clientes) L.push(lineaCli(c));
           }
         }
         if (r.descuentos && r.descuentos.length) {
@@ -8807,12 +8959,34 @@ button { font-family: inherit; cursor: pointer; }
             L.push(`- ${s.staffName}${e} · ${s.citas} citas: ${eur(s.cobrado)}${pdte}`);
           }
         }
-        if (r.productos && r.productos.length) {
+        // v1.1.94 — venta de productos y especiales, siempre presentes
+        {
+          const cx = ext.cierre || {};
           L.push('');
-          L.push('🛒 Productos vendidos');
-          for (const p of r.productos) {
-            const mult = p.cantidad > 1 ? ` ×${p.cantidad}` : '';
-            L.push(`- ${p.nombre}${mult}: ${eur(p.total)}`);
+          L.push('🛒 Venta de productos');
+          if (cx.productosDetalle && cx.productosDetalle.length) {
+            for (const p of cx.productosDetalle) {
+              const mult = p.cantidad > 1 ? ` ×${p.cantidad}` : '';
+              L.push(`- ${p.cliente ? p.cliente + ' — ' : ''}${p.producto}${mult}: ${eur(p.importe)}`);
+            }
+            L.push(`Total productos: ${eur(cx.productosTotal || 0)}`);
+          } else if (r.productos && r.productos.length) {
+            for (const p of r.productos) {
+              const mult = p.cantidad > 1 ? ` ×${p.cantidad}` : '';
+              L.push(`- ${p.nombre}${mult}: ${eur(p.total)}`);
+            }
+          } else {
+            L.push('Sin actividad');
+          }
+          L.push('');
+          L.push('🎟️ Venta de especiales');
+          if (cx.especiales && cx.especiales.length) {
+            for (const e of cx.especiales) {
+              L.push(`- ${e.cliente ? e.cliente + ' — ' : ''}${e.concepto}: ${eur(e.importe)}`);
+            }
+            L.push(`Total especiales: ${eur(cx.especialesTotal || 0)}`);
+          } else {
+            L.push('Sin actividad');
           }
         }
         if (r.externos && r.externos.length) {
@@ -8829,6 +9003,7 @@ button { font-family: inherit; cursor: pointer; }
       if (tipo === 'fin') {
         const c = ext.cierre;
         if (!c) return '';
+        const r = ext.rendimiento || null;   // v1.1.94 — pendientes de cobro
         const cab = this._salonLegalName ? `${this._salonLegalName} · ` : '';
         L.push('💰 CIERRE FINANCIERO');
         L.push(`${cab}${fecha}`);
@@ -8860,19 +9035,49 @@ button { font-family: inherit; cursor: pointer; }
         }
         if (c.staff && c.staff.length) {
           L.push('');
-          L.push('💼 Cobrado por staff');
+          L.push('💼 Cobrado por staff · quién pasó el cobro');
           for (const s of c.staff) {
             const e = s.isExternal ? ' [EXT]' : '';
             L.push(`- ${s.staffName}${e} · ${s.citas} cobros: ${eur(s.cobrado)}`);
           }
         }
-        if (c.productos && c.productos.length) {
+        if (c.productosDetalle && c.productosDetalle.length) {
+          L.push('');
+          L.push('🛒 Productos cobrados hoy');
+          for (const p of c.productosDetalle) {
+            const mult = p.cantidad > 1 ? ` ×${p.cantidad}` : '';
+            const quien = (p.soldBy || '').trim() || 'Administrador';
+            L.push(`- ${p.cliente ? p.cliente + ' — ' : ''}${p.producto}${mult} [${quien}]: ${eur(p.importe)}`);
+          }
+        } else if (c.productos && c.productos.length) {
           L.push('');
           L.push('🛒 Productos cobrados hoy');
           for (const p of c.productos) {
             const mult = p.cantidad > 1 ? ` ×${p.cantidad}` : '';
             L.push(`- ${p.nombre}${mult}: ${eur(p.total)}`);
           }
+        }
+        // v1.1.94 — pendiente de cobrar
+        if (r && r.pendientes && r.pendientes.length) {
+          L.push('');
+          L.push('⏳ Pendiente de cobrar');
+          for (const pd of r.pendientes) {
+            const svcs = (pd.servicios || []).join(' · ');
+            L.push(`- ${pd.hora || ''} ${pd.cliente}${svcs ? ' — ' + svcs : ''} (${pd.staff}): ${eur(pd.importe)}`);
+          }
+          L.push(`Total pendiente: ${eur(r.pendientesTotal || 0)}`);
+        }
+        // v1.1.94 — cobros de otros días
+        const rec = ext.reconciliacion;
+        if (rec && rec.cobrosDeOtrosDias && rec.cobrosDeOtrosDias.length) {
+          L.push('');
+          L.push('🔁 Cobros de otros días');
+          for (const co of rec.cobrosDeOtrosDias) {
+            const cita = co.fechaCita ? ` (cita ${co.fechaCita}${co.horaCita ? ' ' + co.horaCita : ''})` : '';
+            const met = co.metodo ? ` [${co.metodo}]` : '';
+            L.push(`- ${co.hora || ''} ${co.cliente || 'Sin nombre'}${cita}${met}: ${eur(co.importe)}`);
+          }
+          L.push(`Total de otras fechas: ${eur(rec.totalCobrosDeOtrosDias || 0)}`);
         }
         // v1.1.80 — Especiales vendidos hoy
         if (c.especiales && c.especiales.length) {
@@ -8919,6 +9124,21 @@ button { font-family: inherit; cursor: pointer; }
             const dif = Math.round(((arq.contado || 0) - (arq.esperado || 0)) * 100) / 100;
             L.push(Math.abs(dif) < 0.01 ? 'Caja cuadrada' : `Diferencia: ${dif >= 0 ? '+' : ''}${eur(dif)}`);
           }
+        }
+        // v1.1.94 — observatorio semanal
+        const obs = d.observatorio;
+        if (obs && Array.isArray(obs.dias)) {
+          const et = (e) => e === 'ok' ? 'CUADRADO' : (e === 'pendiente' ? 'PENDIENTE' : '—');
+          L.push('');
+          L.push(`📅 Observatorio semanal (${obs.desde} → ${obs.hasta})`);
+          for (const dia of obs.dias) {
+            L.push(`${dia.nombre} ${dia.diaMes} — ${eur(dia.total)}`);
+            L.push(`  💳 Tarjeta ${eur(dia.tarjeta)} · ${et(dia.estadoTarjeta)}`);
+            L.push(`  💵 Efectivo ${eur(dia.efectivo)} · ${et(dia.estadoEfectivo)}`);
+            L.push(`  📲 Bizum ${eur(dia.bizum)} · ${et(dia.estadoBizum)}`);
+            if (dia.otros > 0) L.push(`  Otros ${eur(dia.otros)}`);
+          }
+          L.push(`Total semana: ${eur(obs.totales.total)}`);
         }
         return L.join('\n');
       }
