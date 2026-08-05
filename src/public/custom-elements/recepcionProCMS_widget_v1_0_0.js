@@ -1,7 +1,20 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.95  ·  El preview de ACORTAR ya no queda tapado
+ * VERSION: 1.1.96  ·  Chips de cliente en el panel de Recepción
+ *
+ * v1.1.96 (5 ago 2026) — Al cargar un cliente en el panel izquierdo se
+ *   pintan chips con lo que ya tiene contratado: ⭐ PRIME, 🎟️ cada BONO
+ *   ACTIVO con su servicio y usos restantes, 🎁 tarjetas promocionales y
+ *   🛍 si tiene histórico de compra de producto (veces e importe).
+ *   Reutiliza el mensaje `getProductosCustom` que ya existía para el modal
+ *   de cobro; el backend (recepcionProLogic v1.0.49) añade el histórico de
+ *   compras y devuelve el contactId para poder distinguir de qué cliente
+ *   es cada respuesta — panel y modal piden por el mismo canal y pueden
+ *   estar sobre clientes distintos. Sin bonos ni compras no se pinta nada:
+ *   el panel se queda como estaba.
+ *
+ * v1.1.95 (5 ago 2026) — El preview de ACORTAR ya no queda tapado
  *
  * v1.1.95 (5 ago 2026) — FIX visual del acortado (v1.1.91). El preview de
  *   recorte se pinta ENCIMA del bloque de la cita, pero tanto .ks-appt
@@ -1678,7 +1691,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.95]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.96]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2677,6 +2690,14 @@ button { font-family: inherit; cursor: pointer; }
 .cierre-staffgroup-tot { font-size:10.5px; font-weight:700; color:#6b7280; font-variant-numeric:tabular-nums; }
 .cierre-row-ind { padding-left:16px; }
 .cierre-row-vacio { display:block; padding:8px; font-size:11px; font-style:italic; color:#9ca3af; }
+/* v1.1.96 — chips de lo que el cliente ya tiene contratado */
+.ks-cchips { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+.ks-cchip { display:inline-flex; align-items:center; gap:3px; padding:2px 7px; border-radius:999px; font-size:10px; font-weight:700; letter-spacing:.2px; border:1px solid transparent; }
+.ks-cchip-n { font-weight:800; opacity:.75; font-variant-numeric:tabular-nums; }
+.ks-cchip.is-prime { background:#fdf3d6; color:#8a6100; border-color:#e8c877; }
+.ks-cchip.is-bono  { background:#e7f3ff; color:#1b5f9e; border-color:#a9cef0; }
+.ks-cchip.is-promo { background:#f3e9ff; color:#6b34a8; border-color:#d3bcf0; }
+.ks-cchip.is-prod  { background:#e6f6ec; color:#1b6b3a; border-color:#a9d9bd; }
 /* v1.1.94 — confirmación de datáfono / Bizum en el arqueo */
 .ks-conf-block { margin-top:10px; padding-top:9px; border-top:1px solid var(--ks-line2); display:flex; flex-wrap:wrap; gap:7px; }
 .ks-conf-hint { flex:1 0 100%; font-size:10.5px; color:var(--ks-ink3); font-weight:600; }
@@ -2814,6 +2835,7 @@ button { font-family: inherit; cursor: pointer; }
       this._disc = 0;
       this._canjeActivo = null;        // v1.1.50 — F4/F5 canje activo del modal de cobro
       this._productosCliente = null;   // v1.1.51 — F4/F5 { prime, bonos, tarjetas } del cliente
+      this._chipsCliente = null;       // v1.1.96 — { contactId, prime, bonos, tarjetas, comprasProductos } del panel
       // v1.1.53 — Columna lateral colapsable. Default según ancho de viewport:
       // < 1024px (móvil horizontal / tablet pequeña) → colapsada de inicio
       //          para que el calendario tenga el ancho completo.
@@ -3277,6 +3299,23 @@ button { font-family: inherit; cursor: pointer; }
           break;
         // v1.1.51 — F4/F5 auto-detección bonos/tarjetas del cliente
         case 'productosCustomCliente':
+          // v1.1.96 — el panel y el modal de cobro comparten este canal y
+          // pueden estar sobre clientes distintos. El backend v1.0.49
+          // devuelve contactId: cada respuesta va a quien la pidió.
+          if (p.ok && p.contactId && this._cliente && this._cliente.contactId === p.contactId) {
+            this._chipsCliente = {
+              contactId: p.contactId,
+              prime: p.prime || null,
+              bonos: Array.isArray(p.bonos) ? p.bonos : [],
+              tarjetas: Array.isArray(p.tarjetas) ? p.tarjetas : [],
+              comprasProductos: p.comprasProductos || null
+            };
+            this._renderClienteSelected();
+          }
+          // Si hay un modal de cobro abierto de OTRO cliente, no pisar sus
+          // bonos con los de este.
+          if (this._modalReserva && p.contactId && this._modalReserva.contactId
+              && this._modalReserva.contactId !== p.contactId) break;
           if (p.ok) {
             this._productosCliente = {
               prime: p.prime || null,
@@ -4170,6 +4209,11 @@ button { font-family: inherit; cursor: pointer; }
       root.getElementById('cliClear').style.display = 'none';
       this._renderClienteSelected();
       this._updateSteps();
+      // v1.1.96 — pedir lo que ya tiene contratado para pintar los chips
+      this._chipsCliente = null;
+      if (this._cliente.contactId) {
+        this._sendToPage('getProductosCustom', { contactId: this._cliente.contactId });
+      }
     }
     _renderClienteSelected() {
       const root = this.shadowRoot;
@@ -4204,13 +4248,44 @@ button { font-family: inherit; cursor: pointer; }
 
       sel.innerHTML = `<div class="ks-cli-selected">
         <div style="flex:1;"><div class="ks-cli-sname">${esc(c.nombre)}${prov}</div>
-        <div class="ks-cli-ssub">${sub}</div>${warnBanner}</div>
+        <div class="ks-cli-ssub">${sub}</div>${warnBanner}${this._chipsClienteHTML()}</div>
         <div style="display:flex;align-items:center;">${btnEdit}<button class="ks-cli-srm" id="cliRm">✕</button></div></div>`;
       sel.querySelector('#cliRm').addEventListener('click', () => { this._cliente = null; sel.innerHTML = ''; this._updateSteps(); });
       if (puedeEditar) {
         sel.querySelector('#cliEdit').addEventListener('click', () => this._openEditarCliente(c));
       }
     }
+    // v1.1.96 — Chips de lo que el cliente YA tiene contratado. Se pintan
+    // solo cuando la respuesta corresponde a este mismo cliente; mientras
+    // no ha llegado, no se pinta nada (no hay hueco ni parpadeo).
+    _chipsClienteHTML() {
+      const c = this._cliente;
+      const cp = this._chipsCliente;
+      if (!c || !cp || cp.contactId !== c.contactId) return '';
+      const chips = [];
+
+      if (cp.prime) {
+        chips.push(`<span class="ks-cchip is-prime">⭐ PRIME</span>`);
+      }
+      for (const b of (cp.bonos || [])) {
+        const usos = (b.remainingUses != null && b.totalUses)
+          ? ` <span class="ks-cchip-n">${b.remainingUses}/${b.totalUses}</span>` : '';
+        const svc = b.serviceLabel || b.code || 'Bono';
+        chips.push(`<span class="ks-cchip is-bono" title="${esc(b.code || '')}">🎟️ ${esc(svc)}${usos}</span>`);
+      }
+      for (const t of (cp.tarjetas || [])) {
+        chips.push(`<span class="ks-cchip is-promo" title="${esc(t.code || '')}">🎁 ${esc(t.serviceLabel || 'Tarjeta')}</span>`);
+      }
+      const compras = cp.comprasProductos;
+      if (compras && compras.veces > 0) {
+        const veces = compras.veces === 1 ? '1 compra' : `${compras.veces} compras`;
+        chips.push(`<span class="ks-cchip is-prod" title="${esc(compras.ultimoProducto || '')}">🛍 ${veces} · ${Math.round(compras.total)}€</span>`);
+      }
+
+      if (!chips.length) return '';
+      return `<div class="ks-cchips">${chips.join('')}</div>`;
+    }
+
     // v1.1.34 — Detección de ficha incompleta (patrón V1 literal de
     // kamisuite-agenda v2.0.5). Banner en sidebar cliente + modal cita.
     // Los emails genéricos del salón se tratan como "vacío" porque no
