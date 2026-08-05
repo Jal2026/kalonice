@@ -1,9 +1,81 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.45
+// VERSION: 1.0.47
 // FECHA: 5 de agosto de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.47: 🧹 FUERA EL CRUCE DE PRODUCTOS VENDIDOS (v1.0.13).
+//          `getReservasPorFecha` cruzaba cada reserva con los pagos de
+//          producto del día por contactId, pegando la venta a la cita más
+//          cercana en el tiempo. Era heurístico por necesidad: el registro
+//          de venta no guarda ninguna referencia a la reserva. Efecto real:
+//          un producto vendido desde TIENDA después de cobrar la cita
+//          aparecía colgado de una cita ya cerrada, como si formara parte
+//          de ella.
+//          Decisión Jal (5-ago-2026): en la ficha de la cita no aparece
+//          ningún producto, nunca. Las ventas se ven en el informe del día
+//          (cierreLogicExtendido v1.1.6) con cliente, concepto, importe y
+//          vendedor. Se elimina el campo `productosVendidos` del payload y
+//          la query que lo alimentaba — una consulta menos a
+//          PaymentReservations en cada carga de agenda.
+//          Consumidor único: el widget, ya limpio en v1.1.92.
+//
+// v1.0.46: ⚖️ COBRO POR PESO EN EL MODAL DE CITA — `setLineWeight`.
+//          Contexto: el editor de servicios (edicionservicios v1.12.0+)
+//          permite marcar un servicio como POR PESO (`cobroporPeso` = true
+//          + `precioGramo` €/g). Hasta hoy ese modelo SOLO lo consumía el
+//          catálogo consultivo (catalogoConsultaLogic, presupuestos). En
+//          Recepción PRO el servicio entraba con `price` del catálogo — 0 €
+//          en los servicios por peso — y no había forma de cobrarlo salvo
+//          teclear el importe a mano con el botón "✎ Extra".
+//
+//          Decisión Jal (5-ago-2026): el peso se introduce EN EL MODAL DE
+//          LA CITA. La línea nace a 0 € y solo pasa a tener importe cuando
+//          la recepcionista teclea los gramos; el precio lo calcula el
+//          backend leyendo `precioGramo` de ServiceCatalog. El operador
+//          NUNCA envía euros: envía gramos.
+//
+//          A) NEW `setLineWeight({ reservaId, itemIndex, grams })`
+//             · Resuelve el servicio de esa línea igual que hace
+//               `quitarItemReserva` v1.0.41: label de la línea + conteo de
+//               ocurrencias previas → fase ocupante `tipo:'servicio'` con
+//               el mismo label → `setupUid`. Nada de adivinar por posición.
+//             · Lee ServiceCatalog por `setupUid`. Si `cobroporPeso` no es
+//               true o `precioGramo` <= 0 → rechaza SIN escribir nada.
+//             · precio = round(grams × precioGramo, 2). Se ESCRIBE (SET),
+//               no se suma → reeditable e idempotente: teclear 120 g dos
+//               veces deja el mismo importe, no el doble.
+//             · `precioTotal` se ajusta por DELTA (nuevo − anterior de esa
+//               línea), mismo criterio que quitarItemReserva. No se
+//               recalcula la suma entera para no tocar packs cuyo total
+//               incluya conceptos embebidos (Caso A).
+//             · Bloquea si la cita está PAGADA.
+//             · NO toca fases, duración, sessions ni pago.
+//
+//          B) NUEVO CAMPO CMS `lineWeights` (Text, JSON) en
+//             KamisuiteReservations: `{"items":[{"index":0,"grams":120}]}`.
+//             Guarda los GRAMOS tecleados por línea para que el modal los
+//             muestre al reabrir y sean reeditables (sin él solo
+//             sobrevivirían los euros y se perdería la trazabilidad del
+//             gramaje). Mismo patrón de envoltura {items:[...]} que `fases`
+//             y `sessionIds`.
+//
+//          C) `getCatalogoReserva` emite ahora `cobroporPeso` y
+//             `precioGramo` por servicio y por complemento (aditivo — el
+//             widget los necesita para saber qué línea lleva input de
+//             gramos). `getReservasPorFecha` devuelve `lineWeights`.
+//
+//          D) `quitarItemReserva` reindexa `lineWeights` al eliminar una
+//             línea (quita su entrada y decrementa los índices superiores).
+//             Sin esto, quitar un complemento dejaría los gramos apuntando
+//             a la línea equivocada.
+//
+//          NO se toca `marcarPagadoReserva`: la descripción del cobro sigue
+//          siendo "Servicio (importe€)" sin el gramaje. Meter " 120 g" en
+//          el nombre fragmentaría el agrupado por servicio de estadísticas
+//          y facturación. Si se quiere el gramaje en ticket/factura, es una
+//          decisión aparte.
 //
 // v1.0.45: 📐 EXTENSIÓN RAYADA POR FASE — `extenderFase`.
 //          Contexto: hasta v1.1.64 del widget, arrastrar el asa inferior
@@ -806,7 +878,6 @@
 //
 // v1.0.13: getReservasPorFecha ahora cruza con PaymentReservations para
 //          asociar productos vendidos a su cita. Cada reserva devuelve
-//          productosVendidos:[{nombre, cantidad, subtotal, metodoPago,
 //          fechaPago, staff}]. Match heurístico por contactId + cercanía
 //          temporal (venderProductosDesdeAgenda no graba reservaId en el
 //          bookingId del producto). Si un cliente tiene varias reservas
@@ -979,7 +1050,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.45';
+const VERSION = '1.0.47';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -1269,7 +1340,10 @@ export const getCatalogoReserva = webMethod(
                 duration: toNum(c.duration),
                 hasVariants: !!c.hasVariants,
                 variantes: cVars,
-                required: !!(faseEnMapeo && faseEnMapeo.obligatorio === true)
+                required: !!(faseEnMapeo && faseEnMapeo.obligatorio === true),
+                // v1.0.46 — modelo de tarifa por peso (aditivo).
+                cobroporPeso: c.cobroporPeso === true,
+                precioGramo: toNum(c.precioGramo)
               };
             });
 
@@ -1283,6 +1357,14 @@ export const getCatalogoReserva = webMethod(
             claseServicio: it.claseServicio || '',
             price: toNum(it.price),
             duration: toNum(it.duration),
+            // v1.0.46 — TARIFA POR PESO. `cobroporPeso` (Boolean) y
+            // `precioGramo` (Number, €/g) son campos de ServiceCatalog que
+            // escribe el editor de servicios desde v1.12.0. Hasta ahora no
+            // se emitían aquí, así que Recepción PRO no tenía forma de
+            // saber que una línea a 0 € en realidad se cobra por gramos.
+            // Aditivo: quien no los lea sigue funcionando igual.
+            cobroporPeso: it.cobroporPeso === true,
+            precioGramo: toNum(it.precioGramo),
             hasVariants: !!it.hasVariants,
             // v1.0.24 — Normalizar variantes para el widget de Recepción PRO.
             // El editor (serviciosEdicionLogic) las guarda como
@@ -2176,72 +2258,14 @@ export const getReservasPorFecha = webMethod(
         notes: item.notes || '',
         origenRecepcion: item.origenRecepcion !== false,
         extensionMin: toNum(item.extensionMin),  // v1.0.9
-        productosVendidos: [],                   // v1.0.13 — se rellena abajo
+        // v1.0.46 — gramos tecleados por línea en servicios de tarifa por
+        // peso: [{index, grams}]. El modal los repinta al reabrir la cita.
+        lineWeights: jsonIn(item.lineWeights, 'items'),
         tienePromoServicio: false,               // v1.0.19 — se rellena abajo si aplica
         descuentoServicioTotal: 0,               // v1.0.19 — suma del ahorro
         serviciosPromo: []                       // v1.0.19 — detalle de servicios con promo
       }));
 
-      // v1.0.13 — Cruzar con productos vendidos del día asociados a cada
-      // reserva por contactId + proximidad temporal. La función
-      // venderProductosDesdeAgenda guarda el bookingId como UUID propio
-      // (no referencia a la reserva), por eso se hace match heurístico:
-      //   · descripcion empieza con 🛒
-      //   · staff = TIENDA (o similar)
-      //   · mismo contactId que la reserva
-      //   · fechaPago dentro del día visualizado
-      // Si un cliente tiene varias reservas el mismo día y compra un
-      // producto, se asocia a la reserva con menor diferencia |fechaPago - fechaReserva|.
-      try {
-        const contactIdsDelDia = [...new Set(reservas.map(r => r.contactId).filter(Boolean))];
-        if (contactIdsDelDia.length) {
-          const pagosProd = await wixData.query('PaymentReservations')
-            .ge('fechaPago', startUTC)
-            .le('fechaPago', endUTC)
-            .hasSome('contactId', contactIdsDelDia)
-            .limit(500)
-            .find({ suppressAuth: true });
-
-          for (const pago of (pagosProd.items || [])) {
-            const desc = String(pago.descripcion || '').trim();
-            if (!desc.startsWith('🛒')) continue;  // solo productos
-            const cid = pago.contactId;
-            if (!cid) continue;
-            // Reservas candidatas con el mismo contactId
-            const candidatas = reservas.filter(r => r.contactId === cid);
-            if (!candidatas.length) continue;
-            // Elegir la candidata con menor delta temporal
-            const fp = new Date(pago.fechaPago).getTime();
-            let mejor = candidatas[0];
-            let mejorDelta = Math.abs(fp - new Date(mejor.fechaReserva).getTime());
-            for (let i = 1; i < candidatas.length; i++) {
-              const dlt = Math.abs(fp - new Date(candidatas[i].fechaReserva).getTime());
-              if (dlt < mejorDelta) { mejor = candidatas[i]; mejorDelta = dlt; }
-            }
-            // Parsear nombre + precio + cantidad
-            const m = desc.match(/^🛒\s*(.+?)\s*\(\s*([\d.,]+)\s*€?\s*\)\s*$/);
-            if (!m) continue;
-            let nombre = m[1].trim();
-            const subtotal = parseFloat(m[2].replace(',', '.')) || 0;
-            let cantidad = 1;
-            const qty = nombre.match(/^(.+?)\s+x(\d+)\s*$/i);
-            if (qty) { nombre = qty[1].trim(); cantidad = parseInt(qty[2], 10) || 1; }
-            mejor.productosVendidos.push({
-              paymentId: pago._id,
-              nombre,
-              cantidad,
-              subtotal: Math.round(subtotal * 100) / 100,
-              metodoPago: pago.tipoPago || '',
-              fechaPago: pago.fechaPago ? new Date(pago.fechaPago).toISOString() : '',
-              staff: pago.staff || ''
-            });
-          }
-        }
-      } catch (eProd) {
-        console.warn(`${TAG} ⚠ cruce productos:`, eProd.message);
-      }
-
-      const totalProdVend = reservas.reduce((s, r) => s + r.productosVendidos.length, 0);
 
       // v1.0.19 — Cruce con ServiceCatalog para detectar descuento
       // promocional por servicio. UNA SOLA query con `hasSome('setupUid',
@@ -2331,7 +2355,7 @@ export const getReservasPorFecha = webMethod(
       }
 
       const promoCount = reservas.filter(r => r.tienePromoServicio).length;
-      console.log(`${TAG} ✅ getReservasPorFecha ${fecha}: ${reservas.length} packs, ${totalProdVend} productos vinculados, ${promoCount} con descuento promocional`);
+      console.log(`${TAG} ✅ getReservasPorFecha ${fecha}: ${reservas.length} packs, ${promoCount} con descuento promocional`);
       return { ok: true, version: VERSION, reservas };
 
     } catch (e) {
@@ -2993,6 +3017,136 @@ export const agregarExtraReserva = webMethod(
   }
 );
 
+// ─── 8.2·bis Fijar PESO de una línea (tarifa por gramo) ──────
+// v1.0.46 — Servicios con `cobroporPeso: true` en ServiceCatalog entran en
+// la cita a 0 € (su `price` está vacío: el importe depende del producto que
+// se gaste). La recepcionista teclea los GRAMOS en el modal de la cita y
+// este método calcula el importe con el `precioGramo` (€/g) del catálogo.
+//
+// Reglas duras:
+//   · El operador manda gramos, NUNCA euros. El precio lo pone el backend
+//     leyendo el catálogo → cero confianza en el frontend.
+//   · SET, no suma: reescribir la misma línea con otros gramos corrige el
+//     importe en lugar de acumularlo. Idempotente.
+//   · `precioTotal` se ajusta por DELTA (importe nuevo − importe anterior de
+//     esa línea), igual que hace `quitarItemReserva`. No se recalcula la
+//     suma completa: hay packs cuyo total incluye conceptos embebidos
+//     (Caso A) que no tienen línea propia en serviciosDetail.
+//   · Cita PAGADA → rechazo. El importe ya está en el ledger.
+//   · Servicio que NO es de tarifa por peso → rechazo sin escribir.
+//   · grams = 0 → línea a 0 € y se borra la entrada de `lineWeights`
+//     (deshacer).
+//   · NO toca fases, duracionTotal, sessions ni pago.
+//
+// Resolución línea → servicio: mismo patrón que `quitarItemReserva` v1.0.41.
+// El label de la línea de serviciosDetail se cruza con la fase ocupante
+// `tipo:'servicio'` de idéntico label, alineando por número de ocurrencia
+// (soporta el mismo servicio repetido dos veces en la misma cita). De esa
+// fase sale el `setupUid`, que es lo único fiable para ir al catálogo.
+export const setLineWeight = webMethod(
+  Permissions.SiteMember,
+  async ({ reservaId, itemIndex, grams }) => {
+    try {
+      const idx = Math.max(0, parseInt(itemIndex, 10) || 0);
+      const g = Math.max(0, Math.round((Number(grams) || 0) * 100) / 100);
+      console.log(`${TAG} ⚖️ setLineWeight: reserva=${reservaId} línea=${idx} gramos=${g}`);
+
+      if (!reservaId) return { ok: false, error: 'reservaId requerido' };
+      if (!Number.isFinite(Number(grams))) return { ok: false, error: 'Gramos inválidos' };
+
+      const result = await wixData.query(CMS_RESERVAS)
+        .eq('_id', reservaId).limit(1)
+        .find({ suppressAuth: true });
+      if (result.items.length === 0) return { ok: false, error: 'Reserva no encontrada' };
+
+      const registro = result.items[0];
+      if (registro.status === 'PAGADO') {
+        return { ok: false, error: 'La cita ya está cobrada: no se puede cambiar el peso.' };
+      }
+
+      const items = String(registro.serviciosDetail || '').split(';;').filter(Boolean);
+      if (idx >= items.length) return { ok: false, error: 'Índice fuera de rango' };
+
+      // Línea actual: "label|precio|cant" (cant opcional, por defecto 1)
+      const partes = String(items[idx]).split('|');
+      const itemLabel = String(partes[0] || '').trim();
+      const precioAnterior = Number(partes[1]) || 0;
+      const cant = Number(partes[2]) || 1;
+      if (!itemLabel) return { ok: false, error: 'La línea no tiene etiqueta; no se puede identificar el servicio.' };
+
+      // ── Resolver setupUid del servicio de esta línea vía fases ──
+      let occ = 0;
+      for (let k = 0; k < idx; k++) {
+        if (String((items[k] || '').split('|')[0] || '').trim() === itemLabel) occ++;
+      }
+      let setupUidLinea = '';
+      const fasesArr = jsonIn(registro.fases, 'items');
+      if (Array.isArray(fasesArr) && fasesArr.length) {
+        let seen = 0;
+        for (const f of fasesArr) {
+          if (!f || f.tipo !== 'servicio') continue;
+          if (String(f.label || '').trim() !== itemLabel) continue;
+          if (seen === occ) { setupUidLinea = String(f.setupUid || ''); break; }
+          seen++;
+        }
+      }
+      if (!setupUidLinea) {
+        return { ok: false, error: 'No se puede identificar el servicio de esta línea (extra o producto manual).' };
+      }
+
+      // ── Leer tarifa del catálogo. Fuente única de verdad. ──
+      const catRes = await wixData.query(CMS_CATALOGO)
+        .eq('setupUid', setupUidLinea).limit(1)
+        .find({ suppressAuth: true });
+      if (catRes.items.length === 0) {
+        return { ok: false, error: 'El servicio de esta línea ya no está en el catálogo.' };
+      }
+      const svc = catRes.items[0];
+      const precioGramo = toNum(svc.precioGramo);
+      if (svc.cobroporPeso !== true || precioGramo <= 0) {
+        return { ok: false, error: `"${svc.label || itemLabel}" no está configurado con tarifa por peso.` };
+      }
+
+      // ── Importe de la línea ──
+      const precioNuevo = Math.round(g * precioGramo * 100) / 100;
+
+      const partesNuevas = partes.slice();
+      partesNuevas[1] = String(precioNuevo);
+      items[idx] = partesNuevas.join('|');
+      registro.serviciosDetail = items.join(';;');
+
+      const delta = Math.round((precioNuevo - precioAnterior) * cant * 100) / 100;
+      registro.precioTotal = Math.max(0, Math.round(((Number(registro.precioTotal) || 0) + delta) * 100) / 100);
+
+      // ── Persistir los gramos (campo lineWeights, Text JSON) ──
+      const pesos = jsonIn(registro.lineWeights, 'items')
+        .filter(w => w && Number.isFinite(Number(w.index)) && Number(w.index) !== idx);
+      if (g > 0) pesos.push({ index: idx, grams: g });
+      pesos.sort((a, b) => Number(a.index) - Number(b.index));
+      registro.lineWeights = wrapItems(pesos);
+
+      await wixData.update(CMS_RESERVAS, registro, { suppressAuth: true });
+      console.log(`${TAG} ✅ Peso fijado: "${itemLabel}" ${g}g × ${precioGramo}€/g = ${precioNuevo}€ (Δ${delta}€). precioTotal=${registro.precioTotal}€`);
+
+      return {
+        ok: true,
+        reservaId,
+        itemIndex: idx,
+        label: itemLabel,
+        grams: g,
+        precioGramo,
+        precioLinea: precioNuevo,
+        precioTotal: registro.precioTotal,
+        serviciosDetail: registro.serviciosDetail,
+        lineWeights: pesos
+      };
+    } catch (e) {
+      console.error(`${TAG} ❌ setLineWeight:`, e.message);
+      return { ok: false, error: e.message };
+    }
+  }
+);
+
 // ─── 8.3 Añadir Complemento (servicio del catálogo) ──────────
 // Lee el complemento desde ServiceCatalog (por setupUid). Suma duracionTotal
 // y precioTotal. Añade al detalle. Añade una fase {tipo:'servicio',ref} al
@@ -3320,6 +3474,25 @@ export const quitarItemReserva = webMethod(
       items.splice(idx, 1);
       registro.serviciosDetail = items.join(';;');
       registro.precioTotal = Math.max(0, (Number(registro.precioTotal) || 0) - subtotal);
+
+      // v1.0.46 — Reindexar `lineWeights`: los gramos se guardan por índice
+      // de línea, así que al quitar una línea hay que borrar su entrada y
+      // decrementar las de índice superior. Sin esto, los gramos quedarían
+      // apuntando al servicio equivocado.
+      try {
+        const pesosPrev = jsonIn(registro.lineWeights, 'items');
+        if (Array.isArray(pesosPrev) && pesosPrev.length) {
+          const pesosNuevos = pesosPrev
+            .filter(w => w && Number.isFinite(Number(w.index)) && Number(w.index) !== idx)
+            .map(w => ({
+              index: Number(w.index) > idx ? Number(w.index) - 1 : Number(w.index),
+              grams: Number(w.grams) || 0
+            }));
+          registro.lineWeights = wrapItems(pesosNuevos);
+        }
+      } catch (ePesos) {
+        console.warn(`${TAG} ⚠ quitarItem: no se pudo reindexar lineWeights:`, ePesos.message);
+      }
 
       // v1.0.41 — BUGFIX: quitar también la fase OCUPANTE correspondiente del
       // array `fases`. Antes solo se quitaba del serviciosDetail (desaparecía
