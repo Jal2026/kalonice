@@ -1,9 +1,25 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.47
+// VERSION: 1.0.48
 // FECHA: 5 de agosto de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.48: 👤 QUIÉN COBRA ≠ QUIÉN TRABAJA — `soldBy` en el cobro.
+//          `PaymentReservations.staff` guarda el titular de la cita, o sea
+//          la COLUMNA del calendario. El informe lo usaba como "Cobrado por
+//          staff", lo cual es falso: quien pasa la tarjeta es quien está en
+//          recepción, no quien peinó. Si el salón trabaja sin capa de
+//          acceso, no hay ninguna persona detrás del cobro y todo debe ir a
+//          un único cajón, Administrador.
+//          Cambio: `marcarPagadoReserva` acepta `soldBy` (empleado logueado
+//          que envía el page code) y lo graba en el campo `soldBy` de
+//          PaymentReservations. `staff` NO se
+//          toca: sigue siendo el titular, del que dependen el cruce de
+//          externos y su comisión.
+//          Vacío = sin login → cierreLogicExtendido v1.1.7 lo agrupa como
+//          "Administrador".
+//          Aditivo: llamar sin soldBy deja el campo vacío y funciona igual.
 //
 // v1.0.47: 🧹 FUERA EL CRUCE DE PRODUCTOS VENDIDOS (v1.0.13).
 //          `getReservasPorFecha` cruzaba cada reserva con los pagos de
@@ -1050,7 +1066,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.47';
+const VERSION = '1.0.48';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -2373,7 +2389,7 @@ export const getReservasPorFecha = webMethod(
 
 export const marcarPagadoReserva = webMethod(
   Permissions.SiteMember,
-  async ({ reservaId, metodoPago, desglosemetodopago, importeNeto, descripcionExtra }) => {
+  async ({ reservaId, metodoPago, desglosemetodopago, importeNeto, descripcionExtra, soldBy }) => {
     try {
       if (!reservaId) {
         return { ok: false, version: VERSION, error: { message: 'Falta reservaId' } };
@@ -2469,6 +2485,8 @@ export const marcarPagadoReserva = webMethod(
               nombreCliente: registro.clientName || 'Cliente',
               staff: registro.staffName || '',
               tipoPago: metodoPago || 'Efectivo'
+              // v1.0.48 — aquí NO se escribe soldBy: el campo se creó en
+              // PaymentReservations, no en PagoreservasExternos.
             };
 
             await wixData.insert(CMS_PAGOS_EXT, registroPagoExt, { suppressAuth: true });
@@ -2501,7 +2519,8 @@ export const marcarPagadoReserva = webMethod(
               nombreCliente: registro.clientName || 'Cliente',
               staff: registro.staffName || '',
               tipoPago: metodoPago || 'Efectivo',
-              desglosemetodopago: desglosemetodopago || ''
+              desglosemetodopago: desglosemetodopago || '',
+              soldBy: String(soldBy || '').trim()   // v1.0.48 — quién cobró
             };
 
             await wixData.insert(CMS_PAGOS, registroPago, { suppressAuth: true });
