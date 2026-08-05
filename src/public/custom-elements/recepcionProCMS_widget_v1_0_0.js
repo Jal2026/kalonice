@@ -1,9 +1,9 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.87  ·  Vuelve la EXTENSIÓN RAYADA, en todas las fases
+ * VERSION: 1.1.89  ·  Vuelve la EXTENSIÓN RAYADA, en todas las fases
  *
- * v1.1.87 (5 ago 2026) — REGRESIÓN CORREGIDA. Hasta v1.1.64, arrastrar el
+ * v1.1.89 (5 ago 2026) — REGRESIÓN CORREGIDA. Hasta v1.1.64, arrastrar el
  *   asa inferior de una cita creaba un buffer RAYADO detrás, con una ✕
  *   para quitarlo. La v1.1.65 (29 jul) cambió el asa para redimensionar la
  *   DURACIÓN de la fase y dejó el rayado solo para reservas SIN fases —
@@ -24,6 +24,78 @@
  *   FIX de paso: el bloque rayado tenía suelo de 10px de alto y con
  *   extensiones cortas la ✕ no cabía — quedaba imposible de quitar. Suelo
  *   a 18px y la ✕ pasa a ser diana fija de 22px, usable en iPad.
+ *
+ *   LA CAPA TÁCTIL DE v1.1.87 QUEDA INTACTA: _bindTouchLongPressDrag,
+ *   _bindTouchImmediateDrag, la media query (hover: none) y el enganche
+ *   del asa al arrastre táctil no se han tocado. Esta versión se construyó
+ *   SOBRE v1.1.88, no sobre una base anterior.
+ *
+ * v1.1.88  ·  ARQUEO — recuperar el conteo guardado al reabrir
+ *
+ * v1.1.88 (5 ago 2026) — ARQUEO: EL CONTEO GUARDADO NO SE RECUPERABA.
+ *   El backend guardaba correctamente (countedCash y difference quedaban
+ *   escritos en CashRegister y el toast confirmaba), pero _openCaja()
+ *   arrancaba siempre con this._cajaContado = 0 y _renderCajaBody()
+ *   calculaba la diferencia contra esa variable, ignorando d.registro.
+ *   Resultado: al reabrir el modal el input salía vacío y la diferencia
+ *   volvía a pintarse en rojo con el negativo del efectivo esperado,
+ *   aunque la caja estuviese cuadrada y guardada. Lo mismo con la nota.
+ *   Ahora el render hidrata this._cajaContado y this._cajaNota desde
+ *   d.registro mientras el usuario no haya tecleado (flag
+ *   _cajaContadoTouched), de modo que un refresco posterior a guardar o
+ *   a registrar un movimiento no pisa lo que se está escribiendo.
+ *   Cambio aditivo: sin registro guardado el comportamiento es idéntico.
+ *
+ * v1.1.87 (5 ago 2026) — ARRASTRE CON EL DEDO. Los cuatro arrastres del
+ *   calendario estaban escritos exclusivamente contra mousedown /
+ *   mousemove / mouseup, y en un navegador táctil esa secuencia no
+ *   existe: un dedo que se desplaza produce touchmove y scroll, nunca
+ *   mousemove. En tablet quedaban muertos MOVER FASE, REDIMENSIONAR
+ *   FASE, EXTENDER CITA y CREAR BLOQUEO — este último de forma
+ *   silenciosa (un toque da mousedown+mouseup en el mismo punto, la
+ *   duración sale 0 y no se crea nada ni se avisa).
+ *
+ *   SOLUCIÓN — capa de traducción, no reescritura. La lógica de
+ *   arrastre NO se toca: se le entregan eventos de ratón sintéticos
+ *   construidos a partir del gesto del dedo. Cero cambios en el camino
+ *   de ratón; el mostrador de escritorio se comporta exactamente igual
+ *   que en v1.1.86.
+ *     · _fireSyntheticMouse(target, tipo, x, y) — el mousedown se
+ *       despacha sobre el elemento REAL tocado (para que los guardias
+ *       e.target.closest(...) sigan funcionando) y el mousemove/mouseup
+ *       sobre `document` con bubbles:true, que alcanza tanto a los
+ *       listeners de document (_bindFaseDrag) como a los de window
+ *       (_bindResizeExt, _bindBlockDrag), porque document propaga a
+ *       window.
+ *     · _bindTouchLongPressDrag(el, opts) — PULSACIÓN LARGA de 450ms
+ *       quieto y luego arrastrar. Se usa en los bloques de cita y en las
+ *       columnas libres. No es capricho: si el arrastre arrancase al
+ *       primer movimiento, el dedo apoyado sobre una cita o una columna
+ *       ya no podría hacer scroll vertical del calendario, y con la
+ *       agenda llena eso es casi toda la pantalla. Con pulsación larga
+ *       conviven los tres gestos: toque corto abre la cita, arrastre
+ *       directo hace scroll, mantener + arrastrar mueve.
+ *       Antes de armarse NO se llama a preventDefault, de modo que el
+ *       scroll y el click nativo siguen intactos. Al armar, clase
+ *       `is-touch-armed` (+ vibración breve donde exista) para que el
+ *       operador vea que el bloque ya está enganchado.
+ *     · _bindTouchImmediateDrag(el) — arrastre inmediato para las dos
+ *       asas de resize, que son objetivos deliberados y nunca superficie
+ *       de scroll.
+ *
+ *   CSS — primera media query del archivo, `@media (hover: none)`, que
+ *   por definición no aplica en escritorio con ratón:
+ *     · .ks-appt-timeadj (el 🕑 que ajusta la hora de la fase SIN
+ *       arrastrar) vivía con opacity:0 y solo se revelaba en :hover →
+ *       era invisible con el dedo. Ahora es permanente y de 20×20px.
+ *     · .ks-appt-resize conserva su aspecto (28×4px) pero gana zona de
+ *       impacto por pseudo-elemento (~56px de ancho) y touch-action:none.
+ *     · -webkit-touch-callout / user-select desactivados en cita y
+ *       columna, para que iOS no abra el menú de selección al mantener.
+ *
+ *   NO se toca: page code, backends, contrato de mensajes ('mover-fase',
+ *   'redimensionar-fase', 'extender-reserva', 'crearBloqueo'), ni ningún
+ *   flujo de negocio.
  *
  * v1.1.86  ·  TIENDA — CIF/DNI antes de cobrar
  *
@@ -1492,7 +1564,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.87]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.89]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2048,7 +2120,7 @@ button { font-family: inherit; cursor: pointer; }
   justify-content: space-between; padding: 2px 8px; z-index: 2;
   border-left: 3px solid color-mix(in oklab, var(--staff) 50%, #000 50%); }
 .ks-appt-ext-lbl { letter-spacing: .5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-/* v1.1.87 — la ✕ nunca se encoge ni se recorta: es la única forma de
+/* v1.1.89 — la ✕ nunca se encoge ni se recorta: es la única forma de
    quitar la extensión. Diana de 22px, cómoda también en iPad. */
 .ks-appt-ext-rm { background: transparent; border: 0; color: #fff; cursor: pointer;
   font-size: 13px; font-weight: 700; line-height: 1; padding: 0 4px; opacity: .9;
@@ -2501,6 +2573,28 @@ button { font-family: inherit; cursor: pointer; }
 .cierre-importe { font-weight:700; }
 .cierre-metodo-icon { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
 .cierre-banner { background:#fff5e6; border:1px solid #d48a1a; color:#d48a1a; padding:8px 12px; border-radius:6px; font-size:12px; font-weight:600; margin-bottom:10px; grid-column:1/-1; }
+
+/* ============================================================
+   v1.1.87 — CAPA TÁCTIL (tablet)
+   Estado "armado" tras pulsación larga. Se aplica también con
+   ratón si alguna vez se dispara, pero solo lo activa el gesto
+   táctil, así que en escritorio nunca aparece.
+   ============================================================ */
+.ks-appt.is-touch-armed { box-shadow: var(--ks-shadow-lg); outline: 2px solid #fff; outline-offset: -2px; transform: scale(1.03); z-index: 9; }
+.ks-col.is-touch-armed { background: rgba(201, 164, 74, .10); outline: 2px dashed #c9a44a; outline-offset: -2px; }
+
+@media (hover: none) {
+  /* El 🕑 ajusta la hora de la fase sin arrastrar. Vivía solo en
+     :hover → invisible con el dedo. Aquí permanente y más grande. */
+  .ks-appt-timeadj { opacity: 1; width: 20px; height: 20px; font-size: 12px; top: 3px; right: 21px; background: rgba(0,0,0,.42); }
+
+  /* Asa de resize: mismo aspecto, zona de impacto ampliada. */
+  .ks-appt-resize { touch-action: none; }
+  .ks-appt-resize::after { content: ''; position: absolute; left: -14px; right: -14px; top: -9px; bottom: -6px; }
+
+  /* iOS abre el callout de selección al mantener pulsado si no se corta. */
+  .ks-appt, .ks-col { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+}
 `;
 
   class RecepcionProCMS extends HTMLElement {
@@ -3104,7 +3198,7 @@ button { font-family: inherit; cursor: pointer; }
           else this._toast('Error: ' + (p.error || 'no se pudo mover la fase'));
           break;
         case 'fase-extendida':
-          // v1.1.87 — extensión rayada por fase
+          // v1.1.89 — extensión rayada por fase
           if (p.ok) {
             this._toast(p.extMin > 0 ? `Extensión: +${p.extMin} min` : 'Extensión quitada');
             this._sendToPage('getReservas', { fecha: this._fecha });
@@ -4796,7 +4890,7 @@ button { font-family: inherit; cursor: pointer; }
         e.stopPropagation();
         const id = b.getAttribute('data-id');
         if (!id) return;
-        // v1.1.87 — si la extensión es de una fase, se quita poniendo su
+        // v1.1.89 — si la extensión es de una fase, se quita poniendo su
         // extMin a 0. Sin data-fase-idx es el camino legacy (campo raíz).
         const fi = b.getAttribute('data-fase-idx');
         if (fi != null && fi !== '' && Number(fi) >= 0) {
@@ -4837,6 +4931,133 @@ button { font-family: inherit; cursor: pointer; }
         const motivoFinal = nuevo.trim() || 'Bloqueado';
         this._sendToPage('actualizarBloqueo', { id, motivo: motivoFinal });
       }));
+    }
+
+    // ── v1.1.87 · CAPA TÁCTIL ─────────────────────────────────
+    // Traduce el gesto del dedo a eventos de ratón sintéticos. La lógica
+    // de arrastre (ghost, snap a 5 min, preview, commit al page code) no
+    // se toca: recibe exactamente los mismos eventos que recibiría de un
+    // ratón real.
+    //
+    //   · mousedown → sobre el elemento REAL tocado, para que los
+    //     guardias e.target.closest('.ks-appt-resize' / '.ks-appt-timeadj')
+    //     de los handlers existentes sigan funcionando igual.
+    //   · mousemove / mouseup → sobre `document` con bubbles:true. Alcanza
+    //     a los listeners de document (_bindFaseDrag) y a los de window
+    //     (_bindResizeExt, _bindBlockDrag), porque document propaga hacia
+    //     window.
+    _fireSyntheticMouse(target, type, x, y) {
+      if (!target) return;
+      try {
+        target.dispatchEvent(new MouseEvent(type, {
+          bubbles: true, cancelable: true, composed: true, view: window,
+          button: 0, buttons: (type === 'mouseup' ? 0 : 1),
+          clientX: x, clientY: y
+        }));
+      } catch (_) { /* navegador sin constructor MouseEvent: se ignora */ }
+    }
+
+    // PULSACIÓN LARGA (450ms quieto) + arrastrar. Para elementos que
+    // además son superficie de scroll: bloques de cita y columnas libres.
+    // Mientras no está armado NO se llama a preventDefault → el scroll
+    // vertical del calendario y el click nativo (abrir cita) siguen
+    // funcionando exactamente igual.
+    // opts: { skipSelector, armedClass }
+    _bindTouchLongPressDrag(el, opts) {
+      const o = opts || {};
+      const HOLD_MS = 450;
+      const SLOP = 10;
+      let timer = null, armed = false, downTarget = null;
+      let x0 = 0, y0 = 0, lastX = 0, lastY = 0;
+
+      const limpiar = () => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (armed && o.armedClass) el.classList.remove(o.armedClass);
+        armed = false; downTarget = null;
+      };
+
+      el.addEventListener('touchstart', e => {
+        if (!e.touches || e.touches.length !== 1) { limpiar(); return; }
+        const tgt = e.target;
+        // Mismos guardias que el camino de ratón.
+        if (o.skipSelector && tgt && tgt.closest && tgt.closest(o.skipSelector)) return;
+        const t = e.touches[0];
+        downTarget = tgt;
+        x0 = lastX = t.clientX; y0 = lastY = t.clientY;
+        armed = false;
+        timer = setTimeout(() => {
+          timer = null; armed = true;
+          if (o.armedClass) el.classList.add(o.armedClass);
+          try { if (navigator.vibrate) navigator.vibrate(15); } catch (_) {}
+          this._fireSyntheticMouse(downTarget, 'mousedown', lastX, lastY);
+        }, HOLD_MS);
+      }, { passive: false });
+
+      el.addEventListener('touchmove', e => {
+        const t = e.touches && e.touches[0]; if (!t) return;
+        lastX = t.clientX; lastY = t.clientY;
+        if (!armed) {
+          // Aún en la ventana de espera: si el dedo se mueve es un scroll,
+          // no un arrastre. Se cancela y se deja pasar el gesto al navegador.
+          if (Math.abs(lastX - x0) > SLOP || Math.abs(lastY - y0) > SLOP) limpiar();
+          return;
+        }
+        e.preventDefault();          // el gesto es nuestro: no hay scroll
+        this._fireSyntheticMouse(document, 'mousemove', lastX, lastY);
+      }, { passive: false });
+
+      el.addEventListener('touchend', e => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (!armed) { downTarget = null; return; }
+        const t = (e.changedTouches && e.changedTouches[0]) || null;
+        const fx = t ? t.clientX : lastX, fy = t ? t.clientY : lastY;
+        if (o.armedClass) el.classList.remove(o.armedClass);
+        armed = false; downTarget = null;
+        e.preventDefault();          // evita el click fantasma al soltar
+        this._fireSyntheticMouse(document, 'mouseup', fx, fy);
+      }, { passive: false });
+
+      el.addEventListener('touchcancel', () => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (!armed) { downTarget = null; return; }
+        if (o.armedClass) el.classList.remove(o.armedClass);
+        armed = false; downTarget = null;
+        this._fireSyntheticMouse(document, 'mouseup', lastX, lastY);
+      }, { passive: false });
+    }
+
+    // ARRASTRE INMEDIATO. Para las dos asas de resize: objetivos
+    // deliberados y diminutos, nunca superficie de scroll. preventDefault
+    // en touchstart impide que la rejilla se desplace y suprime el click.
+    _bindTouchImmediateDrag(el) {
+      let lastX = 0, lastY = 0, activo = false;
+
+      el.addEventListener('touchstart', e => {
+        if (!e.touches || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        lastX = t.clientX; lastY = t.clientY; activo = true;
+        e.preventDefault(); e.stopPropagation();
+        this._fireSyntheticMouse(el, 'mousedown', lastX, lastY);
+      }, { passive: false });
+
+      el.addEventListener('touchmove', e => {
+        if (!activo) return;
+        const t = e.touches && e.touches[0]; if (!t) return;
+        lastX = t.clientX; lastY = t.clientY;
+        e.preventDefault(); e.stopPropagation();
+        this._fireSyntheticMouse(document, 'mousemove', lastX, lastY);
+      }, { passive: false });
+
+      const fin = e => {
+        if (!activo) return;
+        activo = false;
+        const t = (e.changedTouches && e.changedTouches[0]) || null;
+        const fx = t ? t.clientX : lastX, fy = t ? t.clientY : lastY;
+        e.preventDefault(); e.stopPropagation();
+        this._fireSyntheticMouse(document, 'mouseup', fx, fy);
+      };
+      el.addEventListener('touchend', fin, { passive: false });
+      el.addEventListener('touchcancel', fin, { passive: false });
     }
 
     // v1.1.29 — DRAG&DROP DE FASE
@@ -4950,6 +5171,14 @@ button { font-family: inherit; cursor: pointer; }
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
       });
+
+      // v1.1.87 — mismo arrastre con el dedo: pulsación larga de 450ms y
+      // luego mover. El toque corto sigue abriendo el modal de la cita y el
+      // arrastre directo sigue haciendo scroll del calendario.
+      this._bindTouchLongPressDrag(btn, {
+        skipSelector: '.ks-appt-resize, .ks-appt-timeadj, .ks-appt-ext-rm',
+        armedClass: 'is-touch-armed'
+      });
     }
 
     // v1.1.14 — drag del resize handle para crear/modificar extensión.
@@ -4961,14 +5190,14 @@ button { font-family: inherit; cursor: pointer; }
       if (!appt) return;
       const faseIndex = parseInt(handle.dataset.faseIdx, 10);
 
-      // ── v1.1.87 — EXTENSIÓN RAYADA de la fase (cualquier fase ocupante,
+      // ── v1.1.89 — EXTENSIÓN RAYADA de la fase (cualquier fase ocupante,
       //    faseIndex >= 0). Recupera el comportamiento anterior a v1.1.65:
       //    arrastrar el asa NO alarga el bloque de color, añade un buffer
       //    rayado detrás del servicio, con su ✕ para quitarlo. Ahora en
       //    todos los servicios, no solo en el último de la cita.
       //    El buffer vive en `extMin` DENTRO de la fase; backend
-      //    extenderFase (recepcionProLogic v1.0.45). Arrastrar hacia
-      //    arriba hasta 0 la elimina, igual que la ✕.
+      //    extenderFase (recepcionProLogic v1.0.45). Arrastrar hacia arriba
+      //    hasta 0 la elimina, igual que la ✕.
       if (faseIndex >= 0) {
         const durFase = parseInt(handle.dataset.faseDur, 10) || 30;
         const startMin = parseInt(handle.dataset.startMin, 10) || 0;
@@ -5009,6 +5238,8 @@ button { font-family: inherit; cursor: pointer; }
           window.addEventListener('mousemove', onMove);
           window.addEventListener('mouseup', onUp);
         });
+        // v1.1.87 — misma asa con el dedo, arrastre inmediato. INTACTO.
+        this._bindTouchImmediateDrag(handle);
         return;
       }
 
@@ -5053,6 +5284,8 @@ button { font-family: inherit; cursor: pointer; }
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
       });
+      // v1.1.87 — misma asa con el dedo, arrastre inmediato.
+      this._bindTouchImmediateDrag(handle);
     }
 
     _madridNowMin() {
@@ -5285,12 +5518,12 @@ button { font-family: inherit; cursor: pointer; }
           esUltimaFase: (f.idx === lastIdxGlobal),
           cascada: esCascada,
           faseIndex: f.idx,
-          faseExtMin: Number(f.extMin) || 0,                           // v1.1.87
+          faseExtMin: Number(f.extMin) || 0,                           // v1.1.89
           laneInfo,                                                    // v1.1.36
           foldLabels: (f.idx === anchorIdx) ? foldLabels : null,       // v1.1.67
           rangoEndMin                                                  // v1.1.67
         });
-        // v1.1.87 — extensión rayada DE ESTA FASE (campo extMin dentro de
+        // v1.1.89 — extensión rayada DE ESTA FASE (campo extMin dentro de
         // la fase). Va detrás de cualquier servicio, principal o lavado.
         return bloque + this._extensionFaseHTML(r, staff, ppm, f, startISO, dur, laneInfo);
       }).join('');
@@ -5298,7 +5531,7 @@ button { font-family: inherit; cursor: pointer; }
       if (lastFaseEndISO) html += this._extensionHTML(r, staff, ppm, lastFaseEndISO, 0);
       return html;
     }
-    // v1.1.87 — Bloque rayado "EXTENSIÓN · N MIN" detrás de UNA fase
+    // v1.1.89 — Bloque rayado "EXTENSIÓN · N MIN" detrás de UNA fase
     // concreta. Lee `extMin` de la propia fase, no del campo raíz, que es
     // lo que permite tener extensión en cualquier servicio de la cascada.
     // Respeta las lanes: se alinea con el bloque al que acompaña.
@@ -5335,7 +5568,7 @@ button { font-family: inherit; cursor: pointer; }
       const hhmm = d.toLocaleTimeString('es-ES', { timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit', hour12: false });
       const startMin = hhmmToMin(hhmm);
       const top = (startMin - CAL_START * 60) * _ppm;
-      // v1.1.87 — suelo 10px → 18px: con 10px la ✕ no cabía y no había
+      // v1.1.89 — suelo 10px → 18px: con 10px la ✕ no cabía y no había
       // manera de quitar la extensión.
       const height = Math.max(min * _ppm, 18);
       return `<div class="ks-appt-ext" data-id="${esc(r._id)}" style="top:${top}px;height:${height}px;--staff:${staff.color}">
@@ -5478,6 +5711,14 @@ button { font-family: inherit; cursor: pointer; }
           }
         };
         window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+      });
+
+      // v1.1.87 — crear bloqueo con el dedo: pulsación larga de 450ms
+      // sobre la columna libre y luego arrastrar verticalmente. Hasta que
+      // no se arma, el dedo sigue haciendo scroll del calendario.
+      this._bindTouchLongPressDrag(col, {
+        skipSelector: '.ks-appt, .ks-customblock',
+        armedClass: 'is-touch-armed'
       });
     }
 
@@ -7376,6 +7617,7 @@ button { font-family: inherit; cursor: pointer; }
       this._cajaData = null;
       this._cajaContado = 0;
       this._cajaNota = '';
+      this._cajaContadoTouched = false;   // v1.1.88 — permite hidratar desde d.registro
       const root = this.shadowRoot;
       root.getElementById('cajaScrim')?.remove();
       const scrim = document.createElement('div'); scrim.className = 'ks-modal-scrim'; scrim.id = 'cajaScrim';
@@ -7401,6 +7643,14 @@ button { font-family: inherit; cursor: pointer; }
       const guardado = d.registro && d.registro.status === 'saved';
       const st = this.shadowRoot.getElementById('cajaStatus');
       if (st) { st.textContent = cerrada ? 'Cerrada' : (d.registro?.status === 'saved' ? 'Guardada' : 'Abierta'); st.className = 'ks-modal-status ' + (cerrada ? 'paid' : 'pending'); }
+
+      // v1.1.88 — Hidratar el conteo ya guardado. Mientras el usuario no
+      // haya tecleado nada en esta apertura del modal, el input y la
+      // diferencia se pintan con lo que hay en CashRegister, no con 0.
+      if (!this._cajaContadoTouched && d.registro) {
+        if (d.registro.countedCash != null) this._cajaContado = Number(d.registro.countedCash) || 0;
+        if (!this._cajaNota && d.registro.differenceNote) this._cajaNota = String(d.registro.differenceNote);
+      }
 
       const esperado = Number(d.esperado || 0);
       const contado = Number(this._cajaContado || 0);
@@ -7439,6 +7689,7 @@ button { font-family: inherit; cursor: pointer; }
       if (!cerrada) {
         const inp = body.querySelector('#cajaContado');
         inp?.addEventListener('input', e => {
+          this._cajaContadoTouched = true;   // v1.1.88 — a partir de aquí manda lo tecleado
           this._cajaContado = parseFloat(e.target.value) || 0;
           const nd = Math.round((this._cajaContado - esperado) * 100) / 100;
           const el = body.querySelector('#cajaDif');
