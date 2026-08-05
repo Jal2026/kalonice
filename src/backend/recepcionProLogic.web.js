@@ -1,9 +1,19 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.48
+// VERSION: 1.0.49
 // FECHA: 5 de agosto de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.49: 🛍 HISTÓRICO DE COMPRA DE PRODUCTOS en getProductosCustomCliente.
+//          El panel de cliente de Recepción muestra ahora, además de PRIME,
+//          bonos y tarjetas, si esa clienta compra producto. Es dato de
+//          venta: quien ya se ha llevado producto a casa vuelve a comprar.
+//          Se resuelve con una query por contactId sobre
+//          PaymentReservations quedándose con las descripciones que llevan
+//          token 🛒 — el mismo criterio de parseo que usa el cierre.
+//          Devuelve `comprasProductos: { veces, total, ultimaFecha,
+//          ultimoProducto }`. Aditivo: quien no lo lea funciona igual.
 //
 // v1.0.48: 👤 QUIÉN COBRA ≠ QUIÉN TRABAJA — `soldBy` en el cobro.
 //          `PaymentReservations.staff` guarda el titular de la cita, o sea
@@ -1066,7 +1076,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.48';
+const VERSION = '1.0.49';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -3913,7 +3923,7 @@ export const getProductosCustomCliente = webMethod(
       const safeContactId = String(contactId || '').trim();
       if (!safeContactId) {
         // Cliente provisional sin contactId: solo input manual disponible.
-        return { ok: true, version: VERSION, prime: null, bonos: [], tarjetas: [] };
+        return { ok: true, version: VERSION, prime: null, bonos: [], tarjetas: [], comprasProductos: { veces: 0, total: 0, ultimaFecha: null, ultimoProducto: '' } };
       }
 
       const ahora = new Date();
@@ -3999,8 +4009,46 @@ export const getProductosCustomCliente = webMethod(
         console.warn(`${TAG} ⚠️ getProductosCustomCliente tarjetas: ${errTarjetas.message}`);
       }
 
-      console.log(`${TAG} 📦 ProductosCustom cliente ${safeContactId}: prime=${prime ? 'sí' : 'no'} bonos=${bonos.length} tarjetas=${tarjetas.length}`);
-      return { ok: true, version: VERSION, prime, bonos, tarjetas };
+      // 4) v1.0.49 — Histórico de compra de producto. Un cobro puede
+      // llevar varios tokens 🛒; cuenta como una compra (una visita en la
+      // que se llevó producto), pero suma el importe de todos.
+      let comprasProductos = { veces: 0, total: 0, ultimaFecha: null, ultimoProducto: '' };
+      try {
+        const compras = await wixData.query(CMS_PAGOS)
+          .eq('contactId', safeContactId)
+          .descending('fechaPago')
+          .limit(100)
+          .find({ suppressAuth: true });
+        for (const pago of (compras.items || [])) {
+          const desc = String(pago.descripcion || '');
+          if (desc.indexOf('🛒') === -1) continue;
+          let importePro = 0;
+          let primerNombre = '';
+          for (const raw of desc.split(/,\s*/)) {
+            const token = raw.trim();
+            if (!token.startsWith('🛒')) continue;
+            const m = token.match(/^🛒\s*(.+?)\s*\(\s*([\d.,]+)\s*€?\s*\)\s*$/);
+            if (!m) continue;
+            if (!primerNombre) primerNombre = m[1].trim().replace(/\s+x\d+\s*$/i, '');
+            importePro += parseFloat(String(m[2]).replace(',', '.')) || 0;
+          }
+          if (importePro <= 0 && !primerNombre) continue;
+          comprasProductos.veces += 1;
+          comprasProductos.total = Math.round((comprasProductos.total + importePro) * 100) / 100;
+          if (!comprasProductos.ultimaFecha && pago.fechaPago) {
+            comprasProductos.ultimaFecha = new Date(pago.fechaPago).toISOString();
+            comprasProductos.ultimoProducto = primerNombre;
+          }
+        }
+      } catch (errCompras) {
+        console.warn(`${TAG} ⚠️ getProductosCustomCliente compras: ${errCompras.message}`);
+      }
+
+      console.log(`${TAG} 📦 ProductosCustom cliente ${safeContactId}: prime=${prime ? 'sí' : 'no'} bonos=${bonos.length} tarjetas=${tarjetas.length} compras=${comprasProductos.veces}`);
+      // contactId de vuelta (v1.0.49): el widget lo necesita para saber a
+      // qué cliente corresponde la respuesta — el panel y el modal de cobro
+      // usan el mismo mensaje y pueden pedir de dos clientes distintos.
+      return { ok: true, version: VERSION, contactId: safeContactId, prime, bonos, tarjetas, comprasProductos };
 
     } catch (e) {
       console.error(`${TAG} ❌ getProductosCustomCliente:`, e.message);
