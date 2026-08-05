@@ -1,6 +1,46 @@
 // =====================================================
-// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.1.5
+// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.1.6
 // =====================================================
+// v1.1.6 (5 ago 2026): ATRIBUCIÓN POR FASE + DETALLE DE VENTAS.
+//
+//   A) EL INFORME MENTÍA SOBRE QUIÉN TRABAJA. Hasta v1.1.5,
+//      procesarRendimiento agrupaba por `reserva.staffName`, el titular
+//      del pack. Pero en KAMISUITE cada FASE lleva su propio `staffId`:
+//      arrastrar una fase a otra columna la reasigna. El calendario
+//      pinta por fase; el informe contaba por titular. Resultado real
+//      del 5-ago-2026: Verónica salía con 2 citas cuando su columna
+//      tenía 4 clientas (dos fases suyas vivían en packs titulados a
+//      nombre de Alejandra y de Erica), y a la vez se le imputaban tres
+//      fases de Mery Perona que ejecutó Alejandra.
+//      Cambio: la unidad de atribución pasa a ser la LÍNEA de servicio.
+//      Cada línea de `serviciosDetail` se cruza con su fase ocupante del
+//      mismo label (alineando por número de ocurrencia, igual que hacen
+//      quitarItemReserva y setLineWeight en recepcionProLogic) y su
+//      importe se imputa al `staffId` de esa fase, resuelto contra
+//      StaffConfig.wixResourceId. Sin fase propia → titular del pack.
+//      Los importes se escalan por el factor neto/bruto del pago, de
+//      modo que la suma por staff sigue cuadrando al céntimo con lo
+//      cobrado, descuentos incluidos.
+//
+//   B) PRODUCTO Y SERVICIO DEJAN DE MEZCLARSE. El total de la línea de
+//      cliente ya no arrastra los productos vendidos: `total` es solo
+//      servicios + extras, y los productos salen en su propio detalle
+//      con cliente, concepto e importe.
+//
+//   C) NUEVO EN EL RETURN (aditivo; nada existente cambia de nombre):
+//      · rendimiento.serviciosPorStaff[] — servicios agregados por
+//        profesional.
+//      · rendimiento.clientesPorStaff[]  — clientas por profesional.
+//      · rendimiento.clientes[].metodoPago — método de cobro de la cita.
+//      · rendimiento.clientes[].staffs[]   — profesionales que la
+//        atendieron (una cita repartida sale en las dos columnas).
+//      · rendimiento.pendientes[] — servicios sin cobrar del día, con
+//        cliente, servicio y staff, para el bloque del cierre.
+//      · cierre.productosDetalle[] — una entrada por producto vendido
+//        con cliente, importe, método y `soldBy` (empleado logueado que
+//        despachó; vacío → el widget pinta "Administrador").
+//      · cierre.especiales[].hora.
+//
 // v1.1.5 (4 ago 2026): DETALLE DE ESPECIALES en el Cierre Financiero.
 //      Las ventas manuales de productos comerciales (Bono 🎟️, Tarjeta
 //      PRIME ⭐, Tarjeta promocional 🎁) hechas desde Recepción PRO se
@@ -97,7 +137,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CierreExt v1.1.5]';
+const TAG = '[CierreExt v1.1.6]';
 const COLECCION_PAGOS    = 'PaymentReservations';
 const COLECCION_RESERVAS = 'KamisuiteReservations';
 const COLECCION_STAFF    = 'StaffConfig';
@@ -266,17 +306,86 @@ function horaMadrid(d) {
   return dd.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Europe/Madrid' });
 }
 
+// v1.1.6 — Desenvuelve un campo JSON del CMS que puede llegar como objeto
+// {items:[...]}, como string JSON o como array pelado. Mismo criterio que
+// jsonIn de recepcionProLogic.
+function itemsDe(v, key) {
+  if (!v) return [];
+  let o = v;
+  if (typeof o === 'string') {
+    try { o = JSON.parse(o); } catch (_) { return []; }
+  }
+  if (Array.isArray(o)) return o;
+  if (o && Array.isArray(o[key])) return o[key];
+  return [];
+}
+
+// v1.1.6 — Reparte las líneas de servicio de una reserva entre las
+// profesionales que las ejecutaron.
+//
+// El calendario asigna staff POR FASE. Una línea de `serviciosDetail` se
+// corresponde con la fase ocupante `tipo:'servicio'` que lleva el mismo
+// label; cuando el mismo servicio aparece dos veces en la cita, se alinean
+// por número de ocurrencia. De esa fase sale el `staffId`, que se resuelve
+// contra StaffConfig.wixResourceId. Si la fase no lleva staffId propio (lo
+// normal cuando nadie la ha movido de columna), manda el titular del pack.
+//
+// Devuelve un Map staffName → { servicios:[{nombre,cantidad,precio}], bruto }.
+function repartirLineasPorStaff(reserva, servicios, staffPorResourceId) {
+  const titular = String(reserva.staffName || 'Sin staff').trim() || 'Sin staff';
+  const fasesSvc = itemsDe(reserva.fases, 'items').filter(f => f && f.tipo === 'servicio');
+  const vistas = {};
+  const out = new Map();
+
+  for (const sv of servicios) {
+    const lab = String(sv.nombre || '').trim();
+    const occ = vistas[lab] || 0;
+    vistas[lab] = occ + 1;
+
+    let quien = titular;
+    if (lab) {
+      let seen = 0;
+      for (const f of fasesSvc) {
+        if (String(f.label || '').trim() !== lab) continue;
+        if (seen === occ) {
+          const sid = String(f.staffId || '').trim();
+          if (sid && staffPorResourceId[sid]) quien = staffPorResourceId[sid];
+          break;
+        }
+        seen++;
+      }
+    }
+
+    if (!out.has(quien)) out.set(quien, { servicios: [], bruto: 0 });
+    const bucket = out.get(quien);
+    bucket.servicios.push({ nombre: sv.nombre, cantidad: sv.cantidad, precio: sv.precio });
+    bucket.bruto = Math.round((bucket.bruto + sv.precio * sv.cantidad) * 100) / 100;
+  }
+
+  // Cita sin líneas parseables (todo a 0€, solo extras, etc.): el titular
+  // sigue siendo responsable de la clienta y debe aparecer en su columna.
+  if (!out.size) out.set(titular, { servicios: [], bruto: 0 });
+  return out;
+}
+
 // =====================================================
 // Q1 — RENDIMIENTO PRODUCTIVO
 // =====================================================
 function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
   const staffMap = {};
+  // v1.1.6 — wixResourceId → nombre. Es el identificador que guardan las
+  // fases en `staffId` (recepcionProLogic resuelve el nombre por este mismo
+  // campo desde v1.0.0).
+  const staffPorResourceId = {};
   for (const s of staffList) {
-    const key = (s.displayName || s.canonicalName || '').toUpperCase();
+    const nombre = (s.displayName || s.canonicalName || '').trim();
+    const key = nombre.toUpperCase();
     if (key) staffMap[key] = {
       isExternal: !!s.isExternal,
       commissionPct: Number(s.commissionPercentage) || 0
     };
+    const rid = String(s.wixResourceId || '').trim();
+    if (rid && nombre) staffPorResourceId[rid] = nombre;
   }
 
   let cobrado = 0, pendiente = 0;
@@ -288,6 +397,10 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
   const productosAgg = new Map();
   const externosArr = [];
   const clientesLista = [];
+  // v1.1.6 — vistas por profesional (atribución por fase)
+  const svcPorStaff = new Map();      // staffName → Map(nombre → agg)
+  const cliPorStaff = new Map();      // staffName → array de clientas
+  const pendientesArr = [];           // servicios sin cobrar del día
 
   for (const r of reservas) {
     const isPagado = r.status === 'PAGADO';
@@ -300,22 +413,40 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
     const staffKey = staffName.toUpperCase();
     const staffInfo = staffMap[staffKey] || { isExternal: false, commissionPct: 0 };
 
+    const parsed = parsearServiciosDetail(r.serviciosDetail || '');
+
     // v1.1.1: si pagada y hay pago asociado, usar importeTotal del pago (NETO con descuento aplicado)
-    let importe = bruto;
+    let netoPago = null;
     let descInfo = null;
+    let metodoPago = '';
     if (isPagado) {
       const pago = pagosPorReserva[r._id];
       if (pago) {
         const neto = Number(pago.importeTotal);
-        if (!isNaN(neto) && neto >= 0) importe = neto;
+        if (!isNaN(neto) && neto >= 0) netoPago = neto;
         descInfo = parsearDescuentoEnDescripcion(pago.descripcion);
+        metodoPago = String(pago.tipoPago || '').trim();   // v1.1.6
       }
     }
 
+    // v1.1.6 — Bruto de todo lo facturable de la cita. El factor neto/bruto
+    // reparte el descuento proporcionalmente entre las líneas, de modo que
+    // la suma por profesional cuadra al céntimo con lo cobrado.
+    const brutoSvc    = parsed.servicios.reduce((acc, sv) => acc + sv.precio * sv.cantidad, 0);
+    const brutoExtras = parsed.extras.reduce((acc, e) => acc + e.importe, 0);
+    const brutoProd   = parsed.productos.reduce((acc, pr) => acc + pr.subtotal, 0);
+    const brutoLineas = brutoSvc + brutoExtras + brutoProd;
+    const factor = (netoPago !== null && brutoLineas > 0) ? (netoPago / brutoLineas) : 1;
+
+    // v1.1.6 — El importe de la CITA es servicios + extras. Los productos
+    // NO entran: van a su propio detalle. Antes se sumaban aquí y el
+    // informe mostraba un total del que no se sabía a qué correspondía.
+    const importe = (netoPago !== null && brutoLineas > 0)
+      ? Math.round((brutoSvc + brutoExtras) * factor * 100) / 100
+      : Math.round(((brutoSvc + brutoExtras) || bruto) * 100) / 100;
+
     if (isPagado) { cobrado += importe; clientesCobrados.add(claveCli); }
     else          { pendiente += importe; clientesPendientes.add(claveCli); }
-
-    const parsed = parsearServiciosDetail(r.serviciosDetail || '');
 
     for (const sv of parsed.servicios) {
       if (!serviciosAgg.has(sv.nombre)) serviciosAgg.set(sv.nombre, { nombre: sv.nombre, cantidad: 0, total: 0 });
@@ -340,12 +471,58 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
       });
     }
 
-    if (!staffAgg.has(staffName)) staffAgg.set(staffName, { staffName, cobrado: 0, pendiente: 0, total: 0, citas: 0, isExternal: staffInfo.isExternal, commissionPct: staffInfo.commissionPct });
-    const stAgg = staffAgg.get(staffName);
-    if (isPagado) stAgg.cobrado += importe;
-    else stAgg.pendiente += importe;
-    stAgg.total += importe;
-    stAgg.citas += 1;
+    // ── v1.1.6 · ATRIBUCIÓN POR FASE ──────────────────────────────────
+    // Cada línea va a quien la ejecutó, no al titular del pack. Los
+    // extras ([EXTRA], importe manual sin fase) se quedan con el titular.
+    const reparto = repartirLineasPorStaff(r, parsed.servicios, staffPorResourceId);
+    const extrasNeto = Math.round(brutoExtras * factor * 100) / 100;
+    const staffsDeLaCita = [];
+
+    for (const [quien, bucket] of reparto.entries()) {
+      const netoR = Math.round((bucket.bruto * factor + (quien === staffName ? extrasNeto : 0)) * 100) / 100;
+      staffsDeLaCita.push(quien);
+
+      const infoQuien = staffMap[quien.toUpperCase()] || { isExternal: false, commissionPct: 0 };
+      if (!staffAgg.has(quien)) staffAgg.set(quien, { staffName: quien, cobrado: 0, pendiente: 0, total: 0, citas: 0, isExternal: infoQuien.isExternal, commissionPct: infoQuien.commissionPct });
+      const stAgg = staffAgg.get(quien);
+      if (isPagado) stAgg.cobrado += netoR;
+      else stAgg.pendiente += netoR;
+      stAgg.total += netoR;
+      stAgg.citas += 1;
+
+      if (!svcPorStaff.has(quien)) svcPorStaff.set(quien, new Map());
+      const mapSvc = svcPorStaff.get(quien);
+      for (const sv of bucket.servicios) {
+        if (!mapSvc.has(sv.nombre)) mapSvc.set(sv.nombre, { nombre: sv.nombre, cantidad: 0, total: 0 });
+        const aggSvc = mapSvc.get(sv.nombre);
+        aggSvc.cantidad += sv.cantidad;
+        aggSvc.total = Math.round((aggSvc.total + sv.precio * sv.cantidad * factor) * 100) / 100;
+      }
+
+      if (!cliPorStaff.has(quien)) cliPorStaff.set(quien, []);
+      cliPorStaff.get(quien).push({
+        hora: horaMadrid(r.fechaReserva),
+        fechaMs: r.fechaReserva ? new Date(r.fechaReserva).getTime() : 0,
+        nombre: (r.clientName || 'Sin nombre').trim(),
+        servicios: bucket.servicios,
+        total: netoR,
+        status: r.status,
+        metodoPago,
+        descLabel: descInfo?.label || '',
+        compartida: reparto.size > 1
+      });
+
+      if (isPendiente) {
+        pendientesArr.push({
+          hora: horaMadrid(r.fechaReserva),
+          fechaMs: r.fechaReserva ? new Date(r.fechaReserva).getTime() : 0,
+          cliente: (r.clientName || 'Sin nombre').trim(),
+          staff: quien,
+          servicios: bucket.servicios.map(sv => sv.nombre).filter(Boolean),
+          importe: netoR
+        });
+      }
+    }
 
     if (staffInfo.isExternal) {
       externosArr.push({
@@ -362,10 +539,12 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
       fechaMs: r.fechaReserva ? new Date(r.fechaReserva).getTime() : 0,
       nombre: (r.clientName || 'Sin nombre').trim(),
       staff: staffName,
+      staffs: staffsDeLaCita,                          // v1.1.6 — quién la atendió de verdad
       servicios: parsed.servicios,
       total: Math.round(importe * 100) / 100,        // neto si pagado, bruto si pendiente
       bruto: Math.round(bruto * 100) / 100,           // siempre el subtotal sin descuento
       descLabel: descInfo?.label || '',                // "-50%" o "-25€" o ""
+      metodoPago,                                      // v1.1.6
       status: r.status
     });
   }
@@ -389,7 +568,21 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
     })).sort((a, b) => b.total - a.total),
     productos: Array.from(productosAgg.values()),
     externos: externosArr,
-    externosTotal: round(externosArr.reduce((s, e) => s + e.importe, 0))
+    externosTotal: round(externosArr.reduce((s, e) => s + e.importe, 0)),
+
+    // ── v1.1.6 · VISTAS POR PROFESIONAL (atribución por fase) ──
+    serviciosPorStaff: Array.from(svcPorStaff.entries()).map(([staffName, mapSvc]) => {
+      const servicios = Array.from(mapSvc.values()).sort((a, b) => b.total - a.total);
+      return { staffName, servicios, total: round(servicios.reduce((acc, x) => acc + x.total, 0)) };
+    }).sort((a, b) => b.total - a.total),
+
+    clientesPorStaff: Array.from(cliPorStaff.entries()).map(([staffName, arr]) => {
+      const clientes = arr.slice().sort((a, b) => a.fechaMs - b.fechaMs);
+      return { staffName, clientes, total: round(clientes.reduce((acc, x) => acc + x.total, 0)) };
+    }).sort((a, b) => b.total - a.total),
+
+    pendientes: pendientesArr.sort((a, b) => a.fechaMs - b.fechaMs),
+    pendientesTotal: round(pendientesArr.reduce((acc, x) => acc + x.importe, 0))
   };
 }
 
@@ -417,6 +610,7 @@ function procesarCierre(pagos, staffList, vatRate) {
   let descuentoTotal = 0;     // v1.1.1
   const especialesArr = [];   // v1.1.5
   let especialesTotal = 0;    // v1.1.5
+  const productosDetalle = [];  // v1.1.6 — una entrada por producto vendido
 
   for (const p of noCancelados) {
     const importe = Number(p.importeTotal) || 0;
@@ -432,6 +626,22 @@ function procesarCierre(pagos, staffList, vatRate) {
       const agg = productosAgg.get(prod.nombre);
       agg.cantidad += prod.cantidad;
       agg.total = Math.round((agg.total + prod.subtotal) * 100) / 100;
+
+      // v1.1.6 — Detalle con CLIENTE y VENDEDOR. `soldBy` lo escribe
+      // tiendaProductos v1.5.13 con el empleado logueado en Recepción;
+      // vacío (ventas anteriores o sin capa de acceso) → el widget lo
+      // pinta como "Administrador". No se usa `staff`: ahí vive el
+      // discriminador TIENDA / TIENDA_POS, que no es una persona.
+      productosDetalle.push({
+        cliente: (p.nombreCliente || '').trim(),
+        producto: prod.nombre,
+        cantidad: prod.cantidad,
+        importe: Math.round(prod.subtotal * 100) / 100,
+        metodo: p.tipoPago || '',
+        soldBy: String(p.soldBy || '').trim(),
+        hora: horaMadrid(p.fechaPago),
+        fechaMs: p.fechaPago ? new Date(p.fechaPago).getTime() : 0
+      });
     }
 
     // v1.1.1: descuentos parseados desde la descripcion del pago
@@ -465,7 +675,9 @@ function procesarCierre(pagos, staffList, vatRate) {
         cliente: (p.nombreCliente || '').trim(),
         concepto: String(p.descripcion || '').trim(),
         importe: Math.round(importe * 100) / 100,
-        metodo: p.tipoPago || ''
+        metodo: p.tipoPago || '',
+        hora: horaMadrid(p.fechaPago),                     // v1.1.6
+        fechaMs: p.fechaPago ? new Date(p.fechaPago).getTime() : 0
       });
       especialesTotal += importe;
     }
@@ -495,6 +707,8 @@ function procesarCierre(pagos, staffList, vatRate) {
     porMetodo: Object.entries(porMetodo).map(([metodo, importe]) => ({ metodo, importe: round(importe) })),
     iva: { vatRate, totalCobrado: totalReal, totalPropinas, totalSinPropinas: baseConIVA, baseImponible: iva.base, cuotaIVA: iva.cuota },
     productos: Array.from(productosAgg.values()),
+    productosDetalle: productosDetalle.sort((a, b) => a.fechaMs - b.fechaMs),   // v1.1.6
+    productosTotal: round(productosDetalle.reduce((acc, x) => acc + x.importe, 0)),
     staff: Array.from(staffAgg.values()).map(s => ({ ...s, cobrado: round(s.cobrado) })).sort((a, b) => b.cobrado - a.cobrado),
     externos: externosArr,
     externosComisionTotal: round(externosArr.reduce((s, e) => s + e.comision, 0)),
