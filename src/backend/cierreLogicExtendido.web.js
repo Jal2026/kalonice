@@ -1,6 +1,26 @@
 // =====================================================
-// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.1.6
+// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.1.7
 // =====================================================
+// v1.1.7 (5 ago 2026): "COBRADO POR STAFF" PASA A SER "QUIÉN COBRÓ".
+//      Ese bloque agrupaba por `PaymentReservations.staff`, que guarda el
+//      TITULAR de la cita — la columna del calendario —, no la persona que
+//      pasó el cobro. Con el salón trabajando sin capa de acceso el reparto
+//      era directamente ficticio: repartía entre las tres profesionales
+//      cobros que nadie identificado hizo.
+//      Ahora agrupa por `soldBy` (empleado logueado, lo graban
+//      recepcionProLogic v1.0.48 para los cobros de cita y tiendaProductos
+//      v1.5.13 para los productos). Vacío → cajón único "Administrador",
+//      que es exactamente lo que corresponde a un día sin login y a todo
+//      el histórico anterior a este cambio.
+//      · `staff` sigue intacto en el CMS y se sigue usando para lo que sí
+//        es: detectar externos y su comisión, y las ventas de ESPECIALES.
+//      · Ningún cobro queda fuera del bloque: se elimina la exclusión de
+//        TIENDA_POS, que dejaba ventas de la tienda standalone sin sumar en
+//        el agregado aunque sí contaran en el total del día.
+//      · rendimiento.clientes[].cobradoPor — quién cobró esa cita.
+//      · rendimiento.serviciosPorStaff[].servicios[].hora — hora de la
+//        fase en el calendario, para localizar el servicio de un vistazo.
+//
 // v1.1.6 (5 ago 2026): ATRIBUCIÓN POR FASE + DETALLE DE VENTAS.
 //
 //   A) EL INFORME MENTÍA SOBRE QUIÉN TRABAJA. Hasta v1.1.5,
@@ -137,7 +157,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CierreExt v1.1.6]';
+const TAG = '[CierreExt v1.1.7]';
 const COLECCION_PAGOS    = 'PaymentReservations';
 const COLECCION_RESERVAS = 'KamisuiteReservations';
 const COLECCION_STAFF    = 'StaffConfig';
@@ -343,6 +363,7 @@ function repartirLineasPorStaff(reserva, servicios, staffPorResourceId) {
     vistas[lab] = occ + 1;
 
     let quien = titular;
+    let inicio = null;          // v1.1.7 — hora de la fase en el calendario
     if (lab) {
       let seen = 0;
       for (const f of fasesSvc) {
@@ -350,15 +371,23 @@ function repartirLineasPorStaff(reserva, servicios, staffPorResourceId) {
         if (seen === occ) {
           const sid = String(f.staffId || '').trim();
           if (sid && staffPorResourceId[sid]) quien = staffPorResourceId[sid];
+          if (f.start) inicio = f.start;
           break;
         }
         seen++;
       }
     }
+    if (!inicio) inicio = reserva.fechaReserva || null;
 
     if (!out.has(quien)) out.set(quien, { servicios: [], bruto: 0 });
     const bucket = out.get(quien);
-    bucket.servicios.push({ nombre: sv.nombre, cantidad: sv.cantidad, precio: sv.precio });
+    bucket.servicios.push({
+      nombre: sv.nombre,
+      cantidad: sv.cantidad,
+      precio: sv.precio,
+      hora: horaMadrid(inicio),
+      fechaMs: inicio ? new Date(inicio).getTime() : 0
+    });
     bucket.bruto = Math.round((bucket.bruto + sv.precio * sv.cantidad) * 100) / 100;
   }
 
@@ -419,6 +448,7 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
     let netoPago = null;
     let descInfo = null;
     let metodoPago = '';
+    let cobradoPor = '';        // v1.1.7
     if (isPagado) {
       const pago = pagosPorReserva[r._id];
       if (pago) {
@@ -426,6 +456,7 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
         if (!isNaN(neto) && neto >= 0) netoPago = neto;
         descInfo = parsearDescuentoEnDescripcion(pago.descripcion);
         metodoPago = String(pago.tipoPago || '').trim();   // v1.1.6
+        cobradoPor = String(pago.soldBy || '').trim();     // v1.1.7 — quién cobró
       }
     }
 
@@ -490,13 +521,21 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
       stAgg.total += netoR;
       stAgg.citas += 1;
 
-      if (!svcPorStaff.has(quien)) svcPorStaff.set(quien, new Map());
-      const mapSvc = svcPorStaff.get(quien);
+      // v1.1.7 — Los servicios ya no se agregan por nombre dentro de cada
+      // profesional: se listan uno por uno con la HORA de su fase, que es
+      // lo que permite localizarlo en el calendario. Agregar borraba
+      // justamente ese dato.
+      if (!svcPorStaff.has(quien)) svcPorStaff.set(quien, []);
+      const listaSvc = svcPorStaff.get(quien);
       for (const sv of bucket.servicios) {
-        if (!mapSvc.has(sv.nombre)) mapSvc.set(sv.nombre, { nombre: sv.nombre, cantidad: 0, total: 0 });
-        const aggSvc = mapSvc.get(sv.nombre);
-        aggSvc.cantidad += sv.cantidad;
-        aggSvc.total = Math.round((aggSvc.total + sv.precio * sv.cantidad * factor) * 100) / 100;
+        listaSvc.push({
+          hora: sv.hora,
+          fechaMs: sv.fechaMs,
+          nombre: sv.nombre,
+          cliente: (r.clientName || '').trim(),
+          cantidad: sv.cantidad,
+          total: Math.round(sv.precio * sv.cantidad * factor * 100) / 100
+        });
       }
 
       if (!cliPorStaff.has(quien)) cliPorStaff.set(quien, []);
@@ -508,6 +547,7 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
         total: netoR,
         status: r.status,
         metodoPago,
+        cobradoPor,                                      // v1.1.7
         descLabel: descInfo?.label || '',
         compartida: reparto.size > 1
       });
@@ -545,6 +585,7 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
       bruto: Math.round(bruto * 100) / 100,           // siempre el subtotal sin descuento
       descLabel: descInfo?.label || '',                // "-50%" o "-25€" o ""
       metodoPago,                                      // v1.1.6
+      cobradoPor,                                      // v1.1.7
       status: r.status
     });
   }
@@ -571,8 +612,8 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
     externosTotal: round(externosArr.reduce((s, e) => s + e.importe, 0)),
 
     // ── v1.1.6 · VISTAS POR PROFESIONAL (atribución por fase) ──
-    serviciosPorStaff: Array.from(svcPorStaff.entries()).map(([staffName, mapSvc]) => {
-      const servicios = Array.from(mapSvc.values()).sort((a, b) => b.total - a.total);
+    serviciosPorStaff: Array.from(svcPorStaff.entries()).map(([staffName, arr]) => {
+      const servicios = arr.slice().sort((a, b) => a.fechaMs - b.fechaMs);   // v1.1.7 — cronológico
       return { staffName, servicios, total: round(servicios.reduce((acc, x) => acc + x.total, 0)) };
     }).sort((a, b) => b.total - a.total),
 
@@ -656,14 +697,22 @@ function procesarCierre(pagos, staffList, vatRate) {
     }
 
     const staffName = String(p.staff || 'Sin staff').trim();
-    if (staffName.toUpperCase() !== 'TIENDA_POS') {
-      if (!staffAgg.has(staffName)) staffAgg.set(staffName, { staffName, cobrado: 0, citas: 0, isExternal: false, commissionPct: 0 });
-      const st = staffAgg.get(staffName);
-      st.cobrado += importe;
-      st.citas += 1;
-      const info = staffMap[staffName.toUpperCase()];
-      if (info) { st.isExternal = info.isExternal; st.commissionPct = info.commissionPct; }
-    }
+
+    // ── v1.1.7 · QUIÉN COBRÓ ──────────────────────────────────────────
+    // Agrupamos por `soldBy`, el empleado que estaba logueado al pasar el
+    // cobro. `staff` NO sirve para esto: guarda el titular de la cita, o
+    // sea la columna del calendario, y los discriminadores TIENDA /
+    // TIENDA_POS / ESPECIALES, que no son personas.
+    // Sin login (o cobro anterior a v1.0.48) → cajón único Administrador.
+    // Entran TODOS los cobros, incluida la tienda standalone: antes se
+    // excluía TIENDA_POS y el bloque no cuadraba con el total del día.
+    const quienCobro = String(p.soldBy || '').trim() || 'Administrador';
+    if (!staffAgg.has(quienCobro)) staffAgg.set(quienCobro, { staffName: quienCobro, cobrado: 0, citas: 0, isExternal: false, commissionPct: 0 });
+    const st = staffAgg.get(quienCobro);
+    st.cobrado += importe;
+    st.citas += 1;
+    const infoCobro = staffMap[quienCobro.toUpperCase()];
+    if (infoCobro) { st.isExternal = infoCobro.isExternal; st.commissionPct = infoCobro.commissionPct; }
 
     // v1.1.5 — Detalle de ventas ESPECIALES (Bono / PRIME / Tarjeta).
     // `concepto` es la descripcion tal cual la grabó registrarCobroEspecial
