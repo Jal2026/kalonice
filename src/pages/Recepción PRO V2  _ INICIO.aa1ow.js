@@ -1,10 +1,16 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.41
+// VERSION: 1.0.42
 // FECHA: 5 de agosto de 2026
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
 //
+// v1.0.42: 👤 `soldBy` también en el COBRO de la cita. El informe agrupaba
+//          "Cobrado por staff" por el titular de la cita — la columna del
+//          calendario — cuando lo que se quiere saber es quién estaba en
+//          recepción pasando el cobro. Se manda `_empleadoActivo.staffName`
+//          a marcarPagadoReserva (v1.0.48). Sin capa de acceso activa va
+//          vacío y el informe lo agrupa entero bajo "Administrador".
 // v1.0.41: 🧾 `soldBy` en la venta de productos desde la agenda. La venta
 //          se registraba en PaymentReservations con staff='TIENDA', que es
 //          un discriminador de tipo y no una persona: el informe del día no
@@ -546,7 +552,7 @@ import {
 // Nombre comprobado contra el resto de imports de este archivo: no colisiona.
 import { getFichaTecnicaCliente } from 'backend/memoriaLegacyLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.41]';
+const TAG = '[RecepcionProCMS v1.0.42]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -883,7 +889,10 @@ async function handlePagarReserva(msg) {
       metodoPago: msg.metodoPago,
       desglosemetodopago: msg.desglosemetodopago,
       importeNeto: msg.importeNeto,           // v1.0.6 — neto ya descontado
-      descripcionExtra: msg.descripcionExtra  // v1.0.6 — token 🏷️ Descuento
+      descripcionExtra: msg.descripcionExtra, // v1.0.6 — token 🏷️ Descuento
+      // v1.0.42 — quién cobra. Vacío si el salón trabaja sin login: el
+      // informe lo agrupa como "Administrador".
+      soldBy: (_empleadoActivo && _empleadoActivo.staffName) || ''
     });
     sendResponse('reservaPagada', result);
   } catch (e) {
