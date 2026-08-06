@@ -4,8 +4,48 @@
  * Ubicación en Wix: public/custom-elements/
  * Tag name: kamisuite-booking-lite
  * Página:   /recepcionpromobile
- * VERSION:  0.5.1
+ * VERSION:  0.5.3
  * FECHA:    6 Agosto 2026
+ *
+ * v0.5.3 — GUARDA `typeof customElements === 'undefined'` al entrar al IIFE.
+ *   Sin ella, evaluar este archivo en un contexto sin DOM lanza
+ *   "ReferenceError: customElements is not defined" en la PRIMERA
+ *   sentencia y aborta el script entero, incluido el customElements.define
+ *   final. Error observado en producción KALÓNICE (6-ago-2026 02:05:33).
+ *   Deuda preexistente desde v0.1.0; misma carencia en kamisuiteAgenda.js,
+ *   kamisuiteMobile.js y akiraConsole.js. Cambio aditivo puro: en
+ *   navegador el comportamiento es idéntico a v0.5.2.
+ *
+ * v0.5.2 — FIX de la regresión introducida por v0.5.1 (agenda vacía al cargar).
+ *
+ *   SÍNTOMA: tras desplegar v0.5.1 la agenda ya no cargaba nunca en la
+ *   primera pantalla. Había que avanzar al día siguiente y volver a hoy
+ *   para ver las citas.
+ *
+ *   CAUSA (verificada en logs de producción KALÓNICE 6-ago-2026 00:01):
+ *   entre "🎯 Init OK" y la navegación manual del operador no aparece
+ *   ningún "📅 <fecha>: N packs" ni el "📦 Pre-carga iniciada: 30 días"
+ *   que sí figuraba en los logs previos al despliegue. La cola de
+ *   peticiones que dispara case 'init-data' no se envió.
+ *
+ *   La responsable es la guarda `_initDuplicado` que v0.5.1 añadió para
+ *   evitar repetir el preload de 30 días cuando un retry de 'ready' se
+ *   cruzaba con el 'init-data' original. Optimización defensiva que acabó
+ *   suprimiendo la carga inicial de la agenda.
+ *
+ *   CAMBIOS:
+ *   1) ELIMINADA la guarda `_initDuplicado`. Las tres peticiones de cola
+ *      ('get-reservas-dia', 'preload-reservas', 'get-settings') se envían
+ *      SIEMPRE en cada 'init-data', como en v0.5.0. No volver a
+ *      condicionarlas: un preload repetido cuesta 30 queries; no enviarlas
+ *      cuesta una agenda en blanco.
+ *   2) El rescate de remontaje pide además 'get-reservas-dia', para que un
+ *      remontaje del custom element no deje las columnas pintadas y sin
+ *      citas hasta el siguiente tick de 10 s.
+ *
+ *   El resto de v0.5.1 (retry de 'ready', disconnectedCallback, handles de
+ *   timers) se mantiene íntegro: es el fix real del cuelgue en
+ *   "Cargando agenda…".
  *
  * v0.5.1 — FIX "Cargando agenda…" colgado aleatoriamente en la primera carga.
  *
@@ -367,11 +407,28 @@
  * ═══════════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
+  // v0.5.3 — GUARDA DE ENTORNO. Hasta v0.5.2 la primera sentencia
+  // ejecutable era `customElements.get(...)` sin comprobar que
+  // `customElements` existiera. Cuando Wix evalúa este archivo en un
+  // contexto sin DOM, eso lanza:
+  //     ReferenceError: customElements is not defined
+  // y aborta el script COMPLETO — incluido el customElements.define del
+  // final. Verificado en producción KALÓNICE (log 6-ago-2026 02:05:33,
+  // inmediatamente después de "Running the code for the Recepción LITE
+  // MOBILE V2 page").
+  //
+  // Deuda compartida: kamisuiteAgenda.js, kamisuiteMobile.js y
+  // akiraConsole.js tienen exactamente el mismo patrón sin guarda.
+  //
+  // Salida limpia en ese caso; en navegador el comportamiento es idéntico.
+  if (typeof customElements === 'undefined') {
+    return;
+  }
   if (customElements.get('kamisuite-booking-lite')) {
     console.log('[KamisuiteBookingLite] Ya registrado.');
     return;
   }
-  const VERSION = '0.5.1';
+  const VERSION = '0.5.3';
   const TAG = `[BookingLite v${VERSION}]`;
 
   // ── Constantes de calendario ──
@@ -1212,6 +1269,10 @@ input, textarea { font-family: inherit; }
       // no-op: comportamiento idéntico a v0.5.0.
       if (this._staff.length) {
         this._renderCalendarHeader();
+        // v0.5.2 — y refrescar las citas del día visible: si el remontaje
+        // ocurrió antes de que llegaran, el calendario quedaría con las
+        // columnas pintadas y sin citas hasta el siguiente tick de 10 s.
+        this._sendToPage('get-reservas-dia', { fecha: this._fecha });
       }
 
       this._sendToPage('ready', {});
@@ -1285,12 +1346,13 @@ input, textarea { font-family: inherit; }
       switch (p.type) {
         case 'init-data': {
           // v0.5.1 — Handshake completado: corta el retry de 'ready'.
-          // _initDuplicado: un 'ready' reintentado puede cruzarse con el
-          // 'init-data' original en vuelo y provocar un segundo 'init-data'
-          // (el page code v0.3.6 lo responde cacheado, sin tocar backend).
-          // Los datos se refrescan igual, pero NO se relanzan las peticiones
-          // de cola — sobre todo 'preload-reservas', que son 30 queries.
-          const _initDuplicado = this._initRecibido;
+          // v0.5.2 — ELIMINADA la guarda _initDuplicado de v0.5.1. Era una
+          // optimización para no repetir el preload de 30 días si un retry
+          // de 'ready' se cruzaba con el 'init-data' original, y provocó una
+          // REGRESIÓN: en producción KALÓNICE (logs 6-ago-2026 00:01) la cola
+          // de peticiones no se envió NUNCA tras el init — sin
+          // 'get-reservas-dia' inicial la agenda quedaba vacía hasta que el
+          // operador navegaba a otro día y volvía. La cola se envía siempre.
           this._initRecibido = true;
           if (this._readyTimer) { clearInterval(this._readyTimer); this._readyTimer = null; }
           // v0.3.0 — Staff V2 (getStaffColumnas): {wixResourceId, wixScheduleId,
@@ -1314,17 +1376,16 @@ input, textarea { font-family: inherit; }
           this._initStaffConfig();
           this._renderCalendarHeader();
           console.log(`${TAG} 🎯 Init: ${this._staff.length} staff, ${this._catalogo.length} servicios`);
-          // v0.5.1 — Solo el PRIMER init-data lanza la cola de peticiones.
-          // Un init-data duplicado (retry cruzado) ya ha repintado staff,
-          // catálogo y cabecera arriba; repetir aquí supondría 30 queries
-          // de preload redundantes contra el backend.
-          if (!_initDuplicado) {
-            this._sendToPage('get-reservas-dia', { fecha: this._fecha });
-            this._sendToPage('preload-reservas', { fechaBase: this._fecha, dias: PRELOAD_DAYS });
-            // v0.3.0 — Pide settings del usuario (CalendarViewSettings).
-            // Llega como 'settings-data' y aplica staffConfig si existe.
-            this._sendToPage('get-settings', {});
-          }
+          // v0.5.2 — Cola SIEMPRE, sin condiciones (comportamiento v0.5.0).
+          // Nunca volver a condicionar estas tres líneas: son las que
+          // cargan la agenda del día. Si un retry cruzado provoca un
+          // segundo envío, el coste es un preload repetido; el coste de
+          // no enviarlas es una agenda en blanco.
+          this._sendToPage('get-reservas-dia', { fecha: this._fecha });
+          this._sendToPage('preload-reservas', { fechaBase: this._fecha, dias: PRELOAD_DAYS });
+          // v0.3.0 — Pide settings del usuario (CalendarViewSettings).
+          // Llega como 'settings-data' y aplica staffConfig si existe.
+          this._sendToPage('get-settings', {});
           break;
         }
 
