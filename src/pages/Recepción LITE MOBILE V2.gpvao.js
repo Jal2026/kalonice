@@ -4,8 +4,17 @@
  * Ubicación en Wix: public/custom-elements/
  * Tag name: kamisuite-booking-lite
  * Página:   /recepcionpromobile
- * VERSION:  0.5.2
+ * VERSION:  0.5.3
  * FECHA:    6 Agosto 2026
+ *
+ * v0.5.3 — GUARDA `typeof customElements === 'undefined'` al entrar al IIFE.
+ *   Sin ella, evaluar este archivo en un contexto sin DOM lanza
+ *   "ReferenceError: customElements is not defined" en la PRIMERA
+ *   sentencia y aborta el script entero, incluido el customElements.define
+ *   final. Error observado en producción KALÓNICE (6-ago-2026 02:05:33).
+ *   Deuda preexistente desde v0.1.0; misma carencia en kamisuiteAgenda.js,
+ *   kamisuiteMobile.js y akiraConsole.js. Cambio aditivo puro: en
+ *   navegador el comportamiento es idéntico a v0.5.2.
  *
  * v0.5.2 — FIX de la regresión introducida por v0.5.1 (agenda vacía al cargar).
  *
@@ -398,11 +407,28 @@
  * ═══════════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
+  // v0.5.3 — GUARDA DE ENTORNO. Hasta v0.5.2 la primera sentencia
+  // ejecutable era `customElements.get(...)` sin comprobar que
+  // `customElements` existiera. Cuando Wix evalúa este archivo en un
+  // contexto sin DOM, eso lanza:
+  //     ReferenceError: customElements is not defined
+  // y aborta el script COMPLETO — incluido el customElements.define del
+  // final. Verificado en producción KALÓNICE (log 6-ago-2026 02:05:33,
+  // inmediatamente después de "Running the code for the Recepción LITE
+  // MOBILE V2 page").
+  //
+  // Deuda compartida: kamisuiteAgenda.js, kamisuiteMobile.js y
+  // akiraConsole.js tienen exactamente el mismo patrón sin guarda.
+  //
+  // Salida limpia en ese caso; en navegador el comportamiento es idéntico.
+  if (typeof customElements === 'undefined') {
+    return;
+  }
   if (customElements.get('kamisuite-booking-lite')) {
     console.log('[KamisuiteBookingLite] Ya registrado.');
     return;
   }
-  const VERSION = '0.5.2';
+  const VERSION = '0.5.3';
   const TAG = `[BookingLite v${VERSION}]`;
 
   // ── Constantes de calendario ──
