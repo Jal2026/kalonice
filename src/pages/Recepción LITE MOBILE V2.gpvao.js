@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE — Page Code: Recepción Lite Mobile (V2 CMS-first)
 // =====================================================
-// VERSION: 0.3.6
+// VERSION: 0.3.7
 // FECHA: 6 de agosto de 2026
 // Página: /recepcionpromobile
 // Custom Element ID en Editor: kamisuiteBookingLite (tag: kamisuite-booking-lite)
@@ -9,6 +9,58 @@
 // Comunicación (sin cambios respecto al cableado):
 //   Page → Element: el.setAttribute('response', JSON.stringify({type, ...data, ts}))
 //   Element → Page: el.on('booking-message', handler)  (CustomEvent)
+//
+// =====================================================
+// v0.3.7 — FUERA el volcado de contactos: búsqueda server-side
+// =====================================================
+//   PROBLEMA MEDIDO (logs producción KALÓNICE 6-ago-2026 02:18):
+//     02:18:00.679  👂 Listener activo
+//     02:18:00.984  🎯 Init OK: 3 staff · 129 servicios
+//     02:18:01.177  Cargando TODOS los contactos...   ← 5 páginas
+//     02:18:13.453  📅 2026-08-06: 54 packs           ← 12,5 s DESPUÉS
+//     02:18:14.428  👥 Cache de clientes lista: 4619
+//     02:18:18.954  📅 2026-08-07: 30 packs           ← preload aún más tarde
+//   El `await cargarTodosContactos()` de handleReady dejaba la cola de
+//   mensajes del custom element parada 12,5 segundos. La agenda del día
+//   NO se pintaba hasta que terminaba el volcado, pese a que
+//   getReservasPorFecha tarda 0,3 s. `cargarCacheContactosBackground` se
+//   llamaba "background" pero no lo era.
+//
+//   Contexto de uso (Jal, 6-ago-2026): Lite Mobile se usa en sesiones
+//   cortas desde el móvil, a menudo solo de consulta. Cada regreso a la
+//   app recarga la página, así que ese coste se pagaba una y otra vez.
+//   Descartada la caché en CMS (duplicar el CRM = desincronización
+//   permanente).
+//
+//   CAMBIOS:
+//   1) handleReady YA NO llama a cargarCacheContactosBackground(). Esa
+//      función y toda la caché en memoria (_cacheContactos, _cacheReady,
+//      _cacheLoading) se eliminan. El import de cargarTodosContactos
+//      desaparece; `crearContacto` de recepcionLogic se mantiene.
+//   2) handleBuscarCliente pasa a ASÍNCRONA y consulta el backend NUEVO
+//      `contactSearchLogic.buscarContactosRapido({ query })`, que
+//      pregunta a Wix CRM solo por lo tecleado (startsWith sobre
+//      info.name.first, info.name.last, info.phones.phone e
+//      info.emails.email). ~200-300 ms por búsqueda, sin volcado.
+//   3) handleReady envía 'contactos-cache-ready' INMEDIATAMENTE tras
+//      'init-data'. El widget usa ese mensaje para poner
+//      _cacheContactosReady = true y habilitar el input del buscador
+//      (que hasta entonces sale deshabilitado con "Cargando clientes…").
+//      Como ya no hay caché que esperar, el input está operativo desde
+//      el primer segundo. CERO CAMBIOS EN EL WIDGET gracias a esto.
+//   4) ensureContactId y handleCrearContacto dejan de hacer push a la
+//      caché (ya no existe). El contacto recién creado es encontrable
+//      por el buscador de inmediato, porque se consulta el CRM vivo.
+//
+//   LIMITACIÓN ACEPTADA (decisión de producto de Jal): el buscador pasa
+//   de "contiene" a "empieza por". Teclear "gonz" encuentra a "María
+//   González" (se consulta también el apellido); teclear "zalez" ya no.
+//   Los nombres acentuados requieren teclear menos letras: "Jos"
+//   encuentra "José", "Jose" no.
+//
+//   CERO CAMBIOS en: widget kamisuiteBookingLite, contrato de mensajes,
+//   backend recepcionProLogic v1.0.49, backend recepcionLogic (intacto,
+//   lista negra §19), reservas, bloqueos, settings, pre-carga.
 //
 // =====================================================
 // v0.3.6 — handleReady IDEMPOTENTE + guarda de reentrada del cache
@@ -214,29 +266,31 @@ import {
   actualizarBloqueo
 } from 'backend/recepcionProLogic.web';
 
-import { cargarTodosContactos, crearContacto } from 'backend/recepcionLogic.web';
+// v0.3.7 — cargarTodosContactos YA NO se importa: el volcado completo
+// desaparece. `crearContacto` sigue viniendo de recepcionLogic (intacto).
+import { crearContacto } from 'backend/recepcionLogic.web';
 
-// v0.3.6 — TAG corregido. Desde v0.3.4 la constante seguía diciendo
-// 'v0.3.3' y todos los logs de Google Cloud reportaban una versión
-// desplegada falsa.
-const TAG = '[BookingLitePage v0.3.6]';
+// v0.3.7 — Backend NUEVO de búsqueda puntual contra Wix CRM.
+// Archivo aditivo: no toca recepcionLogic.web.js (lista negra §19).
+import { buscarContactosRapido } from 'backend/contactSearchLogic.web';
+
+// v0.3.7 — TAG actualizado.
+const TAG = '[BookingLitePage v0.3.7]';
 const PRELOAD_BATCH = 5;
 
 let _el = null;
 let _staff = [];
-let _cacheContactos = [];
-let _cacheReady = false;
 
 // v0.3.6 — Estado del init, para hacer handleReady idempotente frente al
-// retry de 'ready' del widget v0.5.1.
+// retry de 'ready' del widget v0.5.1+.
 //   _catalogo     : catálogo cacheado de esta carga de página.
 //   _initListo    : true cuando staff + catálogo ya se obtuvieron una vez.
 //   _initEnCurso  : true mientras la primera tanda de queries está en vuelo.
-//   _cacheLoading : true mientras cargarTodosContactos está en vuelo.
+// v0.3.7 — ELIMINADOS _cacheContactos, _cacheReady y _cacheLoading: ya no
+//   existe caché de contactos en memoria.
 let _catalogo = [];
 let _initListo = false;
 let _initEnCurso = false;
-let _cacheLoading = false;
 
 function sendResponse(type, data = {}) {
   if (!_el) return;
@@ -267,12 +321,7 @@ async function handleReady() {
   if (_initListo) {
     console.log(`${TAG} ♻️ 'ready' repetido: reenvío init-data cacheado (${_staff.length} staff · ${_catalogo.length} servicios)`);
     sendResponse('init-data', { staff: _staff, catalogo: _catalogo });
-    // Si el cache de contactos ya estaba listo, el widget también necesita
-    // saberlo (su flag _cacheContactosReady puede haberse perdido con el
-    // mensaje original).
-    if (_cacheReady) {
-      sendResponse('contactos-cache-ready', { total: _cacheContactos.length });
-    }
+    sendResponse('contactos-cache-ready', { total: 0 });
     return;
   }
 
@@ -308,8 +357,14 @@ async function handleReady() {
     console.log(`${TAG} 🎯 Init OK: ${_staff.length} staff · ${catalogo.length} servicios`);
     sendResponse('init-data', { staff: _staff, catalogo });
 
-    // Cargar contactos en background (no bloquea primera renderización)
-    cargarCacheContactosBackground();
+    // v0.3.7 — El buscador de clientes está operativo DESDE YA: consulta
+    // el CRM en vivo, no espera ninguna caché. Se envía
+    // 'contactos-cache-ready' de inmediato para que el widget ponga
+    // _cacheContactosReady = true y habilite el input del step 1 (que
+    // hasta recibirlo se pinta deshabilitado con "Cargando clientes…").
+    // `total: 0` es informativo: el widget solo lo usa para un console.log.
+    // Esto es lo que permite no tocar el widget en absoluto.
+    sendResponse('contactos-cache-ready', { total: 0 });
   } catch (e) {
     _initEnCurso = false;
     console.error(`${TAG} ❌ handleReady:`, e?.message);
@@ -318,41 +373,23 @@ async function handleReady() {
 }
 
 // =====================================================
-// CACHE DE CONTACTOS (background) — patrón legacy literal
+// CACHE DE CONTACTOS — ELIMINADA en v0.3.7
 // =====================================================
-async function cargarCacheContactosBackground() {
-  // v0.3.6 — GUARDA DE REENTRADA. En KALÓNICE esta llamada son 5 páginas
-  // de 1.000 y 4.619 contactos (~12 s de backend). En los logs del
-  // 6-ago-2026 01:06 se ejecutó DOS VECES en paralelo por dos handleReady
-  // solapados. Con el retry de 'ready' del widget v0.5.1 podría dispararse
-  // muchas más. Ahora: si ya está lista, se reenvía el aviso sin tocar el
-  // backend; si está en vuelo, no se hace nada.
-  if (_cacheReady) {
-    sendResponse('contactos-cache-ready', { total: _cacheContactos.length });
-    return;
-  }
-  if (_cacheLoading) {
-    console.log(`${TAG} ⏳ Cache de clientes ya en carga: petición ignorada`);
-    return;
-  }
-
-  _cacheLoading = true;
-  try {
-    const result = await cargarTodosContactos();
-    if (result?.ok) {
-      _cacheContactos = result.clientes || [];
-      _cacheReady = true;
-      console.log(`${TAG} 👥 Cache de clientes lista: ${_cacheContactos.length}`);
-      sendResponse('contactos-cache-ready', { total: _cacheContactos.length });
-    } else {
-      console.warn(`${TAG} ⚠️ cargarTodosContactos sin ok`);
-    }
-  } catch (e) {
-    console.error(`${TAG} ❌ cargarCacheContactos:`, e?.message);
-  } finally {
-    _cacheLoading = false;
-  }
-}
+// La función cargarCacheContactosBackground() se ha suprimido junto con
+// las variables _cacheContactos / _cacheReady / _cacheLoading.
+//
+// Volcaba los 4.619 contactos de KALÓNICE en 5 páginas de 1.000 (~12,5 s
+// medidos en producción) y, mientras su await estaba en vuelo, la cola de
+// mensajes del custom element quedaba parada: la agenda del día no se
+// pintaba hasta que terminaba, pese a que getReservasPorFecha tarda 0,3 s.
+//
+// La búsqueda de clientes la sirve ahora handleBuscarCliente contra el
+// backend contactSearchLogic.buscarContactosRapido, que consulta Wix CRM
+// solo por lo tecleado. Sin caché, sin volcado y sin copias del CRM.
+//
+// recepcionLogic.cargarTodosContactos SIGUE EXISTIENDO e intacta: la usan
+// Agenda PRO, Reserva Inteligente, Cuidado y Salud, App Cuidado, Check-in
+// Externos y AKIRA (lista negra §19). Aquí solo se deja de llamar.
 
 // =====================================================
 // RESERVAS — un solo día (V2)
@@ -404,28 +441,37 @@ async function handlePreloadReservas(fechaBase, dias) {
 // =====================================================
 // CLIENTES — buscar (in-memory) — sin cambios respecto a v0.2.2
 // =====================================================
-function handleBuscarCliente(msg) {
-  const q = String(msg?.query || '').trim().toLowerCase();
-  if (!_cacheReady) {
-    sendResponse('clientes-encontrados', { clientes: [], cacheReady: false });
-    return;
-  }
+// v0.3.7 — ASÍNCRONA y contra el CRM vivo. Antes filtraba en memoria los
+// 4.619 contactos volcados al arrancar (`_cacheContactos.filter(includes)`).
+// Ahora pregunta a Wix CRM solo por lo tecleado.
+//
+// Diferencia funcional aceptada (decisión de Jal 6-ago-2026): el CRM solo
+// admite startsWith, así que la búsqueda pasa de "contiene" a "empieza
+// por". El backend consulta nombre Y apellido, de modo que "gonz"
+// encuentra a "María González"; "zalez" ya no. Los acentos se comparan
+// letra a letra: "Jos" encuentra "José", "Jose" no.
+//
+// `cacheReady: true` se envía siempre: el widget lo usa solo para habilitar
+// el input, y el buscador está operativo desde el primer segundo.
+async function handleBuscarCliente(msg) {
+  const q = String(msg?.query || '').trim();
   if (q.length < 2) {
-    sendResponse('clientes-encontrados', { clientes: [], cacheReady: true });
+    sendResponse('clientes-encontrados', { clientes: [], total: 0, cacheReady: true });
     return;
   }
-  const qPhone = q.replace(/[\s\-\(\)]/g, '');
-  const filtered = _cacheContactos.filter(c => {
-    const n = (c.nombreCompleto || '').toLowerCase();
-    const e = (c.email || '').toLowerCase();
-    const t = (c.telefono || '').replace(/[\s\-\(\)]/g, '');
-    return n.includes(q) || e.includes(q) || t.includes(qPhone);
-  });
-  sendResponse('clientes-encontrados', {
-    clientes: filtered.slice(0, 20),
-    total: filtered.length,
-    cacheReady: true
-  });
+  try {
+    const res = await buscarContactosRapido({ query: q, limit: 20 });
+    const clientes = (res?.ok ? (res.clientes || []) : []);
+    console.log(`${TAG} 🔎 "${q}": ${clientes.length} resultados`);
+    sendResponse('clientes-encontrados', {
+      clientes,
+      total: res?.total || clientes.length,
+      cacheReady: true
+    });
+  } catch (e) {
+    console.error(`${TAG} ❌ handleBuscarCliente:`, e?.message);
+    sendResponse('clientes-encontrados', { clientes: [], total: 0, cacheReady: true });
+  }
 }
 
 // =====================================================
@@ -439,9 +485,8 @@ async function handleCrearContacto(msg) {
       telefono: msg.telefono || '',
       email: msg.email || ''
     });
-    if (result?.ok && result?.cliente) {
-      _cacheContactos.push(result.cliente);
-    }
+    // v0.3.7 — Ya no hay caché que actualizar: el contacto recién creado
+    // es encontrable de inmediato porque el buscador consulta el CRM vivo.
     sendResponse('contacto-creado', { data: result || { ok: false } });
   } catch (e) {
     sendResponse('contacto-creado', { data: { ok: false, error: { message: e?.message } } });
@@ -463,7 +508,7 @@ async function ensureContactId(msg) {
       email: cd.email || ''
     });
     if (res?.ok && res?.contactId) {
-      if (res.cliente) _cacheContactos.push(res.cliente);
+      // v0.3.7 — sin push a caché (eliminada).
       return res.contactId;
     }
   } catch (e) { /* silencioso */ }
