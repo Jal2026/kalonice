@@ -4,8 +4,54 @@
  * Ubicación en Wix: public/custom-elements/
  * Tag name: kamisuite-booking-lite
  * Página:   /recepcionpromobile
- * VERSION:  0.5.5
+ * VERSION:  0.6.0
  * FECHA:    6 Agosto 2026
+ *
+ * v0.6.0 — ARMADO MÚLTIPLE. Varios servicios en una sola cita.
+ *
+ *   CASO DE USO (Jal): una madre reserva su corte + el corte del hijo +
+ *   el de la hija. Los tres servicios se PINTAN como bloques propios en
+ *   el calendario, pero pertenecen a UNA sola reserva → un único cobro.
+ *
+ *   PARIDAD LITERAL CON RECEPCIÓN PRO DESKTOP v1.1.81:
+ *   La primera línea crea la cita con crearPackReserva. Las siguientes se
+ *   añaden a ESA MISMA reserva con agregarServicioReserva. El backend
+ *   encadena cada servicio nuevo a partir de MAX(end) de las fases
+ *   ocupantes, así que quedan secuenciales con el mismo profesional.
+ *   Cada fase ocupante se pinta como su propia .appt — el calendario no
+ *   necesita ningún cambio.
+ *
+ *   CAMBIOS EN EL WIDGET:
+ *   1) Estado nuevo en _emptyBooking: `lineas[]` (servicios ya añadidos),
+ *      `cadenaPendiente[]` y `cadenaReservaId`. `service`, `variantIdx`,
+ *      `complementosSel` y `exclusivosSel` pasan a ser la LÍNEA EN
+ *      EDICIÓN.
+ *   2) Helpers nuevos: _complementosDeLinea (extraído de _confirmBooking
+ *      v0.5.5 sin cambios de lógica), _varianteSelDeLinea, _precioDeLinea,
+ *      _labelDeLinea, _añadirLineaActual, _quitarLinea, _totalLineas,
+ *      _numLineas.
+ *   3) Paso 2: sobre el catálogo se pintan las líneas ya añadidas, cada
+ *      una con su precio y un ✕ para quitarla. Dentro del panel de addons,
+ *      botón "+ Añadir otro servicio a esta cita".
+ *   4) El botón Continuar del paso 2 cierra automáticamente la línea en
+ *      edición. El flujo de UN servicio queda EXACTAMENTE igual que antes:
+ *      elegir servicio → Continuar.
+ *   5) Paso 4: resumen con todas las líneas, su precio y el total, con la
+ *      nota "N servicios · un solo cobro".
+ *   6) _confirmBooking envía la línea 1 y deja el resto en
+ *      cadenaPendiente. _onReservaCreada detecta cola pendiente y arranca
+ *      la cadena en vez de cerrar. Case nuevo 'servicio-agregado' la
+ *      consume una a una. El botón informa: "Añadiendo servicio 2 de 3…".
+ *   7) Si una línea de la cadena falla, la cita contenedora YA existe: se
+ *      cierra el sheet, se avisa y se refresca la agenda para que el
+ *      operador vea qué entró y decida.
+ *
+ *   PAREJA OBLIGATORIA: page code v0.3.9, que añade el handler
+ *   'agregar-servicio' → agregarServicioReserva → 'servicio-agregado'.
+ *   Mismos nombres de mensaje que Desktop.
+ *
+ *   Cero cambios en el backend: agregarServicioReserva (recepcionProLogic
+ *   v1.0.43+) ya acepta varianteSel y complementosSetupUid.
  *
  * v0.5.5 — El cliente sobrevive TAMBIÉN a la reserva creada.
  *
@@ -492,7 +538,7 @@
     console.log('[KamisuiteBookingLite] Ya registrado.');
     return;
   }
-  const VERSION = '0.5.5';
+  const VERSION = '0.6.0';
   const TAG = `[BookingLite v${VERSION}]`;
 
   // ── Constantes de calendario ──
@@ -1294,7 +1340,21 @@ input, textarea { font-family: inherit; }
         // v0.4.0 — flag para pintar el mini-form de cliente provisional
         // en el step 1 (equivalente a `adding` pero para provisional).
         addingProv: false,
-        service: null,           // svc del catálogo (V2: con setupUid)
+        service: null,           // svc del catálogo (V2: con setupUid) — LÍNEA EN EDICIÓN
+        // v0.6.0 — ARMADO MÚLTIPLE (paridad Desktop v1.1.81).
+        // `lineas` son los servicios YA añadidos a la cita. La primera
+        // crea la reserva con crearPackReserva; las siguientes se añaden
+        // a ESA MISMA reserva con agregarServicioReserva → un solo pack,
+        // un solo total, un solo cobro, pero cada servicio se pinta como
+        // su propio bloque en el calendario (una .appt por fase ocupante).
+        // Shape de cada línea:
+        //   { svc, variantIdx, complementosSel, exclusivosSel, label, precio }
+        lineas: [],
+        // Cola de líneas pendientes de añadir tras crear la reserva.
+        // Se llena en _confirmBooking y se consume en _onReservaCreada /
+        // case 'servicio-agregado'.
+        cadenaPendiente: [],
+        cadenaReservaId: null,
         // v0.3.1 — acordeón step 2: null = todos plegados; string = grupo abierto
         expandedGroup: null,
         // v0.3.0 — modelo V2 plano: variantes (índice) + complementos (Map setupUid→bool)
@@ -1528,6 +1588,11 @@ input, textarea { font-family: inherit; }
 
         case 'reserva-creada':
           this._onReservaCreada(p);
+          break;
+
+        // v0.6.0 — ARMADO MÚLTIPLE: respuesta a 'agregar-servicio'.
+        case 'servicio-agregado':
+          this._onServicioAgregado(p);
           break;
 
         case 'reserva-cancelada':
@@ -2037,6 +2102,149 @@ input, textarea { font-family: inherit; }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // v0.6.0 — ARMADO MÚLTIPLE: helpers de línea
+    //   Paridad con Recepción PRO Desktop v1.1.81. Cada "línea" es un
+    //   servicio con su variante y sus complementos ya resueltos. La
+    //   primera crea la reserva; el resto se añaden a la misma con
+    //   agregarServicioReserva (un pack, un cobro, N bloques pintados).
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // Construye el array complementosSetupUid de una línea (mezcla de
+    // strings y objetos con variante). Extraído de _confirmBooking v0.5.5
+    // sin cambios de lógica, para poder reutilizarlo por línea.
+    _complementosDeLinea(svc, complementosSel, exclusivosSel) {
+      const out = [];
+      const svcComps = (svc && Array.isArray(svc.complementos)) ? svc.complementos : [];
+      for (const uid of Object.keys(complementosSel || {})) {
+        const val = complementosSel[uid];
+        if (val === true) {
+          out.push(uid);
+        } else if (val && typeof val === 'object' && Number.isInteger(val.varianteIdx)) {
+          const c = svcComps.find(x => x.setupUid === uid);
+          const v = (c && Array.isArray(c.variantes)) ? c.variantes[val.varianteIdx] : null;
+          if (v) {
+            const vLabel = (typeof v === 'string') ? v : (v.label || v.nombre || '');
+            const vId = (typeof v === 'object' && v.tamano_estilo) ? v.tamano_estilo : String(val.varianteIdx);
+            const vPrice = (typeof v === 'object') ? Number(v.precio != null ? v.precio : v.price) || 0 : 0;
+            const vDur = (typeof v === 'object') ? Number(v.duracion != null ? v.duracion : v.duration) || 0 : 0;
+            out.push({ uid, varianteId: vId, varianteLabel: vLabel, price: vPrice, duration: vDur });
+          }
+        }
+      }
+      // Grupo exclusivo — mismo shape (patrón Desktop v1.1.59).
+      const mapeo = Array.isArray(svc && svc.mapeoFases)
+        ? svc.mapeoFases
+        : (typeof (svc && svc.mapeoFases) === 'string' ? this._tryParseArr(svc.mapeoFases) : []);
+      if (Array.isArray(mapeo) && exclusivosSel) {
+        mapeo.forEach((f, idx) => {
+          if (!f || f.tipo !== 'exclusivo') return;
+          const uidElegido = exclusivosSel['exc:' + idx];
+          if (!uidElegido) return;
+          const svcRef = this._serviciosMap[uidElegido];
+          if (!svcRef) return;
+          out.push({
+            uid: svcRef.setupUid,
+            varianteId: svcRef.setupUid,
+            varianteLabel: svcRef.label || '',
+            price: Number(svcRef.price) || 0,
+            duration: Number(svcRef.duration) || 0
+          });
+        });
+      }
+      return out;
+    }
+
+    // varianteSel de una línea: null si es la BASE (variantIdx === -1).
+    _varianteSelDeLinea(svc, variantIdx) {
+      if (!svc || !svc.hasVariants || !Array.isArray(svc.variantes)) return null;
+      if (!Number.isInteger(variantIdx) || variantIdx < 0 || variantIdx >= svc.variantes.length) return null;
+      const v = svc.variantes[variantIdx];
+      if (!v || typeof v !== 'object') return null;
+      return {
+        idx: variantIdx,
+        label: v.label || v.nombre || '',
+        price: Number(v.precio != null ? v.precio : v.price) || 0,
+        duration: Number(v.duracion != null ? v.duracion : v.duration) || 0
+      };
+    }
+
+    // Precio estimado de una línea, para el resumen del sheet.
+    // Es informativo: el precio real lo calcula el backend.
+    _precioDeLinea(linea) {
+      if (!linea || !linea.svc) return 0;
+      const vs = this._varianteSelDeLinea(linea.svc, linea.variantIdx);
+      let total = vs ? vs.price : (Number(linea.svc.price) || 0);
+      const comps = this._complementosDeLinea(linea.svc, linea.complementosSel, linea.exclusivosSel);
+      const svcComps = Array.isArray(linea.svc.complementos) ? linea.svc.complementos : [];
+      for (const c of comps) {
+        if (typeof c === 'string') {
+          const meta = svcComps.find(x => x.setupUid === c);
+          total += Number(meta?.price) || 0;
+        } else {
+          total += Number(c.price) || 0;
+        }
+      }
+      return Math.round(total * 100) / 100;
+    }
+
+    // Etiqueta legible de una línea: "Corte Mujer · L"
+    _labelDeLinea(linea) {
+      if (!linea || !linea.svc) return '';
+      const vs = this._varianteSelDeLinea(linea.svc, linea.variantIdx);
+      return vs && vs.label
+        ? `${linea.svc.label} · ${vs.label}`
+        : (linea.svc.label || '');
+    }
+
+    // Convierte la línea EN EDICIÓN (b.service + selecciones) en una línea
+    // materializada y la empuja a b.lineas. Devuelve false si falta alguna
+    // variante obligatoria.
+    _añadirLineaActual() {
+      const b = this._booking;
+      if (!b.service) return false;
+      const faltan = this._faltanVariantesRequiredLabels();
+      if (faltan.length) {
+        this._toast(`Falta elegir variante de: ${faltan.join(', ')}`);
+        return false;
+      }
+      const linea = {
+        svc: b.service,
+        variantIdx: b.variantIdx,
+        complementosSel: { ...(b.complementosSel || {}) },
+        exclusivosSel: { ...(b.exclusivosSel || {}) }
+      };
+      b.lineas.push(linea);
+      // Limpia la línea en edición para poder elegir otro servicio.
+      b.service = null;
+      b.variantIdx = -1;
+      b.complementosSel = {};
+      b.exclusivosSel = {};
+      return true;
+    }
+
+    _quitarLinea(idx) {
+      const b = this._booking;
+      if (idx < 0 || idx >= b.lineas.length) return;
+      b.lineas.splice(idx, 1);
+      this._renderBookingBody();
+      this._renderBookingFoot();
+    }
+
+    _totalLineas() {
+      const b = this._booking;
+      const enEdicion = b.service
+        ? [{ svc: b.service, variantIdx: b.variantIdx, complementosSel: b.complementosSel, exclusivosSel: b.exclusivosSel }]
+        : [];
+      return b.lineas.concat(enEdicion)
+        .reduce((acc, l) => acc + this._precioDeLinea(l), 0);
+    }
+
+    _numLineas() {
+      const b = this._booking;
+      return b.lineas.length + (b.service ? 1 : 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // NAVEGACIÓN
     // ═══════════════════════════════════════════════════════════════════════
     _navigateTo(fechaISO) {
@@ -2202,9 +2410,22 @@ input, textarea { font-family: inherit; }
         // textual).
         const paso2ConServicio = (b.step === 2 && !!b.service);
         const disabledAttr = (!canNext && !paso2ConServicio) ? 'disabled' : '';
-        foot.innerHTML = `<button class="btn-primary" id="bkNext" ${disabledAttr}>Continuar</button>`;
+        // v0.6.0 — En el paso 2 el botón muestra el recuento y el total
+        // cuando hay más de un servicio armado.
+        let labelNext = 'Continuar';
+        if (b.step === 2) {
+          const n = this._numLineas();
+          if (n > 1) labelNext = `Continuar · ${n} servicios · ${this._totalLineas()}€`;
+        }
+        foot.innerHTML = `<button class="btn-primary" id="bkNext" ${disabledAttr}>${labelNext}</button>`;
         const btn = R.getElementById('bkNext');
         if (btn) btn.addEventListener('click', () => {
+          // v0.6.0 — Al salir del paso 2, la línea en edición se cierra
+          // automáticamente. Así el flujo de UN solo servicio queda
+          // idéntico al de siempre: elegir servicio → Continuar.
+          if (b.step === 2 && b.service) {
+            if (!this._añadirLineaActual()) return;
+          }
           if (this._canAdvanceStep()) {
             this._setStep(Math.min(4, b.step + 1));
           } else if (b.step === 2) {
@@ -2215,8 +2436,18 @@ input, textarea { font-family: inherit; }
           }
         });
       } else {
+        // v0.6.0 — Con varias líneas el botón lo indica, y durante la
+        // cadena informa de por dónde va.
+        const nL = b.lineas.length;
+        let labelCrear = `${ICONS.check} Crear reserva`;
+        if (nL > 1) labelCrear = `${ICONS.check} Crear cita · ${nL} servicios`;
+        let labelCreando = 'Creando…';
+        if (b.creating && b.cadenaReservaId && b.cadenaPendiente.length) {
+          const hechos = nL - b.cadenaPendiente.length;
+          labelCreando = `Añadiendo servicio ${hechos + 1} de ${nL}…`;
+        }
         foot.innerHTML = `<button class="btn-primary" id="bkCreate" ${b.creating?'disabled':''}>
-          ${b.creating ? 'Creando…' : `${ICONS.check} Crear reserva`}
+          ${b.creating ? labelCreando : labelCrear}
         </button>`;
         const btn = R.getElementById('bkCreate');
         if (btn) btn.addEventListener('click', () => this._confirmBooking());
@@ -2237,8 +2468,10 @@ input, textarea { font-family: inherit; }
       // variante seleccionada (no hay opción "no añadir" para required;
       // patrón Desktop v1.1.44). Backend valida también como defensa
       // (recepcionProLogic v1.0.29 devuelve faltanVariantes).
+      // v0.6.0 — Con armado múltiple, basta con que haya AL MENOS una
+      // línea añadida o una línea en edición válida.
       if (b.step === 2) {
-        if (!b.service) return false;
+        if (!b.service) return b.lineas.length > 0;
         const comps = Array.isArray(b.service.complementos) ? b.service.complementos : [];
         for (const c of comps) {
           if (!c.required) continue;
@@ -2296,13 +2529,18 @@ input, textarea { font-family: inherit; }
       const b = this._booking;
       if (b.done) {
         const cl = this._currentClientLabel();
-        const svcLabel = b.service?.label || '';
         const empName = (this._getVisibleStaff().find(s => s.id === b.emp) || {}).name || b.emp;
+        // v0.6.0 — Resumen con todos los servicios de la cita.
+        const svcLabels = b.lineas.map(l => this._labelDeLinea(l)).filter(Boolean);
+        const svcTxt = svcLabels.length ? svcLabels.join(' + ') : '';
+        const nTxt = b.lineas.length > 1
+          ? `<br><span style="color:var(--accent)">${b.lineas.length} servicios · un solo cobro</span>`
+          : '';
         body.innerHTML = `
           <div class="success">
             <div class="success-icon">${ICONS.check}</div>
             <h3>Reserva creada</h3>
-            <p>${esc(cl)} · ${esc(svcLabel)}<br>${esc(empName)} · ${esc(b.time || '')} · ${esc(this._fecha)}</p>
+            <p>${esc(cl)} · ${esc(svcTxt)}<br>${esc(empName)} · ${esc(b.time || '')} · ${esc(this._fecha)}${nTxt}</p>
           </div>
         `;
         return;
@@ -2566,6 +2804,25 @@ input, textarea { font-family: inherit; }
       }
 
       let html = '';
+
+      // v0.6.0 — Líneas ya añadidas a la cita, arriba del catálogo.
+      // Cada una con su precio y botón para quitarla. Paridad con el
+      // bloque de armado del Desktop (_renderArmedHint).
+      if (b.lineas.length) {
+        html += `<div style="margin-bottom:14px;">
+          <span class="field-label">En esta cita (${b.lineas.length})</span>`;
+        b.lineas.forEach((l, i) => {
+          html += `
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:6px;">
+              <span style="width:20px;height:20px;border-radius:50%;background:var(--orange);color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center;flex:0 0 auto;">${i + 1}</span>
+              <span style="flex:1;min-width:0;font-size:12.5px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(this._labelDeLinea(l))}</span>
+              <span class="svc-meta">${esc(String(this._precioDeLinea(l)))}€</span>
+              <button class="btn-ghost" data-rmlinea="${i}" style="padding:4px 9px;">✕</button>
+            </div>`;
+        });
+        html += `</div>`;
+      }
+
       for (const g in groups) {
         const list = groups[g].sort((a,b) => (a.order||999) - (b.order||999));
         const isExp = (b.expandedGroup === g);
@@ -2593,6 +2850,14 @@ input, textarea { font-family: inherit; }
       }
       body.innerHTML = html;
 
+      // v0.6.0 — Quitar una línea ya añadida
+      body.querySelectorAll('[data-rmlinea]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._quitarLinea(parseInt(btn.dataset.rmlinea, 10));
+        });
+      });
+
       // v0.3.1 — Click en cabecera = toggle de grupo (acordeón estricto)
       body.querySelectorAll('.cat-head').forEach(head => {
         head.addEventListener('click', (e) => {
@@ -2613,8 +2878,10 @@ input, textarea { font-family: inherit; }
           b.service = svc;
           // v0.3.0 — reset addons locales al cambiar de servicio
           // v0.5.0 — variantIdx arranca en -1 (base M del catálogo)
+          // v0.6.0 — solo resetea la LÍNEA EN EDICIÓN; b.lineas intacto.
           b.variantIdx = -1;
           b.complementosSel = {};
+          b.exclusivosSel = {};
           this._renderBookingBody();
           this._renderBookingFoot();
         });
@@ -2766,6 +3033,16 @@ input, textarea { font-family: inherit; }
         }
       }
 
+      // v0.6.0 — ARMADO MÚLTIPLE. Cierra la línea en edición y vuelve al
+      // catálogo para elegir otro servicio. Paridad Desktop v1.1.81: la
+      // primera línea crea la reserva, las demás se añaden a esa misma
+      // cita (un pack, un cobro, N bloques en el calendario).
+      html += `<div class="addon-block" style="margin-top:14px;margin-bottom:0;">
+        <button class="new-client-btn" id="bkAddLinea" style="margin-top:0;">
+          <span class="plus">+</span> Añadir otro servicio a esta cita
+        </button>
+      </div>`;
+
       html += `</div>`;
       return html;
     }
@@ -2786,6 +3063,19 @@ input, textarea { font-family: inherit; }
     _wireAddonEvents() {
       const body = this.shadowRoot.getElementById('bookBody');
       const b = this._booking;
+      // v0.6.0 — "Añadir otro servicio a esta cita": materializa la línea
+      // en edición, la apila y devuelve el catálogo limpio para elegir
+      // el siguiente servicio.
+      const addLineaBtn = body.querySelector('#bkAddLinea');
+      if (addLineaBtn) {
+        addLineaBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!this._añadirLineaActual()) return;
+          this._toast(`${b.lineas.length} servicio${b.lineas.length > 1 ? 's' : ''} en la cita`);
+          this._renderBookingBody();
+          this._renderBookingFoot();
+        });
+      }
       // Chips de variante del PRINCIPAL (selección de índice)
       // v0.5.0 — El valor `-1` señala la BASE del catálogo (variante M).
       //   Antes: `parseInt(chip.dataset.vi, 10) || 0` colapsaba -1
@@ -2911,43 +3201,39 @@ input, textarea { font-family: inherit; }
     }
 
     // ── STEP 4: confirmar ──
+    //   v0.6.0 — Lista TODAS las líneas de la cita con su precio y el
+    //   total. Un solo pack, un solo cobro; cada servicio se pintará como
+    //   su propio bloque en el calendario.
     _renderStepConfirm(body) {
       const b = this._booking;
       const cl = this._currentClientLabel();
       const isNew = !b.client && !!b.newClient && (b.newClient.nombre || b.newClient.apellido);
       const empName = (this._getVisibleStaff().find(s => s.id === b.emp) || {}).name || b.emp;
-      const svcLabel = b.service?.label || '';
-      // v0.3.0 — Resumen V2: variante + complementos seleccionados
-      const extras = [];
-      const svc = b.service;
-      if (svc) {
-        // v0.5.0 — Solo mostrar "Variante: X" en el resumen si el
-        // operador eligió una variante distinta de la BASE (idx >= 0).
-        // Antes: `variantes[b.variantIdx || 0]` pintaba SIEMPRE la
-        // primera del array, incluso si el operador había elegido base
-        // (variantIdx = -1 || 0 = 0 → BUG). Ahora respeta la elección.
-        const variantes = (svc.hasVariants && Array.isArray(svc.variantes)) ? svc.variantes : [];
-        if (variantes.length && Number.isInteger(b.variantIdx) && b.variantIdx >= 0 && b.variantIdx < variantes.length) {
-          const v = variantes[b.variantIdx];
-          const vLabel = (typeof v === 'string') ? v : (v?.label || '');
-          if (vLabel) extras.push(`Variante: ${vLabel}`);
+
+      const lineasHTML = b.lineas.map((l, i) => {
+        const extras = [];
+        const svcComps = Array.isArray(l.svc.complementos) ? l.svc.complementos : [];
+        for (const c of svcComps) {
+          if (l.complementosSel && l.complementosSel[c.setupUid]) extras.push(c.label);
         }
-        const compl = Array.isArray(svc.complementos) ? svc.complementos : [];
-        for (const c of compl) {
-          if (b.complementosSel[c.setupUid]) extras.push(c.label);
-        }
-      }
+        return `
+          <div class="confirm-row">
+            <span class="ck">${i === 0 ? 'Servicios' : ''}</span>
+            <span class="cv">${esc(this._labelDeLinea(l))} · ${esc(String(this._precioDeLinea(l)))}€
+              ${extras.length ? `<span class="extra">${esc(extras.join(' · '))}</span>` : ''}
+            </span>
+          </div>`;
+      }).join('');
+
+      const total = this._totalLineas();
+      const nLineas = b.lineas.length;
+
       body.innerHTML = `
         <div class="confirm-row">
           <span class="ck">Cliente</span>
-          <span class="cv">${esc(cl)}${isNew?'<span class="extra">Nuevo cliente</span>':''}</span>
+          <span class="cv">${esc(cl)}${isNew ? '<span class="extra">Nuevo cliente</span>' : ''}</span>
         </div>
-        <div class="confirm-row">
-          <span class="ck">Servicio</span>
-          <span class="cv">${esc(svcLabel)}
-            ${extras.length ? `<span class="extra">${esc(extras.join(' · '))}</span>` : ''}
-          </span>
-        </div>
+        ${lineasHTML}
         <div class="confirm-row">
           <span class="ck">Empleado</span>
           <span class="cv">${esc(empName)}</span>
@@ -2955,6 +3241,12 @@ input, textarea { font-family: inherit; }
         <div class="confirm-row">
           <span class="ck">Fecha</span>
           <span class="cv">${esc(this._fecha)} · ${esc(b.time || '')}</span>
+        </div>
+        <div class="confirm-row">
+          <span class="ck">Total</span>
+          <span class="cv" style="font-size:16px;font-weight:700;color:var(--orange)">${esc(String(total))}€
+            ${nLineas > 1 ? `<span class="extra">${nLineas} servicios · un solo cobro</span>` : ''}
+          </span>
         </div>
       `;
     }
@@ -3010,96 +3302,33 @@ input, textarea { font-family: inherit; }
         return;
       }
 
-      // v0.3.9 — Payload V2 con complementos string/objeto.
-      // complementosSel[uid] puede ser:
-      //   · true                   → complemento simple → string uid.
-      //   · { varianteIdx }        → complemento con variante elegida →
-      //                              objeto { uid, varianteId, varianteLabel,
-      //                              price, duration }. Backend
-      //                              crearPackReserva v1.0.30 ya lo procesa.
-      const principalSetupUid = b.service?.setupUid || '';
-      const svcComps = (b.service && Array.isArray(b.service.complementos)) ? b.service.complementos : [];
-      const complementosSetupUid = [];
-      for (const uid of Object.keys(b.complementosSel || {})) {
-        const val = b.complementosSel[uid];
-        if (val === true) {
-          complementosSetupUid.push(uid);
-        } else if (val && typeof val === 'object' && Number.isInteger(val.varianteIdx)) {
-          const c = svcComps.find(x => x.setupUid === uid);
-          const v = (c && Array.isArray(c.variantes)) ? c.variantes[val.varianteIdx] : null;
-          if (v) {
-            const vLabel = (typeof v === 'string') ? v : (v.label || v.nombre || '');
-            const vId = (typeof v === 'object' && v.tamano_estilo) ? v.tamano_estilo : String(val.varianteIdx);
-            const vPrice = (typeof v === 'object') ? Number(v.precio != null ? v.precio : v.price) || 0 : 0;
-            const vDur = (typeof v === 'object') ? Number(v.duracion != null ? v.duracion : v.duration) || 0 : 0;
-            complementosSetupUid.push({
-              uid,
-              varianteId: vId,
-              varianteLabel: vLabel,
-              price: vPrice,
-              duration: vDur
-            });
-          }
-        }
+      // v0.6.0 — ARMADO MÚLTIPLE. La PRIMERA línea crea la reserva con
+      // crearPackReserva. Las demás quedan en b.cadenaPendiente y se
+      // añaden a ESA MISMA reserva con agregarServicioReserva en cuanto
+      // llega 'reserva-creada' OK. Paridad literal con la cadena del
+      // Desktop v1.1.81 (case 'reservaCreada' → _enviarAgregarServicio).
+      // Resultado: un pack, un total, un cobro; cada servicio pintado
+      // como su propio bloque (una .appt por fase ocupante).
+      if (!b.lineas.length) {
+        b.creating = false;
+        this._toast('Añade al menos un servicio');
+        return;
       }
 
-      // v0.4.0 — GRUPO EXCLUSIVO (Punto 1). Recorrer items tipo:'exclusivo'
-      // del mapeoFases del servicio armado; por cada elección guardada en
-      // b.exclusivosSel[groupKey] (uid), empujar al array con el mismo
-      // shape que las variantes de complemento. El motor
-      // construirFasesPack v1.0.34 detecta el uid dentro de f.refs y
-      // materializa el servicio en la posición del grupo. Patrón literal
-      // Desktop v1.1.59.
-      const mapeoArm = Array.isArray(b.service && b.service.mapeoFases)
-        ? b.service.mapeoFases
-        : (typeof (b.service && b.service.mapeoFases) === 'string' ? this._tryParseArr(b.service.mapeoFases) : []);
-      if (Array.isArray(mapeoArm) && b.exclusivosSel) {
-        mapeoArm.forEach((f, idx) => {
-          if (!f || f.tipo !== 'exclusivo') return;
-          const gk = 'exc:' + idx;
-          const uidElegido = b.exclusivosSel[gk];
-          if (!uidElegido) return;
-          const svcRef = this._serviciosMap[uidElegido];
-          if (!svcRef) return;
-          complementosSetupUid.push({
-            uid: svcRef.setupUid,
-            varianteId: svcRef.setupUid,
-            varianteLabel: svcRef.label || '',
-            price: Number(svcRef.price) || 0,
-            duration: Number(svcRef.duration) || 0
-          });
-        });
-      }
+      const primera = b.lineas[0];
+      b.cadenaPendiente = b.lineas.slice(1);
+      b.cadenaReservaId = null;
+
+      const principalSetupUid = primera.svc?.setupUid || '';
+      const complementosSetupUid = this._complementosDeLinea(
+        primera.svc, primera.complementosSel, primera.exclusivosSel
+      );
+      const varianteSel = this._varianteSelDeLinea(primera.svc, primera.variantIdx);
 
       // staffName de la lista de staff visibles (para que el backend lo
       // grabe en la reserva — mismo patrón que desktop V2).
       const staffObj = (this._getVisibleStaff().find(s => s.id === b.emp) || {});
       const staffName = staffObj.name || '';
-
-      // v0.5.0 — VARIANTE del principal. Si el operador eligió una
-      // variante distinta de la BASE (variantIdx >= 0), se envía
-      // varianteSel con precio/duración/label. Si eligió BASE
-      // (variantIdx === -1), NO se envía varianteSel — el backend
-      // crearPackReserva v1.0.25 lo trata como reserva base
-      // (comportamiento pre-v1.0.25, retrocompatible).
-      //
-      // Antes: aunque el operador eligiera XL, el widget NO enviaba
-      // varianteSel nunca → la reserva se creaba siempre con precio/
-      // duración BASE del catálogo, ignorando la elección de variante.
-      // Paridad con Recepción PRO Desktop v1.1.43 (envío igual).
-      let varianteSel = null;
-      if (b.service && b.service.hasVariants && Array.isArray(b.service.variantes)) {
-        const idx = b.variantIdx;
-        if (Number.isInteger(idx) && idx >= 0 && idx < b.service.variantes.length) {
-          const v = b.service.variantes[idx];
-          if (v && typeof v === 'object') {
-            const vLabel = v.label || v.nombre || '';
-            const vPrice = Number(v.precio != null ? v.precio : v.price) || 0;
-            const vDur = Number(v.duracion != null ? v.duracion : v.duration) || 0;
-            varianteSel = { idx, label: vLabel, price: vPrice, duration: vDur };
-          }
-        }
-      }
 
       const payload = {
         principalSetupUid,
@@ -3110,9 +3339,8 @@ input, textarea { font-family: inherit; }
         staffName,
         contactDetails,
         memberContactId,
-        // v0.4.0 — bandera de cliente provisional. El pagecode v0.3.3 ya
-        // acepta este campo en el contrato de mensajes (línea de
-        // 'crear-reserva'). Backend salta ensureContactInCRM cuando es true.
+        // v0.4.0 — bandera de cliente provisional. El pagecode ya acepta
+        // este campo. Backend salta ensureContactInCRM cuando es true.
         esProvisional,
         // v0.5.0 — Variante del principal (null si base).
         varianteSel
@@ -3136,6 +3364,18 @@ input, textarea { font-family: inherit; }
       const b = this._booking;
       b.creating = false;
       if (p?.ok) {
+        // v0.6.0 — ARMADO MÚLTIPLE. Si quedan líneas, ESTA reserva es la
+        // cita contenedora y el resto de servicios se añaden dentro de
+        // ella. Mismo patrón que Desktop v1.1.81 (case 'reservaCreada').
+        // No se marca done hasta que la cadena termina.
+        const reservaId = p.reservaId || p._id || '';
+        if (b.cadenaPendiente && b.cadenaPendiente.length && reservaId) {
+          b.cadenaReservaId = reservaId;
+          b.creating = true;
+          this._enviarSiguienteDeCadena();
+          this._renderBookingSheet();
+          return;
+        }
         b.done = true;
         b.doneData = p;
         // v0.5.5 — El cliente SOBREVIVE a la reserva creada. Paridad con
@@ -3152,6 +3392,55 @@ input, textarea { font-family: inherit; }
         this._toast(msg);
         this._renderBookingFoot();
       }
+    }
+
+    // v0.6.0 — Envía la siguiente línea pendiente al page code, que la
+    // añade a la cita contenedora con agregarServicioReserva. El backend
+    // la encadena a partir de MAX(end) de las fases ocupantes, así que
+    // los servicios quedan uno detrás de otro con el mismo profesional.
+    _enviarSiguienteDeCadena() {
+      const b = this._booking;
+      const linea = b.cadenaPendiente[0];
+      if (!linea || !b.cadenaReservaId) return;
+      this._toast(`Añadiendo ${this._labelDeLinea(linea)}…`);
+      this._sendToPage('agregar-servicio', {
+        reservaId: b.cadenaReservaId,
+        setupUid: linea.svc?.setupUid || '',
+        varianteSel: this._varianteSelDeLinea(linea.svc, linea.variantIdx),
+        complementosSetupUid: this._complementosDeLinea(
+          linea.svc, linea.complementosSel, linea.exclusivosSel
+        )
+      });
+    }
+
+    // v0.6.0 — Respuesta a 'agregar-servicio'. Consume la cola y, cuando
+    // se vacía, cierra el flujo como una reserva normal.
+    _onServicioAgregado(p) {
+      const b = this._booking;
+      if (!p?.ok) {
+        b.creating = false;
+        const msg = p?.error?.message || p?.error || 'No se pudo añadir el servicio';
+        this._toast(`Error: ${msg}`);
+        // La cita contenedora SÍ existe: se cierra el sheet y se refresca
+        // para que el operador vea lo que sí ha entrado y decida.
+        b.done = true;
+        b.doneData = { reservaId: b.cadenaReservaId };
+        this._guardarClientePendiente(true);
+        this._renderBookingSheet();
+        this._sendToPage('get-reservas-dia', { fecha: this._fecha });
+        return;
+      }
+      b.cadenaPendiente.shift();
+      if (b.cadenaPendiente.length) {
+        this._enviarSiguienteDeCadena();
+        return;
+      }
+      b.creating = false;
+      b.done = true;
+      b.doneData = { reservaId: b.cadenaReservaId, precioTotal: p.precioTotal };
+      this._guardarClientePendiente(true);
+      this._renderBookingSheet();
+      this._sendToPage('get-reservas-dia', { fecha: this._fecha });
     }
 
     // v0.3.2 — Tras cancelar: cerrar detail, toast, refrescar día.
