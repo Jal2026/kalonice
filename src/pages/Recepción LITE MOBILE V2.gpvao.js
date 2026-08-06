@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE — Page Code: Recepción Lite Mobile (V2 CMS-first)
 // =====================================================
-// VERSION: 0.3.8
+// VERSION: 0.3.9
 // FECHA: 6 de agosto de 2026
 // Página: /recepcionpromobile
 // Custom Element ID en Editor: kamisuiteBookingLite (tag: kamisuite-booking-lite)
@@ -9,6 +9,21 @@
 // Comunicación (sin cambios respecto al cableado):
 //   Page → Element: el.setAttribute('response', JSON.stringify({type, ...data, ts}))
 //   Element → Page: el.on('booking-message', handler)  (CustomEvent)
+//
+// =====================================================
+// v0.3.9 — ARMADO MÚLTIPLE: handler 'agregar-servicio'
+// =====================================================
+//   Pareja del widget v0.6.0. Permite meter varios servicios en UNA sola
+//   cita (madre + hijo + hija), con un único cobro y cada servicio
+//   pintado como su propio bloque en el calendario.
+//
+//   La primera línea la crea 'crear-reserva' (crearPackReserva). Las
+//   siguientes llegan por 'agregar-servicio' y se resuelven con
+//   agregarServicioReserva, el MISMO backend que usa la cadena del
+//   Desktop v1.1.81. Nombres de mensaje idénticos a los del Desktop.
+//
+//   Cero cambios en backend: agregarServicioReserva (recepcionProLogic
+//   v1.0.43+) ya acepta varianteSel y complementosSetupUid.
 //
 // =====================================================
 // v0.3.8 — BUG RAÍZ: los mensajes al widget se pisaban entre sí
@@ -284,7 +299,10 @@ import {
   cancelarReserva,
   crearBloqueo,
   eliminarBloqueo,
-  actualizarBloqueo
+  actualizarBloqueo,
+  // v0.3.9 — ARMADO MÚLTIPLE: añade un servicio a una reserva ya creada.
+  // Mismo backend que usa Recepción PRO Desktop para su cadena v1.1.81.
+  agregarServicioReserva
 } from 'backend/recepcionProLogic.web';
 
 // v0.3.7 — cargarTodosContactos YA NO se importa: el volcado completo
@@ -296,7 +314,7 @@ import { crearContacto } from 'backend/recepcionLogic.web';
 import { buscarContactosRapido } from 'backend/contactSearchLogic.web';
 
 // v0.3.7 — TAG actualizado.
-const TAG = '[BookingLitePage v0.3.8]';
+const TAG = '[BookingLitePage v0.3.9]';
 const PRELOAD_BATCH = 5;
 
 let _el = null;
@@ -659,6 +677,45 @@ async function handleCrearReserva(msg) {
 }
 
 // =====================================================
+// ARMADO MÚLTIPLE — añadir servicio a una cita ya creada (v0.3.9)
+// =====================================================
+//   El widget v0.6.0 crea la cita con la primera línea y luego encadena
+//   el resto por aquí. Backend agregarServicioReserva (recepcionProLogic
+//   v1.0.43+) resuelve variante y complementos, y encadena el servicio a
+//   partir de MAX(end) de las fases ocupantes de la reserva.
+//
+//   Resultado: UNA reserva con N servicios → un total, un cobro; y cada
+//   fase ocupante se pinta como su propio bloque en el calendario.
+//
+//   Nombres de mensaje idénticos a los del Desktop ('agregar-servicio' /
+//   'servicio-agregado') para mantener paridad entre superficies.
+// =====================================================
+async function handleAgregarServicio(msg) {
+  const { reservaId, setupUid, varianteSel = null, complementosSetupUid = [] } = msg || {};
+  if (!reservaId || !setupUid) {
+    sendResponse('servicio-agregado', {
+      ok: false,
+      error: { message: 'Faltan reservaId o setupUid' }
+    });
+    return;
+  }
+  try {
+    const result = await agregarServicioReserva({
+      reservaId,
+      setupUid,
+      varianteSel,
+      complementosSetupUid: Array.isArray(complementosSetupUid) ? complementosSetupUid : []
+    });
+    const ok = !!result?.ok;
+    console.log(`${TAG} ➕ agregar-servicio ${setupUid} → ${ok ? 'OK' : 'ERROR'}`);
+    sendResponse('servicio-agregado', result || { ok: false, error: { message: 'Sin respuesta del backend' } });
+  } catch (e) {
+    console.error(`${TAG} ❌ handleAgregarServicio:`, e?.message);
+    sendResponse('servicio-agregado', { ok: false, error: { message: e?.message || 'Error añadiendo servicio' } });
+  }
+}
+
+// =====================================================
 // SETTINGS (CalendarViewSettings) — CMS directo, sin backend
 //
 //   v0.3.5 — FUENTE UNIFICADA con Desktop. Antes: Lite Mobile leía/escribía
@@ -847,6 +904,7 @@ $w('#f6B6E28D52B24De6Aab3Ff2Ccad8E2291').hide()
         case 'buscar-cliente':     handleBuscarCliente(msg); break;
         case 'crear-contacto':     handleCrearContacto(msg); break;
         case 'crear-reserva':      handleCrearReserva(msg); break;
+        case 'agregar-servicio':   handleAgregarServicio(msg); break;
         case 'get-settings':       handleGetSettings(); break;
         case 'save-settings':      handleSaveSettings(msg.settings); break;
         case 'cancelar-reserva':   handleCancelarReserva(msg); break;
