@@ -4,8 +4,39 @@
  * Ubicación en Wix: public/custom-elements/
  * Tag name: kamisuite-booking-lite
  * Página:   /recepcionpromobile
- * VERSION:  0.5.4
+ * VERSION:  0.5.5
  * FECHA:    6 Agosto 2026
+ *
+ * v0.5.5 — El cliente sobrevive TAMBIÉN a la reserva creada.
+ *
+ *   SÍNTOMA (Jal, 6-ago-2026): al pintar la reserva se reseteaba el
+ *   cliente. Caso de uso real: una madre reserva su corte + el corte del
+ *   hijo + el de la hija. Tras cada reserva había que volver a buscarla.
+ *
+ *   CAUSA: regresión introducida en v0.5.4, que limpiaba
+ *   _clientePendiente en _onReservaCreada "para que la siguiente reserva
+ *   arranque limpia". Ese razonamiento ignoraba el encadenado familiar.
+ *
+ *   PARIDAD CON DESKTOP (verificada en recepcionProCMS_widget, case
+ *   'reservaCreada'): al crear la reserva llama a _desarmar() —que resetea
+ *   el SERVICIO armado— pero NUNCA toca this._cliente. El cliente vive en
+ *   el aside y persiste hasta que el operador lo quita con #cliRm. Lite
+ *   Mobile hacía lo contrario.
+ *
+ *   CAMBIOS:
+ *   1) _onReservaCreada llama a _guardarClientePendiente(true) en lugar de
+ *      limpiar. El cliente queda disponible para la siguiente apertura del
+ *      sheet.
+ *   2) _guardarClientePendiente acepta `forzar`: guarda aunque b.done sea
+ *      true (tras reserva creada).
+ *   3) CLIENTE_TTL_MS de 5 → 15 min. Encadenar tres reservas eligiendo
+ *      servicio, empleado y hora en cada una se pasa de 5 minutos. El `ts`
+ *      se refresca en cada guardado: la ventana cuenta desde la última
+ *      reserva, no desde la primera.
+ *
+ *   El chip del cliente con botón "Quitar" (v0.5.4) sigue siendo la
+ *   salvaguarda: el operador ve siempre a quién le está reservando y puede
+ *   soltarlo en un toque.
  *
  * v0.5.4 — El cliente elegido sobrevive al cierre accidental del sheet.
  *
@@ -461,7 +492,7 @@
     console.log('[KamisuiteBookingLite] Ya registrado.');
     return;
   }
-  const VERSION = '0.5.4';
+  const VERSION = '0.5.5';
   const TAG = `[BookingLite v${VERSION}]`;
 
   // ── Constantes de calendario ──
@@ -470,10 +501,15 @@
   const SLOT_MIN = 30;
   const PRELOAD_DAYS = 30;
   const MIN_COL_W = 112;    // v0.3.1 — ancho mínimo de columna; si caben más anchas, se estiran
-  // v0.5.4 — Vigencia del cliente conservado al cerrar el sheet sin
-  // completar la reserva. Pasado este tiempo no se restaura, para no
-  // arrastrar un cliente antiguo a una reserva que no le corresponde.
-  const CLIENTE_TTL_MS = 5 * 60 * 1000;
+  // v0.5.4 — Vigencia del cliente conservado entre aperturas del sheet.
+  // Pasado este tiempo no se restaura, para no arrastrar un cliente
+  // antiguo a una reserva que no le corresponde.
+  // v0.5.5 — Subido de 5 a 15 min: encadenar las reservas de una familia
+  // (madre + dos hijos, eligiendo servicio, empleado y hora en cada una)
+  // se pasa de 5 minutos con facilidad. El `ts` se refresca en cada
+  // guardado, así que la ventana cuenta desde la última reserva, no desde
+  // la primera.
+  const CLIENTE_TTL_MS = 15 * 60 * 1000;
 
   // ── v0.3.0 — Paleta de colores por empleado (literal de desktop V2,
   //    recepcionProCMS_widget línea 544). Coherencia visual entre apps. ──
@@ -2087,9 +2123,13 @@ input, textarea { font-family: inherit; }
     // v0.5.4 — Guarda el cliente elegido al cerrar sin completar.
     // Si la reserva se creó (b.done), NO se guarda: la siguiente reserva
     // arranca limpia.
-    _guardarClientePendiente() {
+    _guardarClientePendiente(forzar = false) {
       const b = this._booking;
-      if (!b || b.done) { this._clientePendiente = null; return; }
+      if (!b) { this._clientePendiente = null; return; }
+      // v0.5.5 — `forzar` lo usa _onReservaCreada: tras crear la reserva
+      // b.done pasa a true, pero el cliente debe conservarse igualmente
+      // para encadenar más reservas de la misma familia.
+      if (b.done && !forzar) { this._clientePendiente = null; return; }
       const hayCliente = !!(b.client || b.provClient ||
         (b.newClient && (b.newClient.nombre || b.newClient.apellido)));
       if (!hayCliente) { this._clientePendiente = null; return; }
@@ -3098,8 +3138,14 @@ input, textarea { font-family: inherit; }
       if (p?.ok) {
         b.done = true;
         b.doneData = p;
-        // v0.5.4 — Reserva completada: la siguiente arranca sin cliente.
-        this._clientePendiente = null;
+        // v0.5.5 — El cliente SOBREVIVE a la reserva creada. Paridad con
+        // Recepción PRO Desktop: su case 'reservaCreada' hace _desarmar()
+        // (resetea el servicio) pero NUNCA toca this._cliente, que vive en
+        // el aside y persiste.
+        // Caso de uso real: una madre reserva su corte + el del hijo + el
+        // de la hija. Con la limpieza de v0.5.4 había que volver a buscar
+        // a la clienta después de cada reserva.
+        this._guardarClientePendiente(true);
         this._renderBookingSheet();
       } else {
         const msg = p?.error?.message || 'Error al crear la reserva';
