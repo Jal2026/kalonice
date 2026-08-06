@@ -4,8 +4,17 @@
  * Ubicación en Wix: public/custom-elements/
  * Tag name: kamisuite-booking-lite
  * Página:   /recepcionpromobile
- * VERSION:  0.6.2
+ * VERSION:  0.6.3
  * FECHA:    6 Agosto 2026
+ *
+ * v0.6.3 — El botón "Añadir otro servicio" se mueve JUNTO al servicio
+ *   elegido, justo debajo de su panel de addons.
+ *
+ *   En v0.6.2 se pintaba al final del paso 2, después de todos los grupos
+ *   del catálogo: había que hacer scroll hasta abajo del todo para verlo,
+ *   lo que en móvil equivale a que no exista. Ahora aparece pegado a la
+ *   fila del servicio seleccionado, que es donde está mirando el operador
+ *   cuando acaba de elegirlo.
  *
  * v0.6.2 — El botón "Añadir otro servicio" se pinta SIEMPRE en el paso 2,
  *   deshabilitado mientras no haya servicio elegido. En v0.6.1 estaba
@@ -559,7 +568,7 @@
     console.log('[KamisuiteBookingLite] Ya registrado.');
     return;
   }
-  const VERSION = '0.6.2';
+  const VERSION = '0.6.3';
   const TAG = `[BookingLite v${VERSION}]`;
 
   // ── Constantes de calendario ──
@@ -2864,26 +2873,19 @@ input, textarea { font-family: inherit; }
               </div>`;
             if (isSel) {
               html += this._renderAddonPanel();
+              // v0.6.3 — El botón de armado múltiple va PEGADO al servicio
+              // elegido, no al final del catálogo. En v0.6.2 quedaba tras
+              // todos los grupos y había que hacer scroll hasta abajo para
+              // verlo: en móvil, invisible en la práctica.
+              html += `
+                <button class="new-client-btn" id="bkAddLinea" style="margin-top:8px;margin-bottom:10px;">
+                  <span class="plus">+</span> Añadir otro servicio a esta cita
+                </button>`;
             }
           }
         }
         html += `</div>`;
       }
-
-      // v0.6.0 — ARMADO MÚLTIPLE. Botón SIEMPRE visible cuando hay un
-      // servicio elegido, al final del paso 2.
-      // v0.6.1 — FIX: en v0.6.0 estaba dentro de _renderAddonPanel, que
-      // hace `return ''` cuando el servicio no tiene variantes NI
-      // complementos (p. ej. Corte Femenino). En esos servicios —justo los
-      // más habituales para encadenar cortes de familia— el botón no se
-      // pintaba nunca. Ahora vive en el paso 2, independiente del panel.
-      // v0.6.2 — SIEMPRE visible, deshabilitado mientras no haya servicio
-      // elegido. Sin condiciones que puedan dejarlo fuera del DOM.
-      const puedeAñadir = !!b.service;
-      html += `
-        <button class="new-client-btn" id="bkAddLinea" style="margin-top:14px;${puedeAñadir ? '' : 'opacity:.45;'}" ${puedeAñadir ? '' : 'disabled'}>
-          <span class="plus">+</span> Añadir otro servicio a esta cita
-        </button>`;
 
       body.innerHTML = html;
 
