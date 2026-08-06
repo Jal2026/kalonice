@@ -4,8 +4,23 @@
  * Ubicación en Wix: public/custom-elements/
  * Tag name: kamisuite-booking-lite
  * Página:   /recepcionpromobile
- * VERSION:  0.6.0
+ * VERSION:  0.6.1
  * FECHA:    6 Agosto 2026
+ *
+ * v0.6.1 — FIX: el botón "Añadir otro servicio" no aparecía en servicios
+ *   sin variantes ni complementos.
+ *
+ *   En v0.6.0 el botón se pintaba dentro de _renderAddonPanel, que hace
+ *   `return ''` cuando el servicio no tiene variantes NI complementos
+ *   (`if (!variantes.length && !complementos.length) return '';`). En
+ *   Corte Femenino y demás servicios simples —justo los más habituales
+ *   para encadenar cortes de familia— el panel entero no se pinta y el
+ *   botón se iba con él.
+ *
+ *   Ahora el botón se pinta al final de _renderStepService, condicionado
+ *   solo a que haya un servicio elegido, y su listener vive junto al
+ *   resto de listeners del paso 2 (no en _wireAddonEvents, que solo se
+ *   ejecuta cuando hay panel).
  *
  * v0.6.0 — ARMADO MÚLTIPLE. Varios servicios en una sola cita.
  *
@@ -538,7 +553,7 @@
     console.log('[KamisuiteBookingLite] Ya registrado.');
     return;
   }
-  const VERSION = '0.6.0';
+  const VERSION = '0.6.1';
   const TAG = `[BookingLite v${VERSION}]`;
 
   // ── Constantes de calendario ──
@@ -2848,7 +2863,36 @@ input, textarea { font-family: inherit; }
         }
         html += `</div>`;
       }
+
+      // v0.6.0 — ARMADO MÚLTIPLE. Botón SIEMPRE visible cuando hay un
+      // servicio elegido, al final del paso 2.
+      // v0.6.1 — FIX: en v0.6.0 estaba dentro de _renderAddonPanel, que
+      // hace `return ''` cuando el servicio no tiene variantes NI
+      // complementos (p. ej. Corte Femenino). En esos servicios —justo los
+      // más habituales para encadenar cortes de familia— el botón no se
+      // pintaba nunca. Ahora vive en el paso 2, independiente del panel.
+      if (b.service) {
+        html += `
+          <button class="new-client-btn" id="bkAddLinea" style="margin-top:14px;">
+            <span class="plus">+</span> Añadir otro servicio a esta cita
+          </button>`;
+      }
+
       body.innerHTML = html;
+
+      // v0.6.1 — Listener del botón de armado múltiple. Vive aquí y no en
+      // _wireAddonEvents porque ese solo se ejecuta cuando hay panel de
+      // addons, y el botón debe funcionar también en servicios simples.
+      const addLineaBtn = body.querySelector('#bkAddLinea');
+      if (addLineaBtn) {
+        addLineaBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!this._añadirLineaActual()) return;
+          this._toast(`${b.lineas.length} servicio${b.lineas.length > 1 ? 's' : ''} en la cita`);
+          this._renderBookingBody();
+          this._renderBookingFoot();
+        });
+      }
 
       // v0.6.0 — Quitar una línea ya añadida
       body.querySelectorAll('[data-rmlinea]').forEach(btn => {
@@ -3033,16 +3077,6 @@ input, textarea { font-family: inherit; }
         }
       }
 
-      // v0.6.0 — ARMADO MÚLTIPLE. Cierra la línea en edición y vuelve al
-      // catálogo para elegir otro servicio. Paridad Desktop v1.1.81: la
-      // primera línea crea la reserva, las demás se añaden a esa misma
-      // cita (un pack, un cobro, N bloques en el calendario).
-      html += `<div class="addon-block" style="margin-top:14px;margin-bottom:0;">
-        <button class="new-client-btn" id="bkAddLinea" style="margin-top:0;">
-          <span class="plus">+</span> Añadir otro servicio a esta cita
-        </button>
-      </div>`;
-
       html += `</div>`;
       return html;
     }
@@ -3063,19 +3097,6 @@ input, textarea { font-family: inherit; }
     _wireAddonEvents() {
       const body = this.shadowRoot.getElementById('bookBody');
       const b = this._booking;
-      // v0.6.0 — "Añadir otro servicio a esta cita": materializa la línea
-      // en edición, la apila y devuelve el catálogo limpio para elegir
-      // el siguiente servicio.
-      const addLineaBtn = body.querySelector('#bkAddLinea');
-      if (addLineaBtn) {
-        addLineaBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (!this._añadirLineaActual()) return;
-          this._toast(`${b.lineas.length} servicio${b.lineas.length > 1 ? 's' : ''} en la cita`);
-          this._renderBookingBody();
-          this._renderBookingFoot();
-        });
-      }
       // Chips de variante del PRINCIPAL (selección de índice)
       // v0.5.0 — El valor `-1` señala la BASE del catálogo (variante M).
       //   Antes: `parseInt(chip.dataset.vi, 10) || 0` colapsaba -1
