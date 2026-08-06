@@ -4,8 +4,14 @@
  * Ubicación en Wix: public/custom-elements/
  * Tag name: kamisuite-booking-lite
  * Página:   /recepcionpromobile
- * VERSION:  0.6.1
+ * VERSION:  0.6.2
  * FECHA:    6 Agosto 2026
+ *
+ * v0.6.2 — El botón "Añadir otro servicio" se pinta SIEMPRE en el paso 2,
+ *   deshabilitado mientras no haya servicio elegido. En v0.6.1 estaba
+ *   condicionado a `if (b.service)`, así que no existía en el DOM hasta
+ *   elegir servicio. Ahora está siempre presente: la función es visible
+ *   desde el primer momento y no depende de ninguna condición de render.
  *
  * v0.6.1 — FIX: el botón "Añadir otro servicio" no aparecía en servicios
  *   sin variantes ni complementos.
@@ -553,7 +559,7 @@
     console.log('[KamisuiteBookingLite] Ya registrado.');
     return;
   }
-  const VERSION = '0.6.1';
+  const VERSION = '0.6.2';
   const TAG = `[BookingLite v${VERSION}]`;
 
   // ── Constantes de calendario ──
@@ -2871,12 +2877,13 @@ input, textarea { font-family: inherit; }
       // complementos (p. ej. Corte Femenino). En esos servicios —justo los
       // más habituales para encadenar cortes de familia— el botón no se
       // pintaba nunca. Ahora vive en el paso 2, independiente del panel.
-      if (b.service) {
-        html += `
-          <button class="new-client-btn" id="bkAddLinea" style="margin-top:14px;">
-            <span class="plus">+</span> Añadir otro servicio a esta cita
-          </button>`;
-      }
+      // v0.6.2 — SIEMPRE visible, deshabilitado mientras no haya servicio
+      // elegido. Sin condiciones que puedan dejarlo fuera del DOM.
+      const puedeAñadir = !!b.service;
+      html += `
+        <button class="new-client-btn" id="bkAddLinea" style="margin-top:14px;${puedeAñadir ? '' : 'opacity:.45;'}" ${puedeAñadir ? '' : 'disabled'}>
+          <span class="plus">+</span> Añadir otro servicio a esta cita
+        </button>`;
 
       body.innerHTML = html;
 
