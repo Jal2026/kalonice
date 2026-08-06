@@ -4,8 +4,41 @@
  * Ubicación en Wix: public/custom-elements/
  * Tag name: kamisuite-booking-lite
  * Página:   /recepcionpromobile
- * VERSION:  0.5.3
+ * VERSION:  0.5.4
  * FECHA:    6 Agosto 2026
+ *
+ * v0.5.4 — El cliente elegido sobrevive al cierre accidental del sheet.
+ *
+ *   SÍNTOMA (Jal, 6-ago-2026): eliges cliente en el paso 1, pasas al paso 2
+ *   a buscar servicio, cierras con la ✕ (a menudo sin querer) y al volver
+ *   a abrir el sheet el cliente ha desaparecido. Hay que buscarlo otra vez.
+ *
+ *   CAUSA: _openBookingSheet arranca con `this._booking = this._emptyBooking()`,
+ *   que arrasa el estado completo — cliente incluido.
+ *
+ *   CAMBIOS:
+ *   1) _closeBookingSheet llama a _guardarClientePendiente(): si el sheet
+ *      se cierra SIN haber completado la reserva (b.done === false) y hay
+ *      un cliente elegido (real, nuevo o provisional), se guarda en
+ *      this._clientePendiente junto con la query y un timestamp.
+ *   2) _openBookingSheet lo restaura si sigue vigente (CLIENTE_TTL_MS =
+ *      5 min). Solo el CLIENTE: servicio, complementos, empleado y hora
+ *      se resetean siempre, porque la nueva apertura suele venir de tocar
+ *      otro slot del calendario con otra hora y otro empleado.
+ *   3) CHIP DEL CLIENTE REAL en el step 1, con botón "Quitar". Hasta ahora
+ *      el cliente elegido solo se veía como fila resaltada dentro de la
+ *      lista de resultados; si la lista dejaba de pintarse, parecía que no
+ *      había cliente. El provisional ya tenía chip desde v0.4.0, el real
+ *      no: asimetría corregida.
+ *      Esto NO es cosmético: es lo que hace segura la restauración. Sin la
+ *      señal visual, el operador podría reabrir el sheet con un cliente de
+ *      hace rato y reservarle la cita a la persona equivocada.
+ *   4) La caducidad de 5 min y el botón "Quitar" limpian
+ *      _clientePendiente. Al crear la reserva con éxito también se limpia:
+ *      la siguiente arranca de cero.
+ *
+ *   Cero cambios en page code, backend, contrato de mensajes y resto del
+ *   flujo de reserva.
  *
  * v0.5.3 — GUARDA `typeof customElements === 'undefined'` al entrar al IIFE.
  *   Sin ella, evaluar este archivo en un contexto sin DOM lanza
@@ -428,7 +461,7 @@
     console.log('[KamisuiteBookingLite] Ya registrado.');
     return;
   }
-  const VERSION = '0.5.3';
+  const VERSION = '0.5.4';
   const TAG = `[BookingLite v${VERSION}]`;
 
   // ── Constantes de calendario ──
@@ -437,6 +470,10 @@
   const SLOT_MIN = 30;
   const PRELOAD_DAYS = 30;
   const MIN_COL_W = 112;    // v0.3.1 — ancho mínimo de columna; si caben más anchas, se estiran
+  // v0.5.4 — Vigencia del cliente conservado al cerrar el sheet sin
+  // completar la reserva. Pasado este tiempo no se restaura, para no
+  // arrastrar un cliente antiguo a una reserva que no le corresponde.
+  const CLIENTE_TTL_MS = 5 * 60 * 1000;
 
   // ── v0.3.0 — Paleta de colores por empleado (literal de desktop V2,
   //    recepcionProCMS_widget línea 544). Coherencia visual entre apps. ──
@@ -1183,6 +1220,14 @@ input, textarea { font-family: inherit; }
       this._readyTries = 0;
       this._readyTimer = null;
       this._refreshTimer = null;
+      // ── v0.5.4 — Cliente conservado entre aperturas del sheet ──
+      // Al cerrar el sheet sin completar la reserva (✕, scrim, o cierre
+      // accidental), se guarda aquí el cliente ya elegido para restaurarlo
+      // en la siguiente apertura. Shape:
+      //   { client, newClient, provClient, query, ts }
+      // Caduca a los CLIENTE_TTL_MS para que no se arrastre un cliente de
+      // hace media hora a una reserva que no le corresponde.
+      this._clientePendiente = null;
     }
 
     // v0.3.7 — Estado inicial del sheet de bloqueo.
@@ -2005,14 +2050,62 @@ input, textarea { font-family: inherit; }
         if (prefill.emp) this._booking.emp = prefill.emp;
         if (prefill.time) this._booking.time = prefill.time;
       }
-      this._searchResults = [];
+
+      // v0.5.4 — Restaura el cliente que ya estaba elegido si el sheet se
+      // cerró sin completar la reserva. Cerrar con la ✕ (a menudo por
+      // error) obligaba a volver a buscar el cliente desde cero, porque
+      // _emptyBooking() arrasa con todo el estado.
+      //
+      // Solo se restaura el CLIENTE. Servicio, complementos, empleado y
+      // hora se resetean siempre: la nueva apertura suele venir de tocar
+      // otro slot del calendario, con otra hora y otro empleado.
+      //
+      // Caduca a los 5 minutos para no arrastrar un cliente antiguo a una
+      // reserva que no le corresponde. El chip del step 1 lo deja siempre
+      // visible con botón "Quitar" — sin esa señal visual, restaurar sería
+      // peligroso (reservar a la persona equivocada sin darse cuenta).
+      const cp = this._clientePendiente;
+      const vigente = !!cp && (Date.now() - (cp.ts || 0) < CLIENTE_TTL_MS);
+      if (vigente) {
+        this._booking.client = cp.client || null;
+        this._booking.newClient = cp.newClient || null;
+        this._booking.provClient = cp.provClient || null;
+        this._booking.query = cp.query || '';
+        // _searchResults NO se vacía: la lista sigue pintándose con el
+        // cliente resaltado, que es la confirmación visual de la elección.
+      } else {
+        this._clientePendiente = null;
+        this._searchResults = [];
+      }
+
       const R = this.shadowRoot;
       R.getElementById('bookScrim').classList.add('open');
       R.getElementById('bookSheet').classList.add('open');
       this._renderBookingSheet();
     }
 
+    // v0.5.4 — Guarda el cliente elegido al cerrar sin completar.
+    // Si la reserva se creó (b.done), NO se guarda: la siguiente reserva
+    // arranca limpia.
+    _guardarClientePendiente() {
+      const b = this._booking;
+      if (!b || b.done) { this._clientePendiente = null; return; }
+      const hayCliente = !!(b.client || b.provClient ||
+        (b.newClient && (b.newClient.nombre || b.newClient.apellido)));
+      if (!hayCliente) { this._clientePendiente = null; return; }
+      this._clientePendiente = {
+        client: b.client || null,
+        newClient: b.newClient || null,
+        provClient: b.provClient || null,
+        query: b.query || '',
+        ts: Date.now()
+      };
+    }
+
     _closeBookingSheet() {
+      // v0.5.4 — Antes de descartar el estado, conserva el cliente elegido
+      // para la próxima apertura (ver _openBookingSheet).
+      this._guardarClientePendiente();
       this._booking.open = false;
       const R = this.shadowRoot;
       R.getElementById('bookScrim').classList.remove('open');
@@ -2211,6 +2304,30 @@ input, textarea { font-family: inherit; }
         `;
       }
       if (!adding && !addingProv) {
+        // v0.5.4 — CHIP DEL CLIENTE REAL SELECCIONADO.
+        // Hasta v0.5.3 el cliente elegido solo se veía como fila resaltada
+        // DENTRO de la lista de resultados. Si la lista dejaba de pintarse
+        // (búsqueda vacía, vuelta desde otro step, reapertura del sheet),
+        // parecía que no había cliente aunque sí lo hubiera.
+        // El cliente provisional sí tenía chip desde v0.4.0; el real no.
+        // Además es la confirmación visual que hace segura la restauración
+        // del cliente al reabrir el sheet: sin ella, el operador podría
+        // reservarle la cita a la persona equivocada sin enterarse.
+        if (b.client) {
+          const cLabel = b.client.nombreCompleto ||
+            `${b.client.nombre || ''} ${b.client.apellido || ''}`.trim();
+          const cMeta = b.client.telefono || b.client.email || '';
+          html += `
+            <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--orange);background:rgba(232,119,34,0.10);border-radius:12px;margin-bottom:10px;">
+              <div class="avatar" style="background:var(--orange);color:#fff;">${esc(initials(cLabel))}</div>
+              <div class="client-info" style="flex:1;min-width:0;">
+                <div class="cn">${esc(cLabel || '—')}</div>
+                ${cMeta ? `<div class="cm">${esc(cMeta)}</div>` : ''}
+              </div>
+              <button class="btn-ghost" id="bkClientClear" style="padding:6px 10px;">Quitar</button>
+            </div>
+          `;
+        }
         html += `
           <div class="search">
             ${ICONS.search}
@@ -2317,10 +2434,23 @@ input, textarea { font-family: inherit; }
           this._renderBookingBody();
           this._renderBookingFoot();
         });
+        // v0.5.4 — Quitar el cliente real seleccionado. Limpia también el
+        // cliente conservado entre aperturas, para que no reaparezca al
+        // volver a abrir el sheet.
+        const clientClearBtn = R.getElementById('bkClientClear');
+        if (clientClearBtn) clientClearBtn.addEventListener('click', () => {
+          b.client = null;
+          b.query = '';
+          this._searchResults = [];
+          this._clientePendiente = null;
+          this._renderBookingBody();
+          this._renderBookingFoot();
+        });
         // v0.4.0 — Quitar chip de cliente provisional ya seleccionado
         const provClearBtn = R.getElementById('bkProvClear');
         if (provClearBtn) provClearBtn.addEventListener('click', () => {
           b.provClient = null;
+          this._clientePendiente = null;
           this._renderBookingBody();
           this._renderBookingFoot();
         });
@@ -2968,6 +3098,8 @@ input, textarea { font-family: inherit; }
       if (p?.ok) {
         b.done = true;
         b.doneData = p;
+        // v0.5.4 — Reserva completada: la siguiente arranca sin cliente.
+        this._clientePendiente = null;
         this._renderBookingSheet();
       } else {
         const msg = p?.error?.message || 'Error al crear la reserva';
