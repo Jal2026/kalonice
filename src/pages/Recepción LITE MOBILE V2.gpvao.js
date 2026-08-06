@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE — Page Code: Recepción Lite Mobile (V2 CMS-first)
 // =====================================================
-// VERSION: 0.3.7
+// VERSION: 0.3.8
 // FECHA: 6 de agosto de 2026
 // Página: /recepcionpromobile
 // Custom Element ID en Editor: kamisuiteBookingLite (tag: kamisuite-booking-lite)
@@ -9,6 +9,27 @@
 // Comunicación (sin cambios respecto al cableado):
 //   Page → Element: el.setAttribute('response', JSON.stringify({type, ...data, ts}))
 //   Element → Page: el.on('booking-message', handler)  (CustomEvent)
+//
+// =====================================================
+// v0.3.8 — BUG RAÍZ: los mensajes al widget se pisaban entre sí
+// =====================================================
+//   Encontrado en la consola del navegador (6-ago-2026 02:36). El canal
+//   Page → Element es un ÚNICO atributo ('response'). Dos setAttribute en
+//   el mismo tick = el segundo machaca al primero y el widget solo ve el
+//   último. Prueba: tras cada uno de los 12 reintentos de 'ready', el
+//   widget logueaba "👥 Cache clientes: 0" (2º mensaje) y NUNCA
+//   "🎯 Init:" (1º mensaje).
+//
+//   Es el bug que llevábamos toda la sesión persiguiendo. Antes de v0.3.7
+//   los 12,5 s del volcado de contactos separaban 'init-data' de
+//   'contactos-cache-ready' y el init sobrevivía por pura lentitud; al
+//   quitar el volcado quedaron en el mismo tick y el canal se rompió
+//   siempre. El cuelgue "aleatorio" original era el mismo mecanismo con
+//   otros pares de mensajes.
+//
+//   FIX: sendResponse encola y drena con 60 ms entre envíos. Un
+//   setAttribute por tick. Ningún mensaje puede pisar a otro. Firma
+//   idéntica: ningún handler cambia.
 //
 // =====================================================
 // v0.3.7 — FUERA el volcado de contactos: búsqueda server-side
@@ -275,7 +296,7 @@ import { crearContacto } from 'backend/recepcionLogic.web';
 import { buscarContactosRapido } from 'backend/contactSearchLogic.web';
 
 // v0.3.7 — TAG actualizado.
-const TAG = '[BookingLitePage v0.3.7]';
+const TAG = '[BookingLitePage v0.3.8]';
 const PRELOAD_BATCH = 5;
 
 let _el = null;
@@ -292,13 +313,65 @@ let _catalogo = [];
 let _initListo = false;
 let _initEnCurso = false;
 
+// =====================================================
+// ENVÍO AL WIDGET — COLA SERIALIZADA (v0.3.8)
+// =====================================================
+// BUG RAÍZ ENCONTRADO (consola del navegador, 6-ago-2026 02:36):
+//   El canal Page → Element es UN ÚNICO atributo ('response') del custom
+//   element. Wix no entrega cada setAttribute por separado: si se hacen
+//   dos en el mismo tick, el segundo MACHACA al primero y el custom
+//   element solo llega a ver el último valor.
+//
+//   Prueba en consola: tras cada 'ready', el page code enviaba
+//   'init-data' e inmediatamente después 'contactos-cache-ready'. El
+//   widget logueaba SIEMPRE "👥 Cache clientes: 0 disponibles" (el
+//   segundo) y NUNCA "🎯 Init:" (el primero). Doce veces seguidas,
+//   una por reintento.
+//
+//   ESTE ES EL BUG ORIGINAL DE TODA LA SAGA. Antes de v0.3.7, entre
+//   'init-data' y 'contactos-cache-ready' mediaban los 12,5 s del volcado
+//   de contactos: esa lentitud era lo que separaba ambos mensajes y hacía
+//   que el 'init-data' sobreviviera. Al eliminar el volcado en v0.3.7,
+//   los dos envíos quedaron en el mismo tick y el canal se rompió del
+//   todo. El cuelgue "aleatorio" que veníamos persiguiendo era el mismo
+//   mecanismo: cualesquiera dos mensajes que cayeran demasiado juntos
+//   se pisaban.
+//
+// SOLUCIÓN: cola FIFO drenada con separación temporal. Un setAttribute
+//   cada SEND_GAP_MS. Ningún mensaje puede machacar a otro,
+//   independientemente de cuántos se encolen ni desde qué handler.
+//   El campo `ts` garantiza además que dos mensajes de contenido
+//   idéntico no disparen la guarda `oldVal === newVal` del
+//   attributeChangedCallback del widget.
+//
+// CERO CAMBIOS para el resto del código: la firma de sendResponse es la
+//   misma, todos los handlers siguen llamándola igual.
+// =====================================================
+
+// Separación mínima entre dos setAttribute consecutivos. 60 ms es
+// conservador: imperceptible para el operador y sobrado para que Wix
+// propague el atributo al custom element entre uno y otro.
+const SEND_GAP_MS = 60;
+
+const _outQueue = [];
+let _draining = false;
+
+function _drainQueue() {
+  if (!_outQueue.length) { _draining = false; return; }
+  _draining = true;
+  const payload = _outQueue.shift();
+  try {
+    _el.setAttribute('response', JSON.stringify(payload));
+  } catch (e) {
+    console.error(`${TAG} ❌ setAttribute response falló (${payload?.type}):`, e?.message);
+  }
+  setTimeout(_drainQueue, SEND_GAP_MS);
+}
+
 function sendResponse(type, data = {}) {
   if (!_el) return;
-  try {
-    _el.setAttribute('response', JSON.stringify({ type, ...data, ts: Date.now() }));
-  } catch (e) {
-    console.error(`${TAG} ❌ sendResponse:`, e?.message);
-  }
+  _outQueue.push({ type, ...data, ts: Date.now() });
+  if (!_draining) _drainQueue();
 }
 
 function addDaysISO(iso, delta) {
